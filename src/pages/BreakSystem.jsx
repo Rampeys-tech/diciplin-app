@@ -53,6 +53,24 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
+// Daftar Pilihan Jam Shift Bulat (24 Jam)
+const SHIFT_HOURS_OPTIONS = [
+  { label: '07:00 WITA', hour: 7 },
+  { label: '08:00 WITA', hour: 8 },
+  { label: '09:00 WITA', hour: 9 },
+  { label: '10:00 WITA', hour: 10 },
+  { label: '11:00 WITA', hour: 11 },
+  { label: '12:00 WITA', hour: 12 },
+  { label: '13:00 WITA', hour: 13 },
+  { label: '14:00 WITA', hour: 14 },
+  { label: '15:00 WITA', hour: 15 },
+  { label: '16:00 WITA', hour: 16 },
+  { label: '17:00 WITA', hour: 17 },
+  { label: '18:00 WITA', hour: 18 },
+  { label: '21:00 WITA', hour: 21 },
+  { label: '22:00 WITA (Shift Malam)', hour: 22 }
+];
+
 export default function BreakSystem() {
   const { user } = useAuth();
   const [profile, setProfile] = useState(null);
@@ -77,6 +95,10 @@ export default function BreakSystem() {
   const [isEligibleForCheckOut, setIsEligibleForCheckOut] = useState(false);
   const [activeLogId, setActiveLogId] = useState(null);
   const [requiredWorkHours, setRequiredWorkHours] = useState(9); 
+
+  // Modal Pilihan Jam Shift oleh Kru
+  const [showShiftPicker, setShowShiftPicker] = useState(false);
+  const [selectedShiftHour, setSelectedShiftHour] = useState(9);
 
   // ================= STATE MONITORING & LIVE DATA =================
   const [breakLogs, setBreakLogs] = useState([]);
@@ -378,7 +400,7 @@ export default function BreakSystem() {
     try {
       const { data: logsData, error: logsError } = await supabase
         .from('attendance_logs')
-        .select('id, user_id, break_start_time, break_end_time, actual_in, actual_out, discipline_status, is_outside_radius, distance_meters')
+        .select('id, user_id, break_start_time, break_end_time, actual_in, actual_out, discipline_status, is_outside_radius, distance_meters, status_in')
         .not('actual_in', 'is', null)
         .is('actual_out', null);
 
@@ -473,7 +495,7 @@ export default function BreakSystem() {
 
       const { data: logs } = await supabase
         .from('attendance_logs')
-        .select('user_id, break_start_time, break_end_time, actual_in, discipline_status, penalty_points');
+        .select('user_id, break_start_time, break_end_time, actual_in, discipline_status, penalty_points, status_in');
 
       if (profiles) {
         const filteredCrewProfiles = profiles.filter(p => {
@@ -494,7 +516,9 @@ export default function BreakSystem() {
           const crewLogs = (logs || []).filter(l => l.user_id === crew.id);
 
           crewLogs.forEach(log => {
-            if (log.discipline_status === 'Overbreak' || (log.penalty_points && Number(log.penalty_points) > 0)) {
+            if (log.discipline_status === 'Overbreak' || 
+                (log.penalty_points && Number(log.penalty_points) > 0) || 
+                (log.status_in && log.status_in.toLowerCase().includes('terlambat'))) {
               hasOverBreakHistory = true;
             }
 
@@ -850,6 +874,17 @@ export default function BreakSystem() {
     }
   };
 
+  // BUKA MODAL PILIHAN SHIFT DAHULU SEBELUM KAMERA UNTUK ABSEN MASUK
+  const triggerCheckInProcess = () => {
+    setShowShiftPicker(true);
+  };
+
+  const handleConfirmShiftAndOpenCamera = (hour) => {
+    setSelectedShiftHour(hour);
+    setShowShiftPicker(false);
+    openCamera('IN');
+  };
+
   const openCamera = async (mode) => {
     if (mode === 'START_BREAK') {
       const todayStart = new Date();
@@ -950,7 +985,6 @@ export default function BreakSystem() {
     );
   };
 
-  // PEMOTONGAN & PENGAMBILAN CANVAS ASPEK RASIO NATURAL (ANTI KETARIK KESAMPING)
   const handleCapture = () => {
     if (humanDetectionStatus !== 'HUMAN_DETECTED' || !videoRef.current) return;
 
@@ -984,6 +1018,7 @@ export default function BreakSystem() {
 
     try {
       const timestampIso = new Date().toISOString();
+      const now = new Date();
       let publicUrl = null;
 
       if (cameraMode === 'START_BREAK' || cameraMode === 'END_BREAK' || cameraMode === 'IN' || cameraMode === 'OUT') {
@@ -1013,8 +1048,23 @@ export default function BreakSystem() {
         publicUrl = publicUrlData?.publicUrl || `https://nbfuhpfoqkwwdkpnlgwz.supabase.co/storage/v1/object/public/attendance-proofs/${filePath}`;
       }
 
+      // ================= 1. ABSEN MASUK (IN) BERBASIS SHIFT BULAT PILIHAN KRU =================
       if (cameraMode === 'IN') {
         const fallbackCompanyId = profile?.company_id || user?.user_metadata?.company_id || null;
+
+        // KALKULASI KETERLAMBATAN MASUK BERDASARKAN SHIFT PILIHAN KRU
+        const scheduledTime = new Date();
+        scheduledTime.setHours(selectedShiftHour, 0, 0, 0);
+
+        let statusInText = `Shift ${selectedShiftHour.toString().padStart(2, '0')}:00 (Tepat Waktu)`;
+        let lateMinutes = 0;
+        let financialLoss = 0;
+
+        if (now > scheduledTime) {
+          lateMinutes = Math.floor((now.getTime() - scheduledTime.getTime()) / 60000);
+          statusInText = `Shift ${selectedShiftHour.toString().padStart(2, '0')}:00 (Terlambat ${lateMinutes}m)`;
+          financialLoss = lateMinutes * 1000; // Rp 1.000 / menit keterlambatan
+        }
 
         const { error: insertError } = await supabase
           .from('attendance_logs')
@@ -1022,11 +1072,38 @@ export default function BreakSystem() {
             user_id: user.id, 
             company_id: fallbackCompanyId, 
             actual_in: timestampIso, 
-            status_in: 'Tepat Waktu', 
-            discipline_status: 'Bekerja'
+            status_in: statusInText, 
+            discipline_status: lateMinutes > 0 ? 'Terlambat Masuk' : 'Bekerja',
+            penalty_points: lateMinutes > 0 ? lateMinutes : 0,
+            financial_loss_amount: financialLoss
           });
 
         if (insertError) throw insertError;
+
+        // PEMOTONGAN POIN OTOMATIS JIKA TERLAMBAT (1 MENIT = -1 POIN)
+        if (lateMinutes > 0) {
+          const isOwnerOrManager = (profile?.full_name || '').toLowerCase().includes('owner') ||
+                                   (profile?.station_placement || '').toLowerCase().includes('owner') ||
+                                   (profile?.station_placement || '').toLowerCase().includes('manager') ||
+                                   (profile?.role || '').toLowerCase() === 'manager';
+
+          if (!isOwnerOrManager) {
+            const { data: currentProf } = await supabase
+              .from('user_profiles')
+              .select('total_points')
+              .eq('id', user.id)
+              .maybeSingle();
+
+            const existingPts = currentProf?.total_points !== null ? Number(currentProf.total_points) : 100;
+            const updatedPts = Math.max(0, existingPts - lateMinutes);
+
+            await supabase
+              .from('user_profiles')
+              .update({ total_points: updatedPts })
+              .eq('id', user.id);
+          }
+        }
+
       } else if (cameraMode === 'START_BREAK') {
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
@@ -1218,7 +1295,7 @@ export default function BreakSystem() {
             />
             <div className="flex flex-col">
               <span className="font-sans font-black text-base tracking-tight text-slate-900 leading-none">
-                Diciplin<span className="text-indigo-600">.com</span>
+                Diciplin<span className="text-indigo-600"></span>
               </span>
               <span className="text-[8px] font-bold text-slate-400 tracking-wider uppercase mt-0.5">Crew Attendance System</span>
             </div>
@@ -1361,7 +1438,7 @@ export default function BreakSystem() {
               <div className="grid grid-cols-2 gap-3">
                 <button
                   disabled={hasCheckedIn || isVerifyingLocation}
-                  onClick={() => openCamera('IN')}
+                  onClick={triggerCheckInProcess}
                   className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${hasCheckedIn ? 'bg-emerald-50/80 border-emerald-200 text-emerald-700 shadow-inner' : 'bg-slate-50 hover:bg-slate-100 border-slate-200/80 text-slate-800 active:scale-[0.97]'}`}
                 >
                   <div className={`p-2 rounded-xl ${hasCheckedIn ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-50 text-indigo-600'}`}>
@@ -1761,6 +1838,43 @@ export default function BreakSystem() {
           </button>
         </div>
 
+        {/* MODAL PILIHAN JAM SHIFT BULAT UNTUK KRU */}
+        {showShiftPicker && (
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+            <div className="bg-white border border-slate-200 rounded-3xl max-w-xs w-full overflow-hidden shadow-2xl p-5 space-y-4">
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Pilih Jam Shift Anda</h3>
+                  <p className="text-[10px] text-slate-400 font-medium">Sesuai jadwal harian dari Manager</p>
+                </div>
+                <button onClick={() => setShowShiftPicker(false)} className="p-1 hover:bg-slate-100 rounded-full text-slate-400">
+                  <FiX className="text-lg"/>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
+                {SHIFT_HOURS_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.hour}
+                    onClick={() => handleConfirmShiftAndOpenCamera(opt.hour)}
+                    className="p-3 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-300 border border-slate-200/80 rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 transition-all"
+                  >
+                    <FiClock className="text-indigo-600 text-sm"/>
+                    <span className="text-xs font-black text-slate-800">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              <button 
+                onClick={() => setShowShiftPicker(false)} 
+                className="w-full bg-slate-100 text-slate-600 font-bold py-2.5 rounded-xl text-xs"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* MODAL KAMERA FULL SCREEN DENGAN BENTUK WAJAH GAYA TALENTA MEKARI */}
         {isCameraOpen && (
           <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col justify-between z-50 animate-in fade-in duration-200">
@@ -1768,7 +1882,9 @@ export default function BreakSystem() {
             <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between text-white relative z-10">
               <div className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping"></span>
-                <h3 className="font-black text-xs tracking-widest uppercase text-slate-200">VERIFIKASI WAJAH: {cameraMode}</h3>
+                <h3 className="font-black text-xs tracking-widest uppercase text-slate-200">
+                  VERIFIKASI WAJAH: {cameraMode} {cameraMode === 'IN' ? `(SHIFT ${selectedShiftHour.toString().padStart(2, '0')}:00)` : ''}
+                </h3>
               </div>
               <button type="button" onClick={closeCamera} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors">
                 <FiX className="h-5 w-5" />
@@ -1779,7 +1895,6 @@ export default function BreakSystem() {
             <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
               {!capturedImage ? (
                 <div className="relative w-full h-full flex items-center justify-center">
-                  {/* VIDEO KAMERA PORTRAIT NATURAL */}
                   <video 
                     ref={videoRef} 
                     autoPlay 
@@ -1788,7 +1903,7 @@ export default function BreakSystem() {
                     className="w-full h-full object-cover -scale-x-100" 
                   />
                   
-                  {/* OVERLAY MASK OVAL BENTUK KEPALA/WAJAH (TALENTA MEKARI STYLE) */}
+                  {/* OVERLAY MASK OVAL BENTUK KEPALA/WAJAH */}
                   <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6 bg-slate-950/40">
                     <div className="relative w-full max-w-[280px] aspect-[3/4] rounded-[100px] border-4 border-dashed border-white/80 shadow-[0_0_0_9999px_rgba(15,23,42,0.65)] flex flex-col items-center justify-center">
                       <div className="absolute top-8 text-center text-white/90 text-xs font-bold bg-slate-900/80 px-3 py-1 rounded-full border border-white/20 backdrop-blur-sm">
@@ -1811,7 +1926,7 @@ export default function BreakSystem() {
                   )}
                 </div>
               ) : (
-                /* PREVIEW FOTO HASIL CAPTURE (PROPORSI NATURAL & ANTI KETARIK) */
+                /* PREVIEW FOTO HASIL CAPTURE */
                 <div className="relative w-full h-full flex flex-col items-center justify-center p-4 bg-slate-900">
                   <div className="w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden border-2 border-slate-700 shadow-2xl relative">
                     <img src={capturedImage} alt="Preview Foto" className="w-full h-full object-cover" />

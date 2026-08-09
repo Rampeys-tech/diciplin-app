@@ -173,7 +173,7 @@ export default function Register({ onSwitchToLogin }) {
           </div>
           <div className="space-y-1">
             <h2 className="text-2xl font-black text-slate-900 tracking-tight">
-              diciplin<span className="text-indigo-600">.com</span>
+              Diciplin<span className="text-indigo-600">.com</span>
             </h2>
             <p className="text-[11px] text-slate-400 font-bold uppercase tracking-[0.15em] max-w-[250px] mx-auto leading-none">
               {mode === 'login' ? 'Masuk Akun Kru' : 'Pendaftaran Kru Baru'}
