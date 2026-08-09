@@ -16,7 +16,7 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-[#f8fafc] flex flex-col font-sans">
       
-      {/* HEADER ATAS: DIICIPLIN.COM */}
+      {/* HEADER ATAS: Diciplin.com */}
       <header className="bg-white border-b border-slate-100 sticky top-0 z-40 px-4 py-3 shadow-[0_2px_10px_-3px_rgba(0,0,0,0.02)]">
         <div className="max-w-md mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -24,7 +24,7 @@ export default function Layout() {
               D
             </div>
             <span className="font-black text-sm tracking-tight text-slate-800">
-              diciplin<span className="text-indigo-600">.com</span>
+              Diciplin<span className="text-indigo-600">.com</span>
             </span>
           </div>
           

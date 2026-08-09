@@ -1218,7 +1218,7 @@ export default function BreakSystem() {
             />
             <div className="flex flex-col">
               <span className="font-sans font-black text-base tracking-tight text-slate-900 leading-none">
-                diciplin<span className="text-indigo-600">.com</span>
+                Diciplin<span className="text-indigo-600">.com</span>
               </span>
               <span className="text-[8px] font-bold text-slate-400 tracking-wider uppercase mt-0.5">Crew Attendance System</span>
             </div>
