@@ -1208,7 +1208,7 @@ export default function BreakSystem() {
         {/* HEADER APLIKASI */}
         <div className="sticky top-0 w-full bg-white px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between z-30 shadow-sm">
           <div className="flex items-center gap-2">
-            <div className="h-8 w-8 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md shadow-blue-200">D</div>
+            <div className="h-8 w-8 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md shadow-blue-200"><Diciplin-logo className="png"></Diciplin-logo></div>
             <span className="font-sans font-black text-lg tracking-tight bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Diciplin.com</span>
           </div>
           <button onClick={async () => { await supabase.auth.signOut(); }} className="px-3.5 py-1.5 bg-rose-50 text-rose-600 text-[10px] font-black rounded-xl border border-rose-100 uppercase tracking-wider hover:bg-rose-100 transition-colors">Keluar</button>
