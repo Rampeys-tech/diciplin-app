@@ -150,17 +150,27 @@ export default function Register({ onSwitchToLogin }) {
       <div className="w-full max-w-[380px] bg-white/80 backdrop-blur-xl border border-white/60 rounded-[32px] p-8 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.08)] space-y-6 transition-all duration-300">
         
         {/* HEADER */}
-        <div className="text-center space-y-2.5">
-          {/* KODE BARU */}
-<img 
-  src="/Diciplin-logo.png" 
-  onError={(e) => {
-    e.target.onerror = null;
-    e.target.src = "/logo.png";
-  }}
-  alt="Diciplin Logo" 
-  className="h-14 w-auto mx-auto object-contain drop-shadow-md" 
-/>
+        <div className="text-center space-y-3">
+          <div className="flex justify-center items-center">
+            <img 
+              src="/Diciplin-logo.png" 
+              onError={(e) => {
+                e.target.onerror = null;
+                e.target.style.display = 'none';
+                if (e.target.nextSibling) {
+                  e.target.nextSibling.style.display = 'flex';
+                }
+              }}
+              alt="Diciplin Logo" 
+              className="h-14 w-auto object-contain drop-shadow-md mx-auto" 
+            />
+            <div 
+              style={{ display: 'none' }}
+              className="h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-700 items-center justify-center text-white text-xl font-black tracking-tighter mx-auto shadow-[0_8px_20px_-4px_rgba(79,70,229,0.4)]"
+            >
+              D
+            </div>
+          </div>
           <div className="space-y-1">
             <h2 className="text-2xl font-black text-slate-900 tracking-tight">
               diciplin<span className="text-indigo-600">.com</span>
