@@ -404,7 +404,7 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= FETCH LEADERBOARD (KECUALIKAN OWNER / MANAGER) =================
+  // ================= FETCH LEADERBOARD =================
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -423,7 +423,6 @@ export default function BreakSystem() {
         .select('user_id, break_start_time, break_end_time, actual_in');
 
       if (profiles) {
-        // FILTER: Keluarkan Owner, Manager, atau Atasan dari daftar LEADERBOARD
         const filteredCrewProfiles = profiles.filter(p => {
           const nameLower = (p.full_name || '').toLowerCase();
           const placementLower = (p.station_placement || '').toLowerCase();
@@ -595,7 +594,6 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= UPLOAD FOTO PROFIL (TERHUBUNG KE BUCKET 'attendance-proofs') =================
   const handleAvatarUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || !user?.id) return;
@@ -1036,12 +1034,12 @@ export default function BreakSystem() {
 
           if (isOver) {
             penaltyPoints = 25; 
-            pointChange = -25; // OVER BREAK -> BERKURANG 25 POIN
+            pointChange = -25;
             financialLoss = (elapsedMins - allowedMins) * 1000;            
             finalStatus = 'Overbreak';
           } else {
             penaltyPoints = 0;
-            pointChange = 5; // TEPAT WAKTU -> BERTAMBAH 5 POIN
+            pointChange = 5;
           }
 
           const { error: updateError } = await supabase
@@ -1058,7 +1056,6 @@ export default function BreakSystem() {
 
           if (updateError) throw updateError;
 
-          // HANYA AKUN KARYAWAN/STAFF YANG POINNYA DI-UPDATE
           const isOwnerOrManager = (profile?.full_name || '').toLowerCase().includes('owner') ||
                                    (profile?.station_placement || '').toLowerCase().includes('owner') ||
                                    (profile?.station_placement || '').toLowerCase().includes('manager');
@@ -1128,7 +1125,7 @@ export default function BreakSystem() {
   const isAtasanOrManager = profile?.station_placement?.toLowerCase() === 'manager' || profile?.station_placement?.toLowerCase() === 'atasan' || profile?.station_placement?.toLowerCase() === 'owner' || profile?.full_name?.toLowerCase().includes('owner');
 
   return (
-    <div className="h-screen w-full bg-[#F4F7FC] flex items-center justify-center overflow-hidden font-sans antialiased text-[#1E293B]">
+    <div className="min-h-screen w-full bg-[#F4F7FC] flex justify-center font-sans antialiased text-[#1E293B]">
       
       <style>{`
         header.sticky.top-0, 
@@ -1138,22 +1135,23 @@ export default function BreakSystem() {
         }
       `}</style>
 
-      <div className="h-full w-full max-w-md bg-[#FAFBFD] flex flex-col relative overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.04)] border-x border-[#E2E8F0]">
+      {/* CONTAINER APLIKASI - LAYOUT TERISOLASI AGAR NAVIGATION BAR KONSISTEN DI BAWAH */}
+      <div className="w-full max-w-md bg-[#FAFBFD] min-h-screen flex flex-col relative pb-24 shadow-xl border-x border-[#E2E8F0]">
         
         {/* HEADER APLIKASI */}
-        <div className="w-full bg-white px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between z-40">
-          <div className="flex items-center gap-1.5">
-            <div className="h-7 w-7 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black text-xs">D</div>
-            <span className="font-sans font-black text-base tracking-tight bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Diciplin.com</span>
+        <div className="sticky top-0 w-full bg-white px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between z-30 shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md shadow-blue-200">D</div>
+            <span className="font-sans font-black text-lg tracking-tight bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Diciplin.com</span>
           </div>
-          <button onClick={async () => { await supabase.auth.signOut(); }} className="px-3 py-1 bg-rose-50 text-rose-600 text-[10px] font-black rounded-lg border border-rose-100 uppercase tracking-wider">Keluar</button>
+          <button onClick={async () => { await supabase.auth.signOut(); }} className="px-3.5 py-1.5 bg-rose-50 text-rose-600 text-[10px] font-black rounded-xl border border-rose-100 uppercase tracking-wider hover:bg-rose-100 transition-colors">Keluar</button>
         </div>
 
         {/* ================= TAB 1: ABSENSI UTAMA ================= */}
         {activeTab === 'absen' && (
-          <div className="flex-1 overflow-y-auto px-5 py-5 pb-28 space-y-5">
+          <div className="flex-1 px-5 py-5 space-y-5">
             {/* PROFILE CARD */}
-            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-[0_6px_24_rgba(0,0,0,0.015)] space-y-4">
+            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-3.5">
                   <div className="relative">
@@ -1206,7 +1204,7 @@ export default function BreakSystem() {
 
             {/* PANEL MANAGER */}
             {isAtasanOrManager && (
-              <div className="bg-gradient-to-br from-[#1E293B] to-[#0F172A] text-white rounded-[24px] p-5 shadow-md space-y-4 border border-slate-800 animate-in fade-in slide-in-from-top-4 duration-200">
+              <div className="bg-gradient-to-br from-[#1E293B] to-[#0F172A] text-white rounded-[24px] p-5 shadow-md space-y-4 border border-slate-800">
                 <div className="flex items-center gap-2 border-b border-white/10 pb-2.5">
                   <FiShield className="text-blue-400 text-lg animate-pulse" />
                   <div>
@@ -1247,7 +1245,7 @@ export default function BreakSystem() {
             )}
 
             {/* CARD PRESENSI UTAMA */}
-            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-[0_6px_24_rgba(0,0,0,0.015)] space-y-4">
+            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-sm space-y-4">
               <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-3.5">
                 <p className="text-[11px] font-black text-[#334155] uppercase tracking-widest flex items-center gap-2">
                   <FiShield className="text-[#2563EB] text-base" /> Presensi Kerja Utama
@@ -1288,7 +1286,7 @@ export default function BreakSystem() {
             </div>
 
             {/* DYNAMIC BREAK ACTIVE CARD */}
-            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-[0_6px_24_rgba(0,0,0,0.015)] transition-all duration-300">
+            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-sm transition-all duration-300">
               {isOnBreak ? (
                 <div className="space-y-4">
                   {timeLeft < 0 ? (
@@ -1366,7 +1364,7 @@ export default function BreakSystem() {
 
         {/* ================= TAB 2: LIVE MONITORING ================= */}
         {activeTab === 'live-break' && (
-          <div className="flex-1 overflow-y-auto px-5 py-5 pb-28 space-y-6">
+          <div className="flex-1 px-5 py-5 space-y-6">
             <div className="flex items-center justify-between bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-sm">
               <div>
                 <h2 className="text-base font-black text-[#0F172A] tracking-tight">Live Pemantauan Crew</h2>
@@ -1473,7 +1471,7 @@ export default function BreakSystem() {
 
         {/* ================= TAB 3: LEADERBOARD POIN CREW ================= */}
         {activeTab === 'leaderboard' && (
-          <div className="flex-1 overflow-y-auto px-5 py-5 pb-28 space-y-5">
+          <div className="flex-1 px-5 py-5 space-y-5">
             <div className="flex flex-col space-y-1">
               <h2 className="text-base font-black text-[#0F172A] tracking-tight flex items-center gap-2">
                 <FiAward className="text-yellow-500 text-xl" /> Status Kedisiplinan Crew
@@ -1485,7 +1483,7 @@ export default function BreakSystem() {
               <div className="text-center py-12 text-sm text-[#64748B] font-semibold animate-pulse">Menghitung matriks poin...</div>
             ) : (
               <div className="space-y-6">
-                {/* TOP TIER (Poin >= 100) */}
+                {/* TOP TIER */}
                 <div className="space-y-2.5">
                   <p className="text-[10px] font-black text-[#059669] uppercase tracking-widest flex items-center gap-1">🌟 PALING RAJIN (TOP TIER)</p>
                   <div className="bg-white border border-[#E2E8F0] rounded-2xl divide-y divide-[#F1F5F9] shadow-sm overflow-hidden">
@@ -1511,7 +1509,7 @@ export default function BreakSystem() {
                   </div>
                 </div>
 
-                {/* BEBAL TIER (Poin < 100) */}
+                {/* BEBAL TIER */}
                 <div className="space-y-2.5">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">⚠️ PERLU EVALUASI (BEBAL TIER)</p>
                   <div className="bg-white border border-[#E2E8F0] rounded-2xl divide-y divide-[#F1F5F9] shadow-sm overflow-hidden">
@@ -1543,7 +1541,7 @@ export default function BreakSystem() {
 
         {/* ================= TAB 4: LOG FOTO ISTIRAHAT CREW ================= */}
         {activeTab === 'all-logs' && (
-          <div className="flex-1 overflow-y-auto px-5 py-5 pb-28 space-y-4">
+          <div className="flex-1 px-5 py-5 space-y-4">
             <div className="flex flex-col space-y-1">
               <h2 className="text-base font-black text-[#0F172A] tracking-tight flex items-center gap-2">
                 <FiImage className="text-indigo-600 text-xl" /> Log Foto Istirahat Crew
@@ -1576,17 +1574,17 @@ export default function BreakSystem() {
                       <div className="space-y-1">
                         <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
                         {log.image_url ? (
-                          <img src={log.image_url} className="w-full aspect-video rounded-xl object-cover border shadow-sm" alt="Foto Mulai" />
+                          <img src={log.image_url} className="w-full aspect-[4/3] rounded-xl object-cover border shadow-sm" alt="Foto Mulai" />
                         ) : (
-                          <div className="w-full aspect-video rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[10px] text-slate-400 font-bold">No Image</div>
+                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[10px] text-slate-400 font-bold">No Image</div>
                         )}
                       </div>
                       <div className="space-y-1">
                         <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
                         {log.after_break_image_url ? (
-                          <img src={log.after_break_image_url} className="w-full aspect-video rounded-xl object-cover border shadow-sm" alt="Foto Selesai" />
+                          <img src={log.after_break_image_url} className="w-full aspect-[4/3] rounded-xl object-cover border shadow-sm" alt="Foto Selesai" />
                         ) : (
-                          <div className="w-full aspect-video rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[10px] text-slate-400 font-bold">In Progress</div>
+                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[10px] text-slate-400 font-bold">In Progress</div>
                         )}
                       </div>
                     </div>
@@ -1599,7 +1597,7 @@ export default function BreakSystem() {
 
         {/* ================= TAB 5: EDIT PROFIL USER ================= */}
         {activeTab === 'profile' && (
-          <div className="flex-1 overflow-y-auto px-5 py-5 pb-28 space-y-5">
+          <div className="flex-1 px-5 py-5 space-y-5">
             <div className="flex flex-col space-y-1">
               <h2 className="text-base font-black text-[#0F172A] tracking-tight flex items-center gap-2">
                 <FiSettings className="text-slate-700 text-xl" /> Pengaturan Profil Anda
@@ -1651,59 +1649,59 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= BOTTOM NAV BAR ================= */}
-        <div className="absolute bottom-0 inset-x-0 bg-white border-t border-[#E2E8F0] px-2 py-2.5 flex justify-between items-center z-40 rounded-t-2xl shadow-[0_-8px_30px_rgba(0,0,0,0.02)]">
-          <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-colors ${activeTab === 'absen' ? 'text-[#2563EB] font-black' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiLayout className="text-lg" /> <span className="text-[9px] font-bold tracking-wide">Absen</span>
+        {/* ================= FIXED BOTTOM NAV BAR ================= */}
+        <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-[#E2E8F0] px-3 py-2 flex justify-between items-center z-40 rounded-t-2xl shadow-[0_-8px_30px_rgba(0,0,0,0.06)]">
+          <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'absen' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
+            <FiLayout className="text-xl" /> <span className="text-[10px] tracking-tight">Absen</span>
           </button>
-          <button onClick={() => setActiveTab('live-break')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-colors ${activeTab === 'live-break' ? 'text-[#2563EB] font-black' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiUsers className="text-lg" /> <span className="text-[9px] font-bold tracking-wide">Live</span>
+          <button onClick={() => setActiveTab('live-break')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'live-break' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
+            <FiUsers className="text-xl" /> <span className="text-[10px] tracking-tight">Live</span>
           </button>
-          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-colors ${activeTab === 'leaderboard' ? 'text-[#2563EB] font-black' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiAward className="text-lg" /> <span className="text-[9px] font-bold tracking-wide">Poin</span>
+          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'leaderboard' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
+            <FiAward className="text-xl" /> <span className="text-[10px] tracking-tight">Poin</span>
           </button>
-          <button onClick={() => setActiveTab('all-logs')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-colors ${activeTab === 'all-logs' ? 'text-[#2563EB] font-black' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiRotateCcw className="text-lg" /> <span className="text-[9px] font-bold tracking-wide">Log</span>
+          <button onClick={() => setActiveTab('all-logs')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'all-logs' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
+            <FiRotateCcw className="text-xl" /> <span className="text-[10px] tracking-tight">Log</span>
           </button>
-          <button onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-colors ${activeTab === 'profile' ? 'text-[#2563EB] font-black' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiSettings className="text-lg" /> <span className="text-[9px] font-bold tracking-wide">Profil</span>
+          <button onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'profile' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
+            <FiSettings className="text-xl" /> <span className="text-[10px] tracking-tight">Profil</span>
           </button>
         </div>
 
-        {/* MODAL CAM SENSOR VERIFIKASI */}
+        {/* MODAL CAM SENSOR VERIFIKASI (KAMERA & PROPORSI FOTO LEBIH BESAR & PROPORSIONAL) */}
         {isCameraOpen && (
-          <div className="absolute inset-0 bg-[#0F172A]/70 backdrop-blur-sm flex items-center justify-center p-5 z-50">
-            <div className="bg-white border border-[#E2E8F0] rounded-3xl max-w-[300px] w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-              <div className="p-3.5 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between">
-                <h3 className="font-black text-[10px] text-[#334155] tracking-widest uppercase">SENSOR MANUSIA: {cameraMode}</h3>
-                <button type="button" onClick={closeCamera} className="p-1 hover:bg-[#E2E8F0] text-[#64748B] hover:text-[#0F172A] rounded-full transition-colors"><FiX className="h-4 w-4" /></button>
+          <div className="fixed inset-0 bg-[#0F172A]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white border border-[#E2E8F0] rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+              <div className="p-4 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between">
+                <h3 className="font-black text-xs text-[#334155] tracking-widest uppercase">SENSOR MANUSIA: {cameraMode}</h3>
+                <button type="button" onClick={closeCamera} className="p-1 hover:bg-[#E2E8F0] text-[#64748B] hover:text-[#0F172A] rounded-full transition-colors"><FiX className="h-5 w-5" /></button>
               </div>
               
-              <div className="p-5 space-y-4 text-center bg-white">
+              <div className="p-4 space-y-4 text-center bg-white">
                 {!capturedImage ? (
-                  <div className="relative aspect-[4/3] bg-[#0F172A] rounded-2xl overflow-hidden shadow-inner">
-                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover scale-x-[-1]" />
-                    <div className="absolute inset-6 border border-dashed border-white/25 rounded-full pointer-events-none" />
+                  <div className="relative w-full aspect-[4/3] bg-[#0F172A] rounded-2xl overflow-hidden shadow-inner">
+                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
+                    <div className="absolute inset-4 border-2 border-dashed border-white/30 rounded-full pointer-events-none" />
                     {humanDetectionStatus === 'HUMAN_DETECTED' && (
-                      <button type="button" onClick={handleCapture} className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#2563EB] text-white p-3.5 rounded-full shadow-lg border border-[#E2E8F0]"><FiCamera className="text-xl" /></button>
+                      <button type="button" onClick={handleCapture} className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#2563EB] text-white p-4 rounded-full shadow-xl border-2 border-white active:scale-95 transition-transform"><FiCamera className="text-2xl" /></button>
                     )}
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <div className="aspect-[4/3] rounded-2xl overflow-hidden border border-[#E2E8F0] shadow-inner relative">
+                    <div className="w-full aspect-[4/3] rounded-2xl overflow-hidden border border-[#E2E8F0] shadow-inner relative">
                       <img src={capturedImage} alt="Preview" className="w-full h-full object-cover" />
-                      <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-[#10B981] text-white text-[9px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider"><FiCheckCircle /> OBJEK VALID</div>
+                      <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-[#10B981] text-white text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider"><FiCheckCircle /> OBJEK VALID</div>
                     </div>
                     <div className="flex gap-2.5">
-                      <button type="button" onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} className="flex-1 bg-[#F8FAFC] text-[#334155] font-bold py-2.5 rounded-xl text-xs border border-[#CBD5E1]">Ulang</button>
-                      <button type="button" disabled={isLoading} onClick={handleConfirmSubmission} className="flex-1 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-black py-2.5 rounded-xl text-xs shadow-sm transition-colors">
+                      <button type="button" onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} className="flex-1 bg-[#F8FAFC] text-[#334155] font-bold py-3 rounded-xl text-xs border border-[#CBD5E1] hover:bg-slate-100 transition-colors">Ulang</button>
+                      <button type="button" disabled={isLoading} onClick={handleConfirmSubmission} className="flex-1 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-black py-3 rounded-xl text-xs shadow-md transition-colors">
                         {isLoading ? 'Memproses...' : 'Konfirmasi'}
                       </button>
                     </div>
                   </div>
                 )}
                 
-                <div className="text-[9px] font-black bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] py-2 rounded-xl flex items-center justify-center gap-1.5 font-mono">
+                <div className="text-[10px] font-black bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl flex items-center justify-center gap-1.5 font-mono">
                   {humanDetectionStatus === 'LOADING_ENGINE' && <span className="animate-pulse">Mengaktifkan Kamera...</span>}
                   {humanDetectionStatus === 'NOT_DETECTED' && <span>🚨 Kamera Tidak Siap</span>}
                   {humanDetectionStatus === 'HUMAN_DETECTED' && <span>✓ Kamera Siap: Ambil Foto</span>}
