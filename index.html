@@ -2,19 +2,30 @@
 <html lang="id">
   <head>
     <meta charset="UTF-8" />
-    <!-- Arahkan Favicon Browser ke Diciplin-logo.png -->
-    <link rel="icon" type="image/png" href="/Diciplin-logo.png" />
-    <link rel="apple-touch-icon" href="/Diciplin-logo.png" />
-    
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Diciplin.com - Crew Attendance System</title>
     <meta name="description" content="Sistem Presensi & Manajemen Kedisiplinan Kru Outlet Modern" />
     
-    <!-- PWA Settings -->
+    <!-- LINK PWA MANIFEST & LOGO -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" href="/Diciplin-logo.png" />
+    <link rel="apple-touch-icon" href="/Diciplin-logo.png" />
     <meta name="theme-color" content="#4F46E5" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Diciplin.com" />
   </head>
   <body class="bg-slate-100 antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    
+    <!-- REGISTRASI SERVICE WORKER -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW Fail:', err));
+        });
+      }
+    </script>
   </body>
 </html>
