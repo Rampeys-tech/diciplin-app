@@ -30,7 +30,9 @@ import {
   FiPhone,
   FiUploadCloud,
   FiZap,
-  FiPlusCircle
+  FiPlusCircle,
+  FiVolume2,
+  FiCheck
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -86,6 +88,14 @@ export default function BreakSystem() {
   const [hasPlayed5MinAlarm, setHasPlayedAlarm] = useState(false);
   const [hasPlayed0MinAlarm, setHasPlayed0MinAlarm] = useState(false);
   const [hasNotifiedOverbreak, setHasNotifiedOverbreak] = useState(false);
+  const announcedOverbreakCrew = useRef(new Set());
+
+  // Cek Role Manager
+  const isAtasanOrManager = profile?.station_placement?.toLowerCase() === 'manager' || 
+                            profile?.station_placement?.toLowerCase() === 'atasan' || 
+                            profile?.station_placement?.toLowerCase() === 'owner' || 
+                            profile?.full_name?.toLowerCase().includes('owner') || 
+                            profile?.role?.toLowerCase() === 'manager';
 
   // ================= STATE GEOLOKASI =================
   const [humanDetectionStatus, setHumanDetectionStatus] = useState('LOADING_ENGINE'); 
@@ -154,10 +164,10 @@ export default function BreakSystem() {
   };
 
   const getCrewBadge = (points) => {
-    if (points >= 120) return { name: 'Elite Guardian', color: 'bg-indigo-100 text-indigo-700 border-indigo-200' };
-    if (points >= 105) return { name: 'Discipline Master', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
-    if (points >= 100) return { name: 'Regular Crew', color: 'bg-blue-100 text-blue-700 border-blue-200' };
-    return { name: 'Under Review', color: 'bg-rose-100 text-rose-700 border-rose-200' };
+    if (points >= 120) return { name: 'Elite Guardian', color: 'bg-indigo-50 text-indigo-700 border-indigo-200/60' };
+    if (points >= 105) return { name: 'Discipline Master', color: 'bg-emerald-50 text-emerald-700 border-emerald-200/60' };
+    if (points >= 100) return { name: 'Regular Crew', color: 'bg-indigo-50 text-indigo-600 border-indigo-100' };
+    return { name: 'Under Review', color: 'bg-rose-50 text-rose-700 border-rose-200/60' };
   };
 
   useEffect(() => {
@@ -171,7 +181,7 @@ export default function BreakSystem() {
       if (waterBreaks.length > 0) updateWaterBreaksLocally();
     }, 1000);
     return () => clearInterval(liveTrackerTimer);
-  }, [liveBreaks, waterBreaks]);
+  }, [liveBreaks, waterBreaks, isAtasanOrManager]);
 
   const updateDurationsLocally = () => {
     setLiveBreaks(prev => prev.map(crew => {
@@ -186,7 +196,13 @@ export default function BreakSystem() {
 
       if (isOver) {
         const overSec = elapsedSec - allowedSec;
-        displayDuration = `Over +${Math.floor(overSec / 60)}m ${overSec % 60}s`;
+        const overMins = Math.floor(overSec / 60);
+        displayDuration = `Over +${overMins}m ${overSec % 60}s (Poin -${overMins})`;
+
+        if (isAtasanOrManager && !announcedOverbreakCrew.current.has(crew.id)) {
+          announcedOverbreakCrew.current.add(crew.id);
+          speakAiVoice(`Peringatan Manager! Kru atas nama ${crew.name} terdeteksi over break.`);
+        }
       }
 
       return {
@@ -209,7 +225,8 @@ export default function BreakSystem() {
       let displayCountdown = '';
       if (isOver) {
         const overSec = Math.abs(remainingSec);
-        displayCountdown = `Over +${Math.floor(overSec / 60)}m ${overSec % 60}s`;
+        const overMins = Math.max(1, Math.floor(overSec / 60)); // 1 Menit = 1 Poin
+        displayCountdown = `Over +${Math.floor(overSec / 60)}m ${overSec % 60}s (Poin -${overMins})`;
       } else {
         displayCountdown = `${Math.floor(remainingSec / 60)}m ${remainingSec % 60}s sisa`;
       }
@@ -217,9 +234,61 @@ export default function BreakSystem() {
       return {
         ...wb,
         duration: displayCountdown,
-        isOverBreak: isOver
+        isOverBreak: isOver,
+        elapsedSec: elapsedSec,
+        allowedSec: totalAllowedSec
       };
     }));
+  };
+
+  // MENGHENTIKAN WATERBREAK DENGAN RUMUS 1 MENIT OVER = 1 POIN
+  const handleStopWaterbreak = async (crewId) => {
+    try {
+      const targetId = crewId || user?.id;
+      if (!targetId) return;
+
+      const currentWb = waterBreaks.find(w => w.id === targetId);
+      
+      let pointDeduction = 0;
+      if (currentWb && currentWb.isOverBreak) {
+        const overSec = currentWb.elapsedSec - currentWb.allowedSec;
+        pointDeduction = Math.max(1, Math.floor(overSec / 60)); // 1 MENIT OVER = 1 POIN
+      }
+
+      const { data: targetProfile } = await supabase
+        .from('user_profiles')
+        .select('total_points')
+        .eq('id', targetId)
+        .maybeSingle();
+
+      if (targetProfile && pointDeduction > 0) {
+        const existingPts = targetProfile.total_points !== null ? Number(targetProfile.total_points) : 100;
+        const newPts = Math.max(0, existingPts - pointDeduction);
+
+        await supabase
+          .from('user_profiles')
+          .update({ total_points: newPts })
+          .eq('id', targetId);
+      }
+
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          current_izin_start: null,
+          current_izin_duration: null,
+          current_izin_type: null
+        })
+        .eq('id', targetId);
+
+      if (error) throw error;
+      
+      alert(`✓ Status Waterbreak Selesai!${pointDeduction > 0 ? ` (Terdeteksi Over Waterbreak: -${pointDeduction} Poin)` : ''}`);
+      await fetchAttendanceStatus();
+      await fetchLiveBreakData();
+      await fetchLeaderboard();
+    } catch (err) {
+      alert(`Gagal menghentikan waterbreak: ${err.message}`);
+    }
   };
 
   const formatWITATime = (date) => {
@@ -270,7 +339,7 @@ export default function BreakSystem() {
     return () => clearInterval(eligibilityTimer);
   }, [checkInTime, hasCheckedOut]);
 
-  // CountDown Timer & Voice Alarm
+  // TIMER & KALKULASI OVERBREAK UTAMA (1 MENIT OVER = 1 POIN)
   useEffect(() => {
     let timer = null;
     if (isOnBreak) {
@@ -299,18 +368,6 @@ export default function BreakSystem() {
           if (remaining < 0 && !hasNotifiedOverbreak && activeLogId) {
             setHasNotifiedOverbreak(true);
             speakAiVoice("Peringatan! Anda terdeteksi over break. Poin kedisiplinan Anda terpotong dan laporan telah dikirim ke manager.");
-            try {
-              await supabase
-                .from('attendance_logs')
-                .update({ 
-                  discipline_status: 'Overbreak',
-                  penalty_points: 25,
-                  financial_loss_amount: 15000
-                })
-                .eq('id', activeLogId);
-            } catch (err) {
-              console.error("Gagal update overbreak:", err);
-            }
           }
         }
       }, 1000);
@@ -404,7 +461,7 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= FETCH LEADERBOARD =================
+  // FETCH LEADERBOARD
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -420,7 +477,7 @@ export default function BreakSystem() {
 
       const { data: logs } = await supabase
         .from('attendance_logs')
-        .select('user_id, break_start_time, break_end_time, actual_in');
+        .select('user_id, break_start_time, break_end_time, actual_in, discipline_status, penalty_points');
 
       if (profiles) {
         const filteredCrewProfiles = profiles.filter(p => {
@@ -436,11 +493,15 @@ export default function BreakSystem() {
           const pts = crew.total_points !== null && crew.total_points !== undefined ? Number(crew.total_points) : 100;
           let totalBreakMinutes = 0;
           let breakCount = 0;
-          let hasOverBreak = false;
+          let hasOverBreakHistory = false;
           
           const crewLogs = (logs || []).filter(l => l.user_id === crew.id);
 
           crewLogs.forEach(log => {
+            if (log.discipline_status === 'Overbreak' || (log.penalty_points && Number(log.penalty_points) > 0)) {
+              hasOverBreakHistory = true;
+            }
+
             if (log.break_start_time && log.break_end_time) {
               breakCount += 1;
               const start = new Date(log.break_start_time);
@@ -452,10 +513,12 @@ export default function BreakSystem() {
               const allowedMins = (checkInHour === 22) ? 30 : 60;
 
               if (actualMins > allowedMins) {
-                hasOverBreak = true;
+                hasOverBreakHistory = true;
               }
             }
           });
+
+          const isBebal = pts < 100 || (pts <= 100 && hasOverBreakHistory);
 
           return {
             id: crew.id,
@@ -463,7 +526,9 @@ export default function BreakSystem() {
             avatar: crew.avatar,
             role: crew.station_placement || 'Staff Crew', 
             points: pts,
-            breakInfo: breakCount > 0 ? `${breakCount}x Break (${totalBreakMinutes} Menit)${hasOverBreak ? ' ⚠️ Over' : ' ✓ Sesuai'}` : 'Belum Ada Break'
+            isBebal: isBebal,
+            hasOverBreakHistory: hasOverBreakHistory,
+            breakInfo: breakCount > 0 ? `${breakCount}x Break (${totalBreakMinutes} Menit)${hasOverBreakHistory ? ' ⚠️ Over' : ' ✓ Sesuai'}` : 'Belum Ada Break'
           };
         });
 
@@ -906,6 +971,7 @@ export default function BreakSystem() {
     setHumanDetectionStatus('SUCCESS');
   };
 
+  // SCAN SELESAI BREAK DENGAN PENALTI POIN 1 MENIT OVER = 1 POIN
   const handleConfirmSubmission = async () => {
     if (!capturedImage || humanDetectionStatus !== 'SUCCESS' || !user?.id) {
       alert("Sesi tidak valid.");
@@ -1033,13 +1099,14 @@ export default function BreakSystem() {
           let finalStatus = 'Bekerja';
 
           if (isOver) {
-            penaltyPoints = 25; 
-            pointChange = -25;
-            financialLoss = (elapsedMins - allowedMins) * 1000;            
+            const overMins = elapsedMins - allowedMins;
+            penaltyPoints = overMins; // 1 MENIT OVER = 1 POIN
+            pointChange = -overMins;  // POTONG SAMA DENGAN JUMLAH MENIT OVER
+            financialLoss = overMins * 1000;            
             finalStatus = 'Overbreak';
           } else {
             penaltyPoints = 0;
-            pointChange = 5;
+            pointChange = 5; // TEPAT WAKTU = BONUS +5 POIN
           }
 
           const { error: updateError } = await supabase
@@ -1058,7 +1125,8 @@ export default function BreakSystem() {
 
           const isOwnerOrManager = (profile?.full_name || '').toLowerCase().includes('owner') ||
                                    (profile?.station_placement || '').toLowerCase().includes('owner') ||
-                                   (profile?.station_placement || '').toLowerCase().includes('manager');
+                                   (profile?.station_placement || '').toLowerCase().includes('manager') ||
+                                   (profile?.role || '').toLowerCase() === 'manager';
 
           if (!isOwnerOrManager) {
             const { data: currentProf } = await supabase
@@ -1122,7 +1190,6 @@ export default function BreakSystem() {
 
   const currentUserPoints = profile?.total_points !== null && profile?.total_points !== undefined ? Number(profile.total_points) : 100;
   const activeBadge = getCrewBadge(currentUserPoints);
-  const isAtasanOrManager = profile?.station_placement?.toLowerCase() === 'manager' || profile?.station_placement?.toLowerCase() === 'atasan' || profile?.station_placement?.toLowerCase() === 'owner' || profile?.full_name?.toLowerCase().includes('owner');
 
   return (
     <div className="min-h-screen w-full bg-[#F4F7FC] flex justify-center font-sans antialiased text-[#1E293B]">
@@ -1135,7 +1202,7 @@ export default function BreakSystem() {
         }
       `}</style>
 
-      {/* CONTAINER APLIKASI - LAYOUT TERISOLASI AGAR NAVIGATION BAR KONSISTEN DI BAWAH */}
+      {/* CONTAINER APLIKASI */}
       <div className="w-full max-w-md bg-[#FAFBFD] min-h-screen flex flex-col relative pb-24 shadow-xl border-x border-[#E2E8F0]">
         
         {/* HEADER APLIKASI */}
@@ -1196,6 +1263,25 @@ export default function BreakSystem() {
               </div>
             )}
 
+            {/* STATUS WATERBREAK KRU AKTIF */}
+            {profile?.current_izin_start && (
+              <div className="bg-emerald-50 border-2 border-emerald-200 rounded-[20px] p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-200">
+                <div className="flex items-center gap-2.5">
+                  <div className="h-9 w-9 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-base font-black"><FiDroplet/></div>
+                  <div>
+                    <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">IZIN {profile.current_izin_type} AKTIF</p>
+                    <p className="text-xs text-emerald-700 font-semibold">Alokasi: {profile.current_izin_duration} Menit</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleStopWaterbreak(user?.id)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] px-3.5 py-2 rounded-xl border border-emerald-700 uppercase tracking-wider flex items-center gap-1 shadow-sm active:scale-95 transition-all"
+                >
+                  <FiCheck /> Selesaikan
+                </button>
+              </div>
+            )}
+
             {/* REMINDER BOX */}
             <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-[20px] p-4 shadow-sm">
               <p className="text-[10px] font-black text-[#2563EB] uppercase tracking-widest mb-1">Reminder Hari Ini:</p>
@@ -1208,8 +1294,8 @@ export default function BreakSystem() {
                 <div className="flex items-center gap-2 border-b border-white/10 pb-2.5">
                   <FiShield className="text-blue-400 text-lg animate-pulse" />
                   <div>
-                    <h3 className="text-xs font-black uppercase tracking-wider">Atasan & Manager Panel</h3>
-                    <p className="text-[9px] text-slate-400">Berikan otorisasi short-waterbreak/afk kru.</p>
+                    <h3 className="text-xs font-black uppercase tracking-wider">Otorisasi Waterbreak (Manager Panel)</h3>
+                    <p className="text-[9px] text-slate-400">Pilih crew & berikan alokasi waktu izin sementara.</p>
                   </div>
                 </div>
                 <form onSubmit={handleGrantIzin} className="space-y-3">
@@ -1227,14 +1313,14 @@ export default function BreakSystem() {
                         <option value="toilet" className="text-slate-900">Ke Toilet (5 Menit)</option>
                         <option value="shalat" className="text-slate-900">Izin Shalat (10 Menit)</option>
                         <option value="makan" className="text-slate-900">Izin Makan (5 Menit)</option>
-                        <option value="pulang_awal" className="text-slate-900">Pulang Lebih Awal (Custom)</option>
+                        <option value="custom" className="text-slate-900">Custom Menit</option>
                       </select>
                     </div>
                   </div>
-                  {selectedIzinType === 'pulang_awal' && (
+                  {selectedIzinType === 'custom' && (
                     <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-blue-400 uppercase">Durasi Alokasi Menit Khusus</label>
-                      <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} className="bg-white/10 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none" />
+                      <label className="text-[9px] font-black text-blue-400 uppercase">Durasi Custom (Menit)</label>
+                      <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} placeholder="Masukkan menit..." className="bg-white/10 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-blue-500" />
                     </div>
                   )}
                   <button type="submit" disabled={isSubmittingIzin} className="w-full bg-blue-600 hover:bg-blue-500 font-black py-2.5 rounded-xl text-[11px] tracking-wider transition-colors flex items-center justify-center gap-1">
@@ -1309,7 +1395,7 @@ export default function BreakSystem() {
                       </div>
 
                       <div className="bg-white/90 border border-[#FEE2E2] rounded-xl p-3 text-center text-[11px] text-[#991B1B] font-semibold leading-relaxed">
-                        Poin kedisiplinan Anda akan terus terpotong otomatis sistem. Segera lakukan scan masuk kembali ke station kerja Anda.
+                        Poin kedisiplinan Anda akan terus terpotong otomatis sistem (-1 Poin / Menit). Segera lakukan scan masuk kembali ke station kerja Anda.
                       </div>
                     </div>
                   ) : (
@@ -1370,13 +1456,18 @@ export default function BreakSystem() {
                 <h2 className="text-base font-black text-[#0F172A] tracking-tight">Live Pemantauan Crew</h2>
                 <p className="text-[11px] text-[#64748B] font-bold">Sinkronisasi radar geofence pos aktif harian.</p>
               </div>
-              <div className="flex items-center gap-1.5 bg-[#EDFBF7] border border-[#D1F7EC] px-3 py-1.5 rounded-xl">
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#10B981] opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#10B981]"></span>
-                </span>
-                <span className="text-[10px] font-black text-[#059669] tracking-wider uppercase">RADAR AKTIF</span>
-              </div>
+              
+              {/* TOMBOL AKTIFKAN SUARA ALARM MANAGER */}
+              {isAtasanOrManager && (
+                <button 
+                  onClick={() => speakAiVoice("Radar pemantauan aktif dan sistem alarm suara manager siap membunyikan peringatan overbreak.")}
+                  className="flex items-center gap-1.5 bg-[#EDFBF7] hover:bg-emerald-100 border border-[#D1F7EC] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                  title="Klik untuk menguji & mengaktifkan izin suara alarm AI"
+                >
+                  <FiVolume2 className="text-[#059669] text-xs animate-bounce" />
+                  <span className="text-[10px] font-black text-[#059669] tracking-wider uppercase">TES AUDIO MANAGER</span>
+                </button>
+              )}
             </div>
 
             <div className="space-y-3">
@@ -1393,18 +1484,18 @@ export default function BreakSystem() {
               ) : (
                 <div className="space-y-2.5">
                   {liveBreaks.map(crew => (
-                    <div key={crew.id} className={`border rounded-2xl p-4 flex items-center justify-between shadow-sm bg-white transition-all duration-300 ${crew.isOverBreak ? 'border-red-300 bg-red-50/60' : crew.isWarningBreak ? 'border-yellow-300 bg-yellow-50/60' : 'border-[#E2E8F0]'}`}>
+                    <div key={crew.id} className={`border rounded-2xl p-4 flex items-center justify-between shadow-sm transition-all duration-300 ${crew.isOverBreak ? 'border-red-500 bg-red-50 animate-pulse' : crew.isWarningBreak ? 'border-yellow-300 bg-yellow-50/60' : 'bg-white border-[#E2E8F0]'}`}>
                       <div className="flex items-center space-x-3">
-                        <div className={`h-9 w-9 rounded-full flex items-center justify-center font-bold text-xs uppercase border ${crew.isOverBreak ? 'bg-red-100 text-red-600 border-red-200' : crew.isWarningBreak ? 'bg-yellow-100 text-yellow-600 border-yellow-200' : 'bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 border-indigo-100'}`}>
+                        <div className={`h-9 w-9 rounded-full flex items-center justify-center font-bold text-xs uppercase border ${crew.isOverBreak ? 'bg-red-600 text-white border-red-700 font-black' : crew.isWarningBreak ? 'bg-yellow-100 text-yellow-600 border-yellow-200' : 'bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 border-indigo-100'}`}>
                           {crew.name.substring(0, 2)}
                         </div>
                         <div>
-                          <h4 className={`text-sm font-bold tracking-tight transition-colors duration-300 ${crew.isOverBreak ? 'text-red-600 font-black animate-pulse' : crew.isWarningBreak ? 'text-yellow-600 font-extrabold' : 'text-[#0F172A]'}`}>{crew.name}</h4>
+                          <h4 className={`text-sm font-bold tracking-tight transition-colors duration-300 ${crew.isOverBreak ? 'text-red-700 font-black' : crew.isWarningBreak ? 'text-yellow-600 font-extrabold' : 'text-[#0F172A]'}`}>{crew.name}</h4>
                           <p className="text-[10px] text-[#64748B] font-bold flex items-center gap-1"><FiMapPin className={crew.isOverBreak ? 'text-red-500' : crew.isWarningBreak ? 'text-yellow-500' : 'text-[#10B981]'}/> {crew.zone}</p>
                         </div>
                       </div>
                       <div className="text-right flex flex-col items-end gap-0.5">
-                        <span className={`font-mono text-xs font-black px-2.5 py-1 rounded-xl border transition-all duration-300 ${crew.isOverBreak ? 'bg-red-600 text-white border-red-600 animate-pulse' : crew.isWarningBreak ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-[#F1F5F9] text-[#0F172A] border-[#E2E8F0]'}`}>
+                        <span className={`font-mono text-xs font-black px-2.5 py-1 rounded-xl border transition-all duration-300 ${crew.isOverBreak ? 'bg-red-600 text-white border-red-700 animate-bounce' : crew.isWarningBreak ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-[#F1F5F9] text-[#0F172A] border-[#E2E8F0]'}`}>
                           {crew.duration}
                         </span>
                         <span className="text-[8px] font-bold text-[#64748B]">Mulai: {crew.start}</span>
@@ -1441,6 +1532,7 @@ export default function BreakSystem() {
               )}
             </div>
 
+            {/* SHORT WATERBREAK ACTIVE */}
             <div className="space-y-3">
               <h3 className="text-xs font-black text-[#047857] uppercase tracking-widest flex items-center gap-1.5">
                 <FiDroplet className="text-[#10B981]" /> Short Waterbreak Active ({waterBreaks.length})
@@ -1460,7 +1552,19 @@ export default function BreakSystem() {
                           <p className="text-[9px] text-emerald-600 font-black uppercase">IZIN: {wb.type}</p>
                         </div>
                       </div>
-                      <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded-lg border ${wb.isOverBreak ? 'bg-red-600 text-white animate-pulse' : 'bg-emerald-50 text-emerald-700'}`}>{wb.duration}</span>
+                      
+                      <div className="flex items-center gap-2">
+                        <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-lg border ${wb.isOverBreak ? 'bg-red-600 text-white animate-pulse' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{wb.duration}</span>
+                        {isAtasanOrManager && (
+                          <button
+                            onClick={() => handleStopWaterbreak(wb.id)}
+                            className="bg-slate-800 hover:bg-slate-900 text-white font-black text-[10px] px-2.5 py-1 rounded-lg uppercase transition-colors"
+                            title="Hentikan Waterbreak Kru"
+                          >
+                            Selesai
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1487,10 +1591,10 @@ export default function BreakSystem() {
                 <div className="space-y-2.5">
                   <p className="text-[10px] font-black text-[#059669] uppercase tracking-widest flex items-center gap-1">🌟 PALING RAJIN (TOP TIER)</p>
                   <div className="bg-white border border-[#E2E8F0] rounded-2xl divide-y divide-[#F1F5F9] shadow-sm overflow-hidden">
-                    {leaderboard.filter(c => c.points >= 100).length === 0 ? (
+                    {leaderboard.filter(c => !c.isBebal).length === 0 ? (
                       <div className="p-5 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
                     ) : (
-                      leaderboard.filter(c => c.points >= 100).map((crew, index) => (
+                      leaderboard.filter(c => !c.isBebal).map((crew, index) => (
                         <div className="p-4 flex items-center justify-between w-full border-b last:border-0" key={crew.id}>
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-black text-[#64748B] w-4">{index + 1}.</span>
@@ -1513,11 +1617,11 @@ export default function BreakSystem() {
                 <div className="space-y-2.5">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">⚠️ PERLU EVALUASI (BEBAL TIER)</p>
                   <div className="bg-white border border-[#E2E8F0] rounded-2xl divide-y divide-[#F1F5F9] shadow-sm overflow-hidden">
-                    {leaderboard.filter(c => c.points < 100).length === 0 ? (
+                    {leaderboard.filter(c => c.isBebal).length === 0 ? (
                       <div className="p-5 text-center text-xs font-bold text-slate-400">0 Crew dalam zona bahaya kedisiplinan.</div>
                     ) : (
-                      leaderboard.filter(c => c.points < 100).map((crew, index) => (
-                        <div key={crew.id} className="p-4 flex items-center justify-between bg-rose-50/20">
+                      leaderboard.filter(c => c.isBebal).map((crew, index) => (
+                        <div key={crew.id} className="p-4 flex items-center justify-between bg-rose-50/20 border-b last:border-0">
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-black text-rose-500 w-4">{index + 1}.</span>
                             <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-8 h-8 rounded-full object-cover border border-rose-100" alt="Avatar" />
@@ -1668,7 +1772,7 @@ export default function BreakSystem() {
           </button>
         </div>
 
-        {/* MODAL CAM SENSOR VERIFIKASI (KAMERA & PROPORSI FOTO LEBIH BESAR & PROPORSIONAL) */}
+        {/* MODAL CAM SENSOR VERIFIKASI */}
         {isCameraOpen && (
           <div className="fixed inset-0 bg-[#0F172A]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-white border border-[#E2E8F0] rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
