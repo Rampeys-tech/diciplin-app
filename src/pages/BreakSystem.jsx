@@ -32,7 +32,8 @@ import {
   FiZap,
   FiPlusCircle,
   FiVolume2,
-  FiCheck
+  FiCheck,
+  FiStar
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -90,7 +91,6 @@ export default function BreakSystem() {
   const [hasNotifiedOverbreak, setHasNotifiedOverbreak] = useState(false);
   const announcedOverbreakCrew = useRef(new Set());
 
-  // Cek Role Manager
   const isAtasanOrManager = profile?.station_placement?.toLowerCase() === 'manager' || 
                             profile?.station_placement?.toLowerCase() === 'atasan' || 
                             profile?.station_placement?.toLowerCase() === 'owner' || 
@@ -164,10 +164,10 @@ export default function BreakSystem() {
   };
 
   const getCrewBadge = (points) => {
-    if (points >= 120) return { name: 'Elite Guardian', color: 'bg-indigo-50 text-indigo-700 border-indigo-200/60' };
-    if (points >= 105) return { name: 'Discipline Master', color: 'bg-emerald-50 text-emerald-700 border-emerald-200/60' };
-    if (points >= 100) return { name: 'Regular Crew', color: 'bg-indigo-50 text-indigo-600 border-indigo-100' };
-    return { name: 'Under Review', color: 'bg-rose-50 text-rose-700 border-rose-200/60' };
+    if (points >= 120) return { name: 'Elite Guardian', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
+    if (points >= 105) return { name: 'Discipline Master', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+    if (points >= 100) return { name: 'Regular Crew', color: 'bg-blue-50 text-blue-700 border-blue-200' };
+    return { name: 'Under Review', color: 'bg-rose-50 text-rose-700 border-rose-200' };
   };
 
   useEffect(() => {
@@ -225,7 +225,7 @@ export default function BreakSystem() {
       let displayCountdown = '';
       if (isOver) {
         const overSec = Math.abs(remainingSec);
-        const overMins = Math.max(1, Math.floor(overSec / 60)); // 1 Menit = 1 Poin
+        const overMins = Math.max(1, Math.floor(overSec / 60));
         displayCountdown = `Over +${Math.floor(overSec / 60)}m ${overSec % 60}s (Poin -${overMins})`;
       } else {
         displayCountdown = `${Math.floor(remainingSec / 60)}m ${remainingSec % 60}s sisa`;
@@ -241,18 +241,16 @@ export default function BreakSystem() {
     }));
   };
 
-  // MENGHENTIKAN WATERBREAK DENGAN RUMUS 1 MENIT OVER = 1 POIN
   const handleStopWaterbreak = async (crewId) => {
     try {
       const targetId = crewId || user?.id;
       if (!targetId) return;
 
       const currentWb = waterBreaks.find(w => w.id === targetId);
-      
       let pointDeduction = 0;
       if (currentWb && currentWb.isOverBreak) {
         const overSec = currentWb.elapsedSec - currentWb.allowedSec;
-        pointDeduction = Math.max(1, Math.floor(overSec / 60)); // 1 MENIT OVER = 1 POIN
+        pointDeduction = Math.max(1, Math.floor(overSec / 60));
       }
 
       const { data: targetProfile } = await supabase
@@ -282,7 +280,7 @@ export default function BreakSystem() {
 
       if (error) throw error;
       
-      alert(`✓ Status Waterbreak Selesai!${pointDeduction > 0 ? ` (Terdeteksi Over Waterbreak: -${pointDeduction} Poin)` : ''}`);
+      alert(`✓ Status Waterbreak Selesai!${pointDeduction > 0 ? ` (-${pointDeduction} Poin)` : ''}`);
       await fetchAttendanceStatus();
       await fetchLiveBreakData();
       await fetchLeaderboard();
@@ -339,7 +337,6 @@ export default function BreakSystem() {
     return () => clearInterval(eligibilityTimer);
   }, [checkInTime, hasCheckedOut]);
 
-  // TIMER & KALKULASI OVERBREAK UTAMA (1 MENIT OVER = 1 POIN)
   useEffect(() => {
     let timer = null;
     if (isOnBreak) {
@@ -357,17 +354,17 @@ export default function BreakSystem() {
 
           if (remaining <= 300 && remaining > 0 && !hasPlayed5MinAlarm) {
             setHasPlayedAlarm(true);
-            speakAiVoice("Perhatian untuk crew, waktu istirahat Anda tersisa lima menit lagi. Silakan bersiap-siap kembali ke station kerja Anda.");
+            speakAiVoice("Perhatian untuk crew, waktu istirahat Anda tersisa lima menit lagi.");
           }
 
           if (remaining === 0 && !hasPlayed0MinAlarm) {
             setHasPlayed0MinAlarm(true);
-            speakAiVoice("Waktu istirahat Anda telah habis. Harap segera kembali ke station kerja dan lakukan scan selesai break.");
+            speakAiVoice("Waktu istirahat Anda telah habis. Harap segera kembali ke station kerja.");
           }
 
           if (remaining < 0 && !hasNotifiedOverbreak && activeLogId) {
             setHasNotifiedOverbreak(true);
-            speakAiVoice("Peringatan! Anda terdeteksi over break. Poin kedisiplinan Anda terpotong dan laporan telah dikirim ke manager.");
+            speakAiVoice("Peringatan! Anda terdeteksi over break. Poin kedisiplinan Anda terpotong.");
           }
         }
       }, 1000);
@@ -461,7 +458,6 @@ export default function BreakSystem() {
     }
   };
 
-  // FETCH LEADERBOARD
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -470,7 +466,6 @@ export default function BreakSystem() {
         .select('id, full_name, avatar, station_placement, total_points');
         
       if (pError) {
-        console.error("Supabase Profile Fetch Error:", pError);
         setIsFetchingLeaderboard(false);
         return;
       }
@@ -971,7 +966,6 @@ export default function BreakSystem() {
     setHumanDetectionStatus('SUCCESS');
   };
 
-  // SCAN SELESAI BREAK DENGAN PENALTI POIN 1 MENIT OVER = 1 POIN
   const handleConfirmSubmission = async () => {
     if (!capturedImage || humanDetectionStatus !== 'SUCCESS' || !user?.id) {
       alert("Sesi tidak valid.");
@@ -1100,13 +1094,13 @@ export default function BreakSystem() {
 
           if (isOver) {
             const overMins = elapsedMins - allowedMins;
-            penaltyPoints = overMins; // 1 MENIT OVER = 1 POIN
-            pointChange = -overMins;  // POTONG SAMA DENGAN JUMLAH MENIT OVER
+            penaltyPoints = overMins; 
+            pointChange = -overMins; 
             financialLoss = overMins * 1000;            
             finalStatus = 'Overbreak';
           } else {
             penaltyPoints = 0;
-            pointChange = 5; // TEPAT WAKTU = BONUS +5 POIN
+            pointChange = 5; 
           }
 
           const { error: updateError } = await supabase
@@ -1192,7 +1186,7 @@ export default function BreakSystem() {
   const activeBadge = getCrewBadge(currentUserPoints);
 
   return (
-    <div className="min-h-screen w-full bg-[#F4F7FC] flex justify-center font-sans antialiased text-[#1E293B]">
+    <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
       
       <style>{`
         header.sticky.top-0, 
@@ -1203,242 +1197,243 @@ export default function BreakSystem() {
       `}</style>
 
       {/* CONTAINER APLIKASI */}
-      <div className="w-full max-w-md bg-[#FAFBFD] min-h-screen flex flex-col relative pb-24 shadow-xl border-x border-[#E2E8F0]">
+      <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* HEADER APLIKASI */}
-        <div className="sticky top-0 w-full bg-white px-5 py-4 border-b border-[#E2E8F0] flex items-center justify-between z-30 shadow-sm">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 bg-blue-600 rounded-xl flex items-center justify-center text-white font-black text-sm shadow-md shadow-blue-200"><Diciplin-logo className="png"></Diciplin-logo></div>
-            <span className="font-sans font-black text-lg tracking-tight bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Diciplin.com</span>
+        {/* HEADER APLIKASI DENGAN GAMBAR LOGO DICIIPLIN-LOGO.PNG */}
+        <div className="sticky top-0 w-full bg-white px-5 py-3.5 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <img 
+              src="/Diciplin-logo.png" 
+              onError={(e) => { 
+                e.target.onerror = null;
+                e.target.src = "/logo.png";
+              }} 
+              alt="Diciplin Logo" 
+              className="h-8 w-auto object-contain" 
+            />
+            <div className="flex flex-col">
+              <span className="font-sans font-black text-base tracking-tight text-slate-900 leading-none">
+                diciplin<span className="text-indigo-600">.com</span>
+              </span>
+              <span className="text-[8px] font-bold text-slate-400 tracking-wider uppercase mt-0.5">Crew Attendance System</span>
+            </div>
           </div>
-          <button onClick={async () => { await supabase.auth.signOut(); }} className="px-3.5 py-1.5 bg-rose-50 text-rose-600 text-[10px] font-black rounded-xl border border-rose-100 uppercase tracking-wider hover:bg-rose-100 transition-colors">Keluar</button>
+          
+          <button 
+            onClick={async () => { await supabase.auth.signOut(); }} 
+            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95"
+          >
+            Keluar
+          </button>
         </div>
 
         {/* ================= TAB 1: ABSENSI UTAMA ================= */}
         {activeTab === 'absen' && (
-          <div className="flex-1 px-5 py-5 space-y-5">
-            {/* PROFILE CARD */}
-            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-sm space-y-4">
+          <div className="flex-1 px-4 py-4 space-y-3.5">
+            
+            {/* HERO PROFILE CARD */}
+            <div className="bg-white border border-slate-200/80 rounded-[20px] p-4 shadow-sm space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3.5">
+                <div className="flex items-center space-x-3">
                   <div className="relative">
-                    <img src={profile?.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} alt="Avatar" className="h-14 w-14 rounded-full object-cover border-2 border-white shadow-sm" />
-                    <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 bg-[#10B981] border-2 border-white rounded-full"></span>
+                    <img src={profile?.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} alt="Avatar" className="h-12 w-12 rounded-xl object-cover border border-slate-100 shadow-2xs" />
+                    <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
                   </div>
                   <div>
-                    <p className="text-[10px] text-[#64748B] font-extrabold uppercase tracking-widest mb-0.5">{greeting}</p>
-                    <h1 className="text-base font-bold tracking-tight text-[#0F172A]">{profile?.full_name || 'Crew Member'}</h1>
+                    <p className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest">{greeting}</p>
+                    <h1 className="text-sm font-black tracking-tight text-slate-900">{profile?.full_name || 'Crew Member'}</h1>
                   </div>
                 </div>
+                
                 <div className="flex flex-col items-end gap-1">
-                  <span className="px-3 py-1 bg-[#EEF2F6] text-[#2563EB] text-[10px] font-black rounded-full tracking-wider uppercase border border-[#E2E8F0]">{profile?.station_placement || 'Staff Crew'}</span>
-                  <span className={`text-[9px] px-2 py-0.5 rounded-md font-black border uppercase ${activeBadge.color}`}>{activeBadge.name}</span>
+                  <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 text-[9px] font-black rounded-full tracking-wider uppercase border border-indigo-100">{profile?.station_placement || 'Staff Crew'}</span>
+                  <span className={`text-[8px] px-2 py-0.5 rounded-md font-black border uppercase ${activeBadge.color}`}>{activeBadge.name}</span>
                 </div>
               </div>
 
-              {/* JAM OPERASIONAL VALID */}
-              <div className="bg-[#FFFDF5] border border-[#FEF08A] rounded-2xl p-4 flex flex-col space-y-3 shadow-inner">
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2 text-xs text-[#64748B] font-bold">
-                    <FiClock className="text-[#EAB308] text-lg flex-shrink-0" />
-                    <span>Jam Operasional Valid</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 bg-white/80 border border-[#FEF08A]/40 px-3 py-1 rounded-xl shadow-sm">
-                    <span className="font-mono text-xl font-black text-[#0F172A] tracking-wider leading-none">
-                      {formatWITATime(currentSystemTime)}
-                    </span>
-                    <span className="text-[10px] font-sans font-black text-[#64748B] uppercase">WITA</span>
-                  </div>
+              {/* JAM OPERASIONAL WIDGET */}
+              <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                  <FiClock className="text-indigo-600 text-base" />
+                  <span>Jam Operasional Valid</span>
                 </div>
-                <div className="flex items-center gap-2 pt-2.5 border-t border-[#FEF08A]/60 text-[11px] text-[#475569] font-bold">
-                  <FiCalendar className="text-[#64748B] text-sm" /> {formatWITADate(currentSystemTime)}
+                <div className="flex items-center gap-1.5 bg-white border border-slate-200/80 px-2.5 py-1 rounded-lg shadow-2xs">
+                  <span className="font-mono text-base font-black text-slate-900 tracking-wider">
+                    {formatWITATime(currentSystemTime)}
+                  </span>
+                  <span className="text-[9px] font-extrabold text-indigo-600">WITA</span>
                 </div>
               </div>
             </div>
 
-            {/* STATUS GEOLOCATION LOADER */}
+            {/* GPS GEOLOCATION LOADER */}
             {isVerifyingLocation && (
-              <div className="bg-blue-50 border border-blue-200 text-blue-700 text-xs rounded-xl p-3 flex items-center justify-center gap-2 font-bold animate-pulse">
-                <FiMapPin className="animate-bounce text-base"/> Menghubungkan ke Satelit GPS & Mengunci Titik Geofence Outlet...
+              <div className="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs rounded-xl p-3 flex items-center justify-center gap-2 font-bold animate-pulse">
+                <FiMapPin className="animate-bounce text-sm"/> Mengunci GPS Outlet...
               </div>
             )}
 
-            {/* STATUS WATERBREAK KRU AKTIF */}
+            {/* WATERBREAK ACTIVE NOTIFICATION */}
             {profile?.current_izin_start && (
-              <div className="bg-emerald-50 border-2 border-emerald-200 rounded-[20px] p-4 shadow-sm flex items-center justify-between animate-in fade-in duration-200">
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl p-3 shadow-2xs flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <div className="h-9 w-9 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-base font-black"><FiDroplet/></div>
+                  <div className="h-8 w-8 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center text-sm font-black"><FiDroplet/></div>
                   <div>
-                    <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">IZIN {profile.current_izin_type} AKTIF</p>
-                    <p className="text-xs text-emerald-700 font-semibold">Alokasi: {profile.current_izin_duration} Menit</p>
+                    <p className="text-[9px] font-black text-emerald-800 uppercase tracking-wider">IZIN {profile.current_izin_type} AKTIF</p>
+                    <p className="text-xs text-emerald-700 font-bold">Alokasi: {profile.current_izin_duration} Menit</p>
                   </div>
                 </div>
                 <button
                   onClick={() => handleStopWaterbreak(user?.id)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] px-3.5 py-2 rounded-xl border border-emerald-700 uppercase tracking-wider flex items-center gap-1 shadow-sm active:scale-95 transition-all"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] px-3 py-1.5 rounded-xl uppercase tracking-wider flex items-center gap-1 active:scale-95 transition-all"
                 >
-                  <FiCheck /> Selesaikan
+                  <FiCheck className="text-xs" /> Selesaikan
                 </button>
               </div>
             )}
 
             {/* REMINDER BOX */}
-            <div className="bg-[#EFF6FF] border border-[#BFDBFE] rounded-[20px] p-4 shadow-sm">
-              <p className="text-[10px] font-black text-[#2563EB] uppercase tracking-widest mb-1">Reminder Hari Ini:</p>
-              <p className="text-xs text-[#1E3A8A] leading-relaxed font-semibold">{motivationQuote}</p>
+            <div className="bg-white border border-slate-200/70 rounded-2xl p-3 shadow-2xs flex items-start gap-2.5">
+              <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg flex-shrink-0"><FiStar className="text-xs"/></div>
+              <div>
+                <p className="text-[9px] font-black text-indigo-600 uppercase tracking-widest mb-0.5">Reminder Shift:</p>
+                <p className="text-xs text-slate-700 leading-relaxed font-semibold">{motivationQuote}</p>
+              </div>
             </div>
 
             {/* PANEL MANAGER */}
             {isAtasanOrManager && (
-              <div className="bg-gradient-to-br from-[#1E293B] to-[#0F172A] text-white rounded-[24px] p-5 shadow-md space-y-4 border border-slate-800">
-                <div className="flex items-center gap-2 border-b border-white/10 pb-2.5">
-                  <FiShield className="text-blue-400 text-lg animate-pulse" />
+              <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                  <div className="p-1.5 bg-indigo-600 text-white rounded-lg"><FiShield className="text-xs" /></div>
                   <div>
-                    <h3 className="text-xs font-black uppercase tracking-wider">Otorisasi Waterbreak (Manager Panel)</h3>
-                    <p className="text-[9px] text-slate-400">Pilih crew & berikan alokasi waktu izin sementara.</p>
+                    <h3 className="text-xs font-black uppercase tracking-wider">Manager Control Panel</h3>
+                    <p className="text-[9px] text-slate-400">Otorisasi izin darurat & waterbreak kru.</p>
                   </div>
                 </div>
-                <form onSubmit={handleGrantIzin} className="space-y-3">
+                <form onSubmit={handleGrantIzin} className="space-y-2.5">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-slate-400 uppercase">Pilih Anggota Crew</label>
-                      <select value={selectedCrewId} onChange={(e) => setSelectedCrewId(e.target.value)} className="bg-white/10 border border-white/10 rounded-xl px-2.5 py-2 text-xs text-white outline-none focus:border-blue-500">
+                      <label className="text-[9px] font-extrabold text-slate-400 uppercase">Pilih Anggota Crew</label>
+                      <select value={selectedCrewId} onChange={(e) => setSelectedCrewId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
                         <option value="" className="text-slate-900">-- Pilih Staff --</option>
-                        {allProfiles.map(p => <option key={p.id} value={p.id} className="text-slate-900">{p.full_name} ({p.station_placement || 'Crew'})</option>)}
+                        {allProfiles.map(p => <option key={p.id} value={p.id} className="text-slate-900">{p.full_name}</option>)}
                       </select>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-slate-400 uppercase">Jenis Otorisasi Izin</label>
-                      <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-white/10 border border-white/10 rounded-xl px-2.5 py-2 text-xs text-white outline-none focus:border-blue-500">
-                        <option value="toilet" className="text-slate-900">Ke Toilet (5 Menit)</option>
-                        <option value="shalat" className="text-slate-900">Izin Shalat (10 Menit)</option>
-                        <option value="makan" className="text-slate-900">Izin Makan (5 Menit)</option>
+                      <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
+                      <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
+                        <option value="toilet" className="text-slate-900">Toilet (5M)</option>
+                        <option value="shalat" className="text-slate-900">Shalat (10M)</option>
+                        <option value="makan" className="text-slate-900">Makan (5M)</option>
                         <option value="custom" className="text-slate-900">Custom Menit</option>
                       </select>
                     </div>
                   </div>
                   {selectedIzinType === 'custom' && (
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-black text-blue-400 uppercase">Durasi Custom (Menit)</label>
-                      <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} placeholder="Masukkan menit..." className="bg-white/10 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-blue-500" />
-                    </div>
+                    <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} placeholder="Masukkan menit khusus..." className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none" />
                   )}
-                  <button type="submit" disabled={isSubmittingIzin} className="w-full bg-blue-600 hover:bg-blue-500 font-black py-2.5 rounded-xl text-[11px] tracking-wider transition-colors flex items-center justify-center gap-1">
-                    <FiPlusCircle/> {isSubmittingIzin ? 'Memproses Otorisasi...' : 'Berikan Izin & Sync Radar'}
+                  <button type="submit" disabled={isSubmittingIzin} className="w-full bg-indigo-600 hover:bg-indigo-500 font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]">
+                    <FiPlusCircle className="text-xs"/> Berikan Izin & Sync Radar
                   </button>
                 </form>
               </div>
             )}
 
-            {/* CARD PRESENSI UTAMA */}
-            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-sm space-y-4">
-              <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-3.5">
-                <p className="text-[11px] font-black text-[#334155] uppercase tracking-widest flex items-center gap-2">
-                  <FiShield className="text-[#2563EB] text-base" /> Presensi Kerja Utama
+            {/* PRESENSI UTAMA CARD */}
+            <div className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-xs space-y-3">
+              <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
+                <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
+                  <FiShield className="text-indigo-600 text-sm" /> Presensi Shift Kerja
                 </p>
                 {checkInTime && (
-                  <span className="text-[10px] text-[#059669] font-extrabold bg-[#D1FAE5] px-3 py-1 rounded-full border border-[#A7F3D0] uppercase tracking-wider">
+                  <span className="text-[9px] text-emerald-700 font-black bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider">
                     Masuk: {checkInTime.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit', timeZone: 'Asia/Makassar'})}
                   </span>
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <button
                   disabled={hasCheckedIn || isVerifyingLocation}
                   onClick={() => openCamera('IN')}
-                  className={`py-4 px-4 rounded-2xl border flex flex-col items-center justify-center gap-2 font-black text-xs transition-all duration-200 ${hasCheckedIn ? 'bg-[#E8F5E9] border-[#C8E6C9] text-[#2E7D32] shadow-inner opacity-90' : 'bg-white hover:bg-[#F8FAFC] border-[#CBD5E1] text-[#1E293B] shadow-sm active:scale-[0.97]'}`}
+                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${hasCheckedIn ? 'bg-emerald-50/80 border-emerald-200 text-emerald-700 shadow-inner' : 'bg-slate-50 hover:bg-slate-100 border-slate-200/80 text-slate-800 active:scale-[0.97]'}`}
                 >
-                  <FiLogIn className={`text-2xl ${hasCheckedIn ? 'text-[#2E7D32]' : 'text-[#475569]'}`} />
-                  <span className="tracking-wide">{hasCheckedIn ? 'Sudah Masuk ✓' : 'Absen Masuk'}</span>
+                  <div className={`p-2 rounded-xl ${hasCheckedIn ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-50 text-indigo-600'}`}>
+                    <FiLogIn className="text-lg" />
+                  </div>
+                  <span>{hasCheckedIn ? 'Sudah Masuk ✓' : 'Absen Masuk'}</span>
                 </button>
 
                 <button
                   disabled={!hasCheckedIn || hasCheckedOut || !isEligibleForCheckOut || isVerifyingLocation}
                   onClick={() => openCamera('OUT')}
-                  className={`py-4 px-4 rounded-2xl border flex flex-col items-center justify-center gap-2 font-black text-xs transition-all duration-200 ${hasCheckedOut ? 'bg-[#F1F5F9] border-[#E2E8F0] text-[#94A3B8] cursor-not-allowed shadow-none' : !hasCheckedIn ? 'bg-[#F8FAFC] text-[#CBD5E1] cursor-not-allowed shadow-none' : !isEligibleForCheckOut ? 'bg-[#FFF5F5] border-[#FED7D7] text-[#C53030] cursor-not-allowed' : 'bg-white border-[#CBD5E1] shadow-sm'}`}
+                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${hasCheckedOut ? 'bg-slate-100 border-slate-200 text-slate-400' : !hasCheckedIn ? 'bg-slate-50 border-slate-200 text-slate-300' : !isEligibleForCheckOut ? 'bg-rose-50/50 border-rose-100 text-rose-400' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
                 >
-                  <FiLogOut className={`text-2xl ${hasCheckedOut ? 'text-[#94A3B8]' : isEligibleForCheckOut ? 'text-[#DC2626]' : 'text-[#CBD5E1]'}`} />
-                  <span className="tracking-wide">Absen Pulang</span>
+                  <div className={`p-2 rounded-xl ${hasCheckedOut ? 'bg-slate-200 text-slate-400' : isEligibleForCheckOut ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-300'}`}>
+                    <FiLogOut className="text-lg" />
+                  </div>
+                  <span>Absen Pulang</span>
                 </button>
               </div>
 
               {hasCheckedIn && !hasCheckedOut && !isEligibleForCheckOut && (
-                <div className="bg-[#FFFDF5] border border-[#FEF08A] rounded-xl p-3.5 flex items-start gap-3 shadow-inner">
-                  <FiAlertCircle className="text-[#CA8A04] mt-0.5 flex-shrink-0 text-lg" />
-                  <p className="text-[11px] text-[#713F12] leading-relaxed font-bold">Tombol Absen Pulang terkunci. Berdasarkan aturan shift outlet, Anda wajib menyelesaikan total **{requiredWorkHours} Jam Kerja** terlebih dahulu sebelum diizinkan checkout.</p>
+                <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-2.5 flex items-start gap-2">
+                  <FiAlertCircle className="text-amber-600 mt-0.5 flex-shrink-0 text-sm" />
+                  <p className="text-[10px] text-amber-900 font-bold leading-relaxed">Tombol checkout terkunci hingga Anda menyelesaikan total {requiredWorkHours} Jam Kerja.</p>
                 </div>
               )}
             </div>
 
             {/* DYNAMIC BREAK ACTIVE CARD */}
-            <div className="bg-white border border-[#E2E8F0] rounded-[24px] p-5 shadow-sm transition-all duration-300">
+            <div className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-xs">
               {isOnBreak ? (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {timeLeft < 0 ? (
-                    <div className="bg-gradient-to-br from-[#FEF2F2] to-[#FFF5F5] border-2 border-[#FCA5A5] rounded-2xl p-5 shadow-sm space-y-4 relative overflow-hidden animate-pulse">
-                      <div className="flex items-center justify-between border-b border-[#FEE2E2] pb-3">
-                        <div className="flex items-center gap-2 text-[#DC2626]">
-                          <FiAlertTriangle className="text-xl flex-shrink-0" />
-                          <span className="text-[11px] font-black tracking-wider uppercase">TERDETEKSI OVER BREAK!</span>
+                    <div className="bg-rose-600 text-white rounded-2xl p-4 space-y-2 text-center shadow-md animate-pulse">
+                      <div className="flex items-center justify-between border-b border-white/20 pb-1.5">
+                        <div className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider">
+                          <FiAlertTriangle /> Overbreak Terdeteksi!
                         </div>
-                        <div className="text-[10px] font-bold text-slate-500 bg-white/80 border border-[#FEE2E2] px-2.5 py-0.5 rounded-lg">
-                          Mulai: {breakStartTime}
-                        </div>
+                        <span className="text-[8px] font-bold bg-white/20 px-2 py-0.5 rounded-md">Mulai: {breakStartTime}</span>
                       </div>
-                      
-                      <div className="text-center space-y-1">
-                        <h2 className="font-mono text-5xl font-black tracking-tight text-[#B91C1C]">
-                          {formatCountdown(timeLeft)}
-                        </h2>
-                        <p className="text-[10px] text-[#7F1D1D] font-extrabold uppercase tracking-widest">Total Overtime Durasi Istirahat</p>
-                      </div>
-
-                      <div className="bg-white/90 border border-[#FEE2E2] rounded-xl p-3 text-center text-[11px] text-[#991B1B] font-semibold leading-relaxed">
-                        Poin kedisiplinan Anda akan terus terpotong otomatis sistem (-1 Poin / Menit). Segera lakukan scan masuk kembali ke station kerja Anda.
-                      </div>
+                      <h2 className="font-mono text-3xl font-black">{formatCountdown(timeLeft)}</h2>
+                      <p className="text-[9px] text-rose-100 font-bold">Poin terpotong otomatis (-1 Poin/Menit). Segera kembali!</p>
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between text-[10px] font-black tracking-widest text-[#64748B] border-b border-[#F1F5F9] pb-3">
-                        <span className="flex items-center gap-2 text-blue-600">
-                          <span className="h-2 w-2 rounded-full bg-blue-600 animate-pulse" /> BREAK SEDANG AKTIF
+                    <div className="space-y-2 text-center">
+                      <div className="flex items-center justify-between text-[9px] font-black tracking-widest text-slate-400 border-b border-slate-100 pb-2">
+                        <span className="flex items-center gap-1.5 text-indigo-600">
+                          <span className="h-2 w-2 rounded-full bg-indigo-600 animate-ping" /> BREAK AKTIF
                         </span>
-                        <span className="flex items-center gap-1 font-mono text-xs font-bold text-[#0F172A]">
-                          <FiClock className="text-[#64748B]" /> MULAI: {breakStartTime || '--:--'}
-                        </span>
+                        <span className="font-mono text-xs text-slate-700 font-bold">MULAI: {breakStartTime || '--:--'}</span>
                       </div>
-                      
-                      <div className="py-3 text-center">
-                        <h2 className="font-mono text-5xl font-black tracking-tighter text-[#0F172A]">
-                          {formatCountdown(timeLeft)}
-                        </h2>
-                        <p className="text-[10px] text-[#64748B] font-extrabold mt-2 uppercase tracking-widest">Sisa Waktu Alokasi Istirahat Keluar</p>
-                      </div>
+                      <h2 className="font-mono text-4xl font-black text-slate-900 tracking-tight py-1">{formatCountdown(timeLeft)}</h2>
+                      <p className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest">Sisa Alokasi Waktu Istirahat</p>
                     </div>
                   )}
 
                   <button 
                     disabled={isVerifyingLocation}
                     onClick={() => openCamera('END_BREAK')} 
-                    className="w-full bg-gradient-to-r from-[#FF5A79] to-[#FF4466] text-white font-black py-4 rounded-2xl text-xs tracking-wider shadow-md shadow-rose-100 transition-all duration-200 active:scale-[0.98]"
+                    className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 rounded-xl text-xs tracking-wider shadow-md shadow-rose-600/20 transition-all active:scale-[0.98]"
                   >
                     Akhiri Waktu Break
                   </button>
                 </div>
               ) : (
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center text-[11px] text-[#64748B] font-black uppercase tracking-widest">
-                    <span className="flex items-center gap-2">
-                      <FiCoffee className="text-[#2563EB] text-lg" /> 
-                      Alokasi Istirahat: {checkInTime && checkInTime.getHours() === 22 ? '30 Menit' : '60 Menit'}
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center text-[10px] text-slate-500 font-black uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5">
+                      <FiCoffee className="text-indigo-600 text-base" /> 
+                      Alokasi: {checkInTime && checkInTime.getHours() === 22 ? '30 Menit' : '60 Menit'}
                     </span>
-                    <span className={`text-[9px] px-3 py-1 rounded-full font-black border uppercase tracking-wider ${hasCheckedIn && !hasCheckedOut ? 'bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]' : 'bg-[#F8FAFC]'}`}>{hasCheckedIn && !hasCheckedOut ? 'Ready' : 'Locked'}</span>
+                    <span className={`text-[8px] px-2.5 py-0.5 rounded-full font-black border uppercase tracking-wider ${hasCheckedIn && !hasCheckedOut ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-slate-100 text-slate-400'}`}>{hasCheckedIn && !hasCheckedOut ? 'Ready' : 'Locked'}</span>
                   </div>
                   <button
                     disabled={!hasCheckedIn || hasCheckedOut || isVerifyingLocation}
                     onClick={() => openCamera('START_BREAK')}
-                    className={`w-full py-4 px-4 rounded-2xl font-black text-xs tracking-wider transition-all duration-200 shadow-sm ${hasCheckedIn && !hasCheckedOut ? 'bg-[#0F172A] hover:bg-[#1E293B] text-white active:scale-[0.97] shadow-slate-200' : 'bg-[#F8FAFC] border border-[#E2E8F0] cursor-not-allowed shadow-none'}`}
+                    className={`w-full py-3.5 px-4 rounded-xl font-black text-xs tracking-wider transition-all duration-200 ${hasCheckedIn && !hasCheckedOut ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-md active:scale-[0.98]' : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'}`}
                   >
                     Ambil Absen Istirahat (Mulai Timer)
                   </button>
@@ -1450,55 +1445,53 @@ export default function BreakSystem() {
 
         {/* ================= TAB 2: LIVE MONITORING ================= */}
         {activeTab === 'live-break' && (
-          <div className="flex-1 px-5 py-5 space-y-6">
-            <div className="flex items-center justify-between bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-sm">
+          <div className="flex-1 px-4 py-4 space-y-4">
+            <div className="flex items-center justify-between bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs">
               <div>
-                <h2 className="text-base font-black text-[#0F172A] tracking-tight">Live Pemantauan Crew</h2>
-                <p className="text-[11px] text-[#64748B] font-bold">Sinkronisasi radar geofence pos aktif harian.</p>
+                <h2 className="text-sm font-black text-slate-900 tracking-tight">Live Pemantauan Crew</h2>
+                <p className="text-[10px] text-slate-400 font-bold">Sinkronisasi radar geofence pos aktif.</p>
               </div>
               
-              {/* TOMBOL AKTIFKAN SUARA ALARM MANAGER */}
               {isAtasanOrManager && (
                 <button 
                   onClick={() => speakAiVoice("Radar pemantauan aktif dan sistem alarm suara manager siap membunyikan peringatan overbreak.")}
-                  className="flex items-center gap-1.5 bg-[#EDFBF7] hover:bg-emerald-100 border border-[#D1F7EC] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
-                  title="Klik untuk menguji & mengaktifkan izin suara alarm AI"
+                  className="flex items-center gap-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-xl transition-colors cursor-pointer"
                 >
-                  <FiVolume2 className="text-[#059669] text-xs animate-bounce" />
-                  <span className="text-[10px] font-black text-[#059669] tracking-wider uppercase">TES AUDIO MANAGER</span>
+                  <FiVolume2 className="text-emerald-600 text-xs animate-bounce" />
+                  <span className="text-[9px] font-bold text-emerald-700 tracking-wider uppercase">TES AUDIO</span>
                 </button>
               )}
             </div>
 
-            <div className="space-y-3">
-              <h3 className="text-xs font-black text-[#475569] uppercase tracking-widest flex items-center gap-1.5">
-                <FiCoffee className="text-[#2563EB]" /> Main Break Active ({liveBreaks.length})
+            <div className="space-y-2.5">
+              <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                <FiCoffee className="text-indigo-600 text-sm" /> Main Break Active ({liveBreaks.length})
               </h3>
               
               {isFetchingLive ? (
                 <div className="text-center py-4 text-xs font-bold text-slate-400 animate-pulse">Menghubungkan Database...</div>
               ) : liveBreaks.length === 0 ? (
-                <div className="bg-white border border-[#E2E8F0] rounded-2xl p-6 text-center text-xs text-[#94A3B8] font-bold shadow-sm">
+                <div className="bg-white border border-slate-200/70 rounded-2xl p-4 text-center text-xs text-slate-400 font-medium shadow-xs">
                   Semua crew sedang bekerja di station masing-masing (0 Crew Break).
                 </div>
               ) : (
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   {liveBreaks.map(crew => (
-                    <div key={crew.id} className={`border rounded-2xl p-4 flex items-center justify-between shadow-sm transition-all duration-300 ${crew.isOverBreak ? 'border-red-500 bg-red-50 animate-pulse' : crew.isWarningBreak ? 'border-yellow-300 bg-yellow-50/60' : 'bg-white border-[#E2E8F0]'}`}>
+                    <div key={crew.id} className={`border rounded-2xl p-3.5 flex items-center justify-between shadow-xs transition-all ${crew.isOverBreak ? 'border-rose-400 bg-rose-50/70 animate-pulse' : 'bg-white border-slate-200/70'}`}>
                       <div className="flex items-center space-x-3">
-                        <div className={`h-9 w-9 rounded-full flex items-center justify-center font-bold text-xs uppercase border ${crew.isOverBreak ? 'bg-red-600 text-white border-red-700 font-black' : crew.isWarningBreak ? 'bg-yellow-100 text-yellow-600 border-yellow-200' : 'bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 border-indigo-100'}`}>
+                        <div className={`h-9 w-9 rounded-xl flex items-center justify-center font-black text-xs uppercase border ${crew.isOverBreak ? 'bg-rose-600 text-white border-rose-700' : 'bg-indigo-50 text-indigo-600 border-indigo-100'}`}>
                           {crew.name.substring(0, 2)}
                         </div>
                         <div>
-                          <h4 className={`text-sm font-bold tracking-tight transition-colors duration-300 ${crew.isOverBreak ? 'text-red-700 font-black' : crew.isWarningBreak ? 'text-yellow-600 font-extrabold' : 'text-[#0F172A]'}`}>{crew.name}</h4>
-                          <p className="text-[10px] text-[#64748B] font-bold flex items-center gap-1"><FiMapPin className={crew.isOverBreak ? 'text-red-500' : crew.isWarningBreak ? 'text-yellow-500' : 'text-[#10B981]'}/> {crew.zone}</p>
+                          <h4 className={`text-xs font-bold tracking-tight ${crew.isOverBreak ? 'text-rose-700 font-black' : 'text-slate-900'}`}>{crew.name}</h4>
+                          <p className="text-[9px] text-slate-400 font-bold flex items-center gap-1"><FiMapPin className="text-emerald-500"/> {crew.zone}</p>
                         </div>
                       </div>
                       <div className="text-right flex flex-col items-end gap-0.5">
-                        <span className={`font-mono text-xs font-black px-2.5 py-1 rounded-xl border transition-all duration-300 ${crew.isOverBreak ? 'bg-red-600 text-white border-red-700 animate-bounce' : crew.isWarningBreak ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-[#F1F5F9] text-[#0F172A] border-[#E2E8F0]'}`}>
+                        <span className={`font-mono text-xs font-black px-2.5 py-0.5 rounded-lg border ${crew.isOverBreak ? 'bg-rose-600 text-white border-rose-600 animate-bounce' : 'bg-slate-100 text-slate-800 border-slate-200'}`}>
                           {crew.duration}
                         </span>
-                        <span className="text-[8px] font-bold text-[#64748B]">Mulai: {crew.start}</span>
+                        <span className="text-[8px] font-bold text-slate-400">Mulai: {crew.start}</span>
                       </div>
                     </div>
                   ))}
@@ -1506,60 +1499,58 @@ export default function BreakSystem() {
               )}
             </div>
 
-            <div className="space-y-3">
-              <h3 className="text-xs font-black text-[#C53030] uppercase tracking-widest flex items-center gap-1.5">
-                <FiAlertTriangle className="text-[#EF4444]" /> Ghosting Alert ({ghostingCrew.length})
+            <div className="space-y-2.5">
+              <h3 className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1.5">
+                <FiAlertTriangle className="text-rose-500 text-sm" /> Ghosting Alert ({ghostingCrew.length})
               </h3>
               {ghostingCrew.length === 0 ? (
-                <div className="bg-white border border-[#E2E8F0] rounded-2xl p-6 text-center text-xs text-[#94A3B8] font-bold shadow-sm">
+                <div className="bg-white border border-slate-200/70 rounded-2xl p-4 text-center text-xs text-slate-400 font-medium shadow-xs">
                   Tidak ada indikasi crew menghilang dari lokasi kerja (0 Alert).
                 </div>
               ) : (
                 <div className="space-y-2">
                   {ghostingCrew.map(gc => (
-                    <div key={gc.id} className="border border-rose-300 bg-rose-50/70 rounded-2xl p-4 flex items-center justify-between shadow-sm animate-pulse">
-                      <div className="flex items-center space-x-3">
-                        <div className="h-8 w-8 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center text-xs font-black"><FiAlertTriangle/></div>
+                    <div key={gc.id} className="border border-rose-300 bg-rose-50/80 rounded-2xl p-3 flex items-center justify-between shadow-xs animate-pulse">
+                      <div className="flex items-center space-x-2.5">
+                        <div className="h-8 w-8 bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center text-xs font-black"><FiAlertTriangle/></div>
                         <div>
                           <h4 className="text-xs font-bold text-rose-950">{gc.name}</h4>
                           <p className="text-[9px] text-rose-600 font-bold uppercase">{gc.distance}</p>
                         </div>
                       </div>
-                      <span className="bg-rose-600 text-white text-[10px] font-black px-2.5 py-1 rounded-xl border border-rose-700 uppercase">GHOSTING DETECTED</span>
+                      <span className="bg-rose-600 text-white text-[9px] font-black px-2 py-0.5 rounded-lg uppercase tracking-wider">GHOSTING DETECTED</span>
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            {/* SHORT WATERBREAK ACTIVE */}
-            <div className="space-y-3">
-              <h3 className="text-xs font-black text-[#047857] uppercase tracking-widest flex items-center gap-1.5">
-                <FiDroplet className="text-[#10B981]" /> Short Waterbreak Active ({waterBreaks.length})
+            <div className="space-y-2.5">
+              <h3 className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1.5">
+                <FiDroplet className="text-emerald-500 text-sm" /> Short Waterbreak Active ({waterBreaks.length})
               </h3>
               {waterBreaks.length === 0 ? (
-                <div className="bg-white border border-[#E2E8F0] rounded-2xl p-6 text-center text-xs text-[#94A3B8] font-bold shadow-sm">
+                <div className="bg-white border border-slate-200/70 rounded-2xl p-4 text-center text-xs text-slate-400 font-medium shadow-xs">
                   Tidak ada crew mengambil izin pendek toilet/shalat (0 Active).
                 </div>
               ) : (
                 <div className="space-y-2">
                   {waterBreaks.map(wb => (
-                    <div key={wb.id} className={`border rounded-2xl p-4 bg-white flex items-center justify-between border-[#E2E8F0] ${wb.isOverBreak ? 'border-red-300 bg-red-50/60' : ''}`}>
-                      <div className="flex items-center space-x-3">
-                        <div className="h-8 w-8 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center text-xs font-black"><FiDroplet/></div>
+                    <div key={wb.id} className={`border rounded-2xl p-3 bg-white flex items-center justify-between border-slate-200/70 ${wb.isOverBreak ? 'border-rose-300 bg-rose-50/60' : ''}`}>
+                      <div className="flex items-center space-x-2.5">
+                        <div className="h-8 w-8 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center text-xs font-black"><FiDroplet/></div>
                         <div>
                           <h4 className="text-xs font-bold text-slate-800">{wb.name}</h4>
                           <p className="text-[9px] text-emerald-600 font-black uppercase">IZIN: {wb.type}</p>
                         </div>
                       </div>
                       
-                      <div className="flex items-center gap-2">
-                        <span className={`font-mono text-xs font-bold px-2.5 py-1 rounded-lg border ${wb.isOverBreak ? 'bg-red-600 text-white animate-pulse' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{wb.duration}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded-lg border ${wb.isOverBreak ? 'bg-rose-600 text-white animate-pulse' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>{wb.duration}</span>
                         {isAtasanOrManager && (
                           <button
                             onClick={() => handleStopWaterbreak(wb.id)}
-                            className="bg-slate-800 hover:bg-slate-900 text-white font-black text-[10px] px-2.5 py-1 rounded-lg uppercase transition-colors"
-                            title="Hentikan Waterbreak Kru"
+                            className="bg-slate-900 hover:bg-slate-800 text-white font-black text-[9px] px-2 py-1 rounded-lg uppercase transition-colors"
                           >
                             Selesai
                           </button>
@@ -1573,40 +1564,39 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 3: LEADERBOARD POIN CREW ================= */}
+        {/* ================= TAB 3: LEADERBOARD POIN ================= */}
         {activeTab === 'leaderboard' && (
-          <div className="flex-1 px-5 py-5 space-y-5">
-            <div className="flex flex-col space-y-1">
-              <h2 className="text-base font-black text-[#0F172A] tracking-tight flex items-center gap-2">
-                <FiAward className="text-yellow-500 text-xl" /> Status Kedisiplinan Crew
+          <div className="flex-1 px-4 py-4 space-y-4">
+            <div className="flex flex-col space-y-0.5">
+              <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                <FiAward className="text-amber-500 text-lg" /> Status Kedisiplinan Crew
               </h2>
-              <p className="text-xs text-[#64748B] font-medium">Rekapitulasi: Masuk/Pulang, Istirahat, Ghosting, & Waterbreak.</p>
+              <p className="text-[10px] text-slate-400 font-medium">Rekapitulasi: Masuk/Pulang, Istirahat, & Waterbreak.</p>
             </div>
 
             {isFetchingLeaderboard ? (
-              <div className="text-center py-12 text-sm text-[#64748B] font-semibold animate-pulse">Menghitung matriks poin...</div>
+              <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks poin...</div>
             ) : (
-              <div className="space-y-6">
+              <div className="space-y-4">
                 {/* TOP TIER */}
-                <div className="space-y-2.5">
-                  <p className="text-[10px] font-black text-[#059669] uppercase tracking-widest flex items-center gap-1">🌟 PALING RAJIN (TOP TIER)</p>
-                  <div className="bg-white border border-[#E2E8F0] rounded-2xl divide-y divide-[#F1F5F9] shadow-sm overflow-hidden">
+                <div className="space-y-2">
+                  <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1">🌟 PALING RAJIN (TOP TIER)</p>
+                  <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
                     {leaderboard.filter(c => !c.isBebal).length === 0 ? (
-                      <div className="p-5 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
+                      <div className="p-4 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
                     ) : (
                       leaderboard.filter(c => !c.isBebal).map((crew, index) => (
-                        <div className="p-4 flex items-center justify-between w-full border-b last:border-0" key={crew.id}>
+                        <div className="p-3.5 flex items-center justify-between w-full" key={crew.id}>
                           <div className="flex items-center space-x-3">
-                            <span className="font-mono text-xs font-black text-[#64748B] w-4">{index + 1}.</span>
-                            <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-8 h-8 rounded-full object-cover border" alt="Avatar" />
+                            <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
+                            <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
                             <div>
-                              <span className="text-sm font-bold text-[#0F172A] block">{crew.name}</span>
-                              <span className="text-[9px] text-[#2563EB] font-black uppercase tracking-wider block">{crew.role}</span>
-                              <span className="text-[10px] text-slate-500 font-medium block mt-0.5 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">{crew.breakInfo}</span>
-                              <span className={`text-[8px] font-bold px-1.5 py-0.2 rounded border uppercase inline-block mt-1 ${getCrewBadge(crew.points).color}`}>{getCrewBadge(crew.points).name}</span>
+                              <span className="text-xs font-bold text-slate-900 block">{crew.name}</span>
+                              <span className="text-[9px] text-indigo-600 font-black uppercase tracking-wider block">{crew.role}</span>
+                              <span className="text-[9px] text-slate-500 font-medium block mt-0.5 bg-slate-50 px-1.5 py-0.2 rounded border border-slate-100">{crew.breakInfo}</span>
                             </div>
                           </div>
-                          <span className="bg-emerald-50 text-emerald-700 text-xs font-black px-2.5 py-1 rounded-xl border border-emerald-100">{crew.points} Pts</span>
+                          <span className="bg-emerald-50 text-emerald-700 text-xs font-black px-2.5 py-1 rounded-xl border border-emerald-200/60">{crew.points} Pts</span>
                         </div>
                       ))
                     )}
@@ -1614,22 +1604,21 @@ export default function BreakSystem() {
                 </div>
 
                 {/* BEBAL TIER */}
-                <div className="space-y-2.5">
+                <div className="space-y-2">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">⚠️ PERLU EVALUASI (BEBAL TIER)</p>
-                  <div className="bg-white border border-[#E2E8F0] rounded-2xl divide-y divide-[#F1F5F9] shadow-sm overflow-hidden">
+                  <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
                     {leaderboard.filter(c => c.isBebal).length === 0 ? (
-                      <div className="p-5 text-center text-xs font-bold text-slate-400">0 Crew dalam zona bahaya kedisiplinan.</div>
+                      <div className="p-4 text-center text-xs font-bold text-slate-400">0 Crew dalam zona bahaya kedisiplinan.</div>
                     ) : (
                       leaderboard.filter(c => c.isBebal).map((crew, index) => (
-                        <div key={crew.id} className="p-4 flex items-center justify-between bg-rose-50/20 border-b last:border-0">
+                        <div key={crew.id} className="p-3.5 flex items-center justify-between bg-rose-50/20">
                           <div className="flex items-center space-x-3">
-                            <span className="font-mono text-xs font-black text-rose-500 w-4">{index + 1}.</span>
-                            <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-8 h-8 rounded-full object-cover border border-rose-100" alt="Avatar" />
+                            <span className="font-mono text-xs font-bold text-rose-500 w-4">{index + 1}.</span>
+                            <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
                             <div>
-                              <span className="text-sm font-bold text-rose-950 block">{crew.name}</span>
+                              <span className="text-xs font-bold text-rose-950 block">{crew.name}</span>
                               <span className="text-[9px] text-rose-600 font-black uppercase tracking-wider block">{crew.role}</span>
-                              <span className="text-[10px] text-rose-900 font-medium block mt-0.5 bg-rose-100/40 px-1.5 py-0.5 rounded border border-rose-200">{crew.breakInfo}</span>
-                              <span className={`text-[8px] font-bold px-1.5 py-0.2 rounded border uppercase inline-block mt-1 ${getCrewBadge(crew.points).color}`}>{getCrewBadge(crew.points).name}</span>
+                              <span className="text-[9px] text-rose-900 font-medium block mt-0.5 bg-rose-100/40 px-1.5 py-0.2 rounded border border-rose-200">{crew.breakInfo}</span>
                             </div>
                           </div>
                           <span className="bg-rose-100 text-rose-700 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200 flex items-center gap-1"><FiFrown /> {crew.points} Pts</span>
@@ -1645,50 +1634,47 @@ export default function BreakSystem() {
 
         {/* ================= TAB 4: LOG FOTO ISTIRAHAT CREW ================= */}
         {activeTab === 'all-logs' && (
-          <div className="flex-1 px-5 py-5 space-y-4">
-            <div className="flex flex-col space-y-1">
-              <h2 className="text-base font-black text-[#0F172A] tracking-tight flex items-center gap-2">
-                <FiImage className="text-indigo-600 text-xl" /> Log Foto Istirahat Crew
+          <div className="flex-1 px-4 py-4 space-y-3">
+            <div className="flex flex-col space-y-0.5">
+              <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat Crew
               </h2>
-              <p className="text-xs text-[#64748B] font-medium">Data arsip media cloud. Foto otomatis terhapus dalam waktu 1 bulan.</p>
+              <p className="text-[10px] text-slate-400 font-medium">Data arsip foto verifikasi kamera cloud.</p>
             </div>
 
             {isFetchingAllLogs ? (
-              <div className="text-center py-12 text-sm text-[#64748B] font-semibold animate-pulse">Menghubungkan cloud storage...</div>
+              <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
             ) : allCrewLogs.length === 0 ? (
-              <div className="bg-white border border-[#E2E8F0] rounded-2xl p-8 text-center text-sm text-[#94A3B8] font-bold shadow-sm">Belum ada aktivitas log break kru hari ini.</div>
+              <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">Belum ada aktivitas log break kru hari ini.</div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {allCrewLogs.map((log) => (
-                  <div key={log.id} className="bg-white border border-[#E2E8F0] rounded-2xl p-4 shadow-sm space-y-3">
-                    <div className="flex justify-between items-center border-b border-[#F1F5F9] pb-2">
+                  <div key={log.id} className="bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs space-y-2.5">
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-2">
                       <div>
-                        <h4 className="text-sm font-black text-[#0F172A]">{log.crewName}</h4>
-                        <p className="text-[10px] text-[#64748B] font-semibold">{new Date(log.created_at).toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric', timeZone: 'Asia/Makassar'})}</p>
+                        <h4 className="text-xs font-bold text-slate-900">{log.crewName}</h4>
+                        <p className="text-[9px] text-slate-400 font-medium">{new Date(log.created_at).toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric', timeZone: 'Asia/Makassar'})}</p>
                       </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <span className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md uppercase">Break Log</span>
-                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-md uppercase border ${log.isOverBreak ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
-                          Total: {log.formattedDuration}
-                        </span>
-                      </div>
+                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md uppercase border ${log.isOverBreak ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
+                        {log.formattedDuration}
+                      </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
+                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
                         {log.image_url ? (
-                          <img src={log.image_url} className="w-full aspect-[4/3] rounded-xl object-cover border shadow-sm" alt="Foto Mulai" />
+                          <img src={log.image_url} className="w-full aspect-[4/3] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
                         ) : (
-                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[10px] text-slate-400 font-bold">No Image</div>
+                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">No Image</div>
                         )}
                       </div>
                       <div className="space-y-1">
-                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
+                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
                         {log.after_break_image_url ? (
-                          <img src={log.after_break_image_url} className="w-full aspect-[4/3] rounded-xl object-cover border shadow-sm" alt="Foto Selesai" />
+                          <img src={log.after_break_image_url} className="w-full aspect-[4/3] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
                         ) : (
-                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[10px] text-slate-400 font-bold">In Progress</div>
+                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress</div>
                         )}
                       </div>
                     </div>
@@ -1699,113 +1685,111 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 5: EDIT PROFIL USER ================= */}
+        {/* ================= TAB 5: EDIT PROFIL ================= */}
         {activeTab === 'profile' && (
-          <div className="flex-1 px-5 py-5 space-y-5">
-            <div className="flex flex-col space-y-1">
-              <h2 className="text-base font-black text-[#0F172A] tracking-tight flex items-center gap-2">
-                <FiSettings className="text-slate-700 text-xl" /> Pengaturan Profil Anda
+          <div className="flex-1 px-4 py-4 space-y-4">
+            <div className="flex flex-col space-y-0.5">
+              <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                <FiSettings className="text-slate-700 text-lg" /> Pengaturan Profil
               </h2>
-              <p className="text-xs text-[#64748B] font-medium">Kelola informasi kredensial login dan profil pribadi staff.</p>
+              <p className="text-[10px] text-slate-400 font-medium">Kelola informasi pribadi staff.</p>
             </div>
 
-            <form onSubmit={handleUpdateProfile} className="space-y-4">
-              <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 flex flex-col items-center justify-center space-y-3 shadow-sm relative">
+            <form onSubmit={handleUpdateProfile} className="space-y-3">
+              <div className="bg-white border border-slate-200/70 rounded-2xl p-4 flex flex-col items-center justify-center space-y-2 shadow-xs relative">
                 <div className="relative">
-                  <img src={editAvatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-20 h-20 rounded-full object-cover border-4 border-slate-50 shadow-md" alt="Avatar" />
-                  <label className="absolute bottom-0 right-0 bg-[#2563EB] text-white p-1.5 rounded-full shadow-md cursor-pointer hover:bg-blue-700 transition-colors">
+                  <img src={editAvatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-16 h-16 rounded-2xl object-cover border-2 border-slate-100 shadow-xs" alt="Avatar" />
+                  <label className="absolute -bottom-1 -right-1 bg-indigo-600 text-white p-1.5 rounded-lg cursor-pointer hover:bg-indigo-700 transition-colors shadow-xs">
                     <FiUploadCloud className="text-xs" />
                     <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
                   </label>
                 </div>
                 
-                <div className="flex flex-col items-center gap-1 pt-1">
-                  <div className={`flex items-center gap-1.5 text-xs font-black px-3 py-1 rounded-xl border uppercase ${activeBadge.color}`}>
+                <div className="flex flex-col items-center gap-0.5 pt-1">
+                  <div className={`flex items-center gap-1 text-[10px] font-black px-2.5 py-0.5 rounded-xl border uppercase ${activeBadge.color}`}>
                     <FiZap className="animate-bounce" /> {activeBadge.name}
                   </div>
-                  <p className="text-[10px] text-slate-400 font-bold">Skor Kedisiplinan: {currentUserPoints} Pts</p>
+                  <p className="text-[9px] text-slate-400 font-bold">Skor Kedisiplinan: {currentUserPoints} Pts</p>
                 </div>
               </div>
 
-              <div className="bg-white border border-[#E2E8F0] rounded-2xl p-5 shadow-sm space-y-3.5">
+              <div className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-xs space-y-3">
                 <div className="space-y-1">
-                  <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><FiUser/> Nama Lengkap</label>
-                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} required className="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:border-blue-500 transition-colors" />
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><FiUser/> Nama Lengkap</label>
+                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} required className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:border-indigo-500 transition-colors" />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><FiPhone/> No. WhatsApp Aktif</label>
-                  <input type="text" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:border-blue-500 transition-colors" />
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><FiPhone/> No. WhatsApp Aktif</label>
+                  <input type="text" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:border-indigo-500 transition-colors" />
                 </div>
 
-                <div className="pt-2 border-t divide-y-0 space-y-3">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1.5"><FiLock/> Password Baru</label>
-                    <input type="password" placeholder="Isi hanya jika ingin ganti password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full text-xs font-semibold px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none" />
-                  </div>
+                <div className="pt-2 border-t border-slate-100 space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><FiLock/> Password Baru</label>
+                  <input type="password" placeholder="Isi hanya jika ingin ganti password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none" />
                 </div>
               </div>
 
-              <button type="submit" disabled={isUpdatingProfile} className="w-full bg-[#1E293B] hover:bg-slate-800 text-white font-black py-3.5 rounded-2xl text-xs tracking-wider shadow-sm transition-all duration-150 active:scale-[0.99]">
-                {isUpdatingProfile ? 'Menyimpan Perubahan...' : 'Simpan Pembaruan Profil'}
+              <button type="submit" disabled={isUpdatingProfile} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-2xl text-xs tracking-wider shadow-md transition-all active:scale-[0.98]">
+                {isUpdatingProfile ? 'Menyimpan...' : 'Simpan Pembaruan Profil'}
               </button>
             </form>
           </div>
         )}
 
-        {/* ================= FIXED BOTTOM NAV BAR ================= */}
-        <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-[#E2E8F0] px-3 py-2 flex justify-between items-center z-40 rounded-t-2xl shadow-[0_-8px_30px_rgba(0,0,0,0.06)]">
-          <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'absen' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiLayout className="text-xl" /> <span className="text-[10px] tracking-tight">Absen</span>
+        {/* ================= FIXED BOTTOM NAV BAR PAS MENEMPEL ================= */}
+        <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 py-2 flex justify-between items-center z-50 shadow-[0_-4px_25px_rgba(0,0,0,0.05)]">
+          <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'absen' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+            <FiLayout className="text-lg" /> <span className="text-[9px] tracking-tight">Absen</span>
           </button>
-          <button onClick={() => setActiveTab('live-break')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'live-break' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiUsers className="text-xl" /> <span className="text-[10px] tracking-tight">Live</span>
+          <button onClick={() => setActiveTab('live-break')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'live-break' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+            <FiUsers className="text-lg" /> <span className="text-[9px] tracking-tight">Live</span>
           </button>
-          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'leaderboard' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiAward className="text-xl" /> <span className="text-[10px] tracking-tight">Poin</span>
+          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'leaderboard' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+            <FiAward className="text-lg" /> <span className="text-[9px] tracking-tight">Poin</span>
           </button>
-          <button onClick={() => setActiveTab('all-logs')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'all-logs' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiRotateCcw className="text-xl" /> <span className="text-[10px] tracking-tight">Log</span>
+          <button onClick={() => setActiveTab('all-logs')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'all-logs' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+            <FiRotateCcw className="text-lg" /> <span className="text-[9px] tracking-tight">Log</span>
           </button>
-          <button onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'profile' ? 'text-[#2563EB] font-black scale-105' : 'text-[#64748B] font-bold hover:text-[#0F172A]'}`}>
-            <FiSettings className="text-xl" /> <span className="text-[10px] tracking-tight">Profil</span>
+          <button onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'profile' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+            <FiSettings className="text-lg" /> <span className="text-[9px] tracking-tight">Profil</span>
           </button>
         </div>
 
-        {/* MODAL CAM SENSOR VERIFIKASI */}
+        {/* MODAL KAMERA VERIFIKASI */}
         {isCameraOpen && (
-          <div className="fixed inset-0 bg-[#0F172A]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white border border-[#E2E8F0] rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-              <div className="p-4 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between">
-                <h3 className="font-black text-xs text-[#334155] tracking-widest uppercase">SENSOR MANUSIA: {cameraMode}</h3>
-                <button type="button" onClick={closeCamera} className="p-1 hover:bg-[#E2E8F0] text-[#64748B] hover:text-[#0F172A] rounded-full transition-colors"><FiX className="h-5 w-5" /></button>
+          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white border border-slate-200 rounded-3xl max-w-xs w-full overflow-hidden shadow-2xl">
+              <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <h3 className="font-bold text-[10px] text-slate-700 tracking-widest uppercase">VERIFIKASI: {cameraMode}</h3>
+                <button type="button" onClick={closeCamera} className="p-1 hover:bg-slate-200 text-slate-500 rounded-full transition-colors"><FiX className="h-4 w-4" /></button>
               </div>
               
-              <div className="p-4 space-y-4 text-center bg-white">
+              <div className="p-4 space-y-3 text-center bg-white">
                 {!capturedImage ? (
-                  <div className="relative w-full aspect-[4/3] bg-[#0F172A] rounded-2xl overflow-hidden shadow-inner">
+                  <div className="relative w-full aspect-[4/3] bg-slate-900 rounded-2xl overflow-hidden shadow-inner">
                     <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
                     <div className="absolute inset-4 border-2 border-dashed border-white/30 rounded-full pointer-events-none" />
                     {humanDetectionStatus === 'HUMAN_DETECTED' && (
-                      <button type="button" onClick={handleCapture} className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#2563EB] text-white p-4 rounded-full shadow-xl border-2 border-white active:scale-95 transition-transform"><FiCamera className="text-2xl" /></button>
+                      <button type="button" onClick={handleCapture} className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white p-3 rounded-full shadow-lg border-2 border-white active:scale-95 transition-transform"><FiCamera className="text-xl" /></button>
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    <div className="w-full aspect-[4/3] rounded-2xl overflow-hidden border border-[#E2E8F0] shadow-inner relative">
+                  <div className="space-y-3">
+                    <div className="w-full aspect-[4/3] rounded-2xl overflow-hidden border border-slate-200 shadow-inner relative">
                       <img src={capturedImage} alt="Preview" className="w-full h-full object-cover" />
-                      <div className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-[#10B981] text-white text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider"><FiCheckCircle /> OBJEK VALID</div>
+                      <div className="absolute top-2 right-2 flex items-center gap-1 bg-emerald-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase"><FiCheckCircle /> VALID</div>
                     </div>
-                    <div className="flex gap-2.5">
-                      <button type="button" onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} className="flex-1 bg-[#F8FAFC] text-[#334155] font-bold py-3 rounded-xl text-xs border border-[#CBD5E1] hover:bg-slate-100 transition-colors">Ulang</button>
-                      <button type="button" disabled={isLoading} onClick={handleConfirmSubmission} className="flex-1 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-black py-3 rounded-xl text-xs shadow-md transition-colors">
-                        {isLoading ? 'Memproses...' : 'Konfirmasi'}
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} className="flex-1 bg-slate-100 text-slate-700 font-bold py-2.5 rounded-xl text-xs border border-slate-200">Ulang</button>
+                      <button type="button" disabled={isLoading} onClick={handleConfirmSubmission} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-xs transition-colors">
+                        {isLoading ? 'Proses...' : 'Konfirmasi'}
                       </button>
                     </div>
                   </div>
                 )}
                 
-                <div className="text-[10px] font-black bg-[#F8FAFC] border border-[#E2E8F0] text-[#64748B] py-2.5 rounded-xl flex items-center justify-center gap-1.5 font-mono">
+                <div className="text-[10px] font-bold bg-slate-50 border border-slate-200 text-slate-500 py-2 rounded-xl flex items-center justify-center gap-1 font-mono">
                   {humanDetectionStatus === 'LOADING_ENGINE' && <span className="animate-pulse">Mengaktifkan Kamera...</span>}
                   {humanDetectionStatus === 'NOT_DETECTED' && <span>🚨 Kamera Tidak Siap</span>}
                   {humanDetectionStatus === 'HUMAN_DETECTED' && <span>✓ Kamera Siap: Ambil Foto</span>}
