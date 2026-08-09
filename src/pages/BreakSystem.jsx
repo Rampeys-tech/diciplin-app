@@ -33,7 +33,8 @@ import {
   FiPlusCircle,
   FiVolume2,
   FiCheck,
-  FiStar
+  FiStar,
+  FiRefreshCw
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -925,7 +926,7 @@ export default function BreakSystem() {
         
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'user', width: 640, height: 480 }
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
           });
           localStreamRef.current = stream;
           if (videoRef.current) {
@@ -949,17 +950,21 @@ export default function BreakSystem() {
     );
   };
 
+  // PEMOTONGAN & PENGAMBILAN CANVAS ASPEK RASIO NATURAL (ANTI KETARIK KESAMPING)
   const handleCapture = () => {
     if (humanDetectionStatus !== 'HUMAN_DETECTED' || !videoRef.current) return;
 
+    const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = 640; canvas.height = 480;
+    canvas.width = video.videoWidth || 720;
+    canvas.height = video.videoHeight || 1280;
     const ctx = canvas.getContext('2d');
+    
     ctx.translate(canvas.width, 0); 
     ctx.scale(-1, 1);
-    ctx.drawImage(videoRef.current, 0, 0, 640, 480);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
 
     setCapturedImage(dataUrl);
@@ -981,13 +986,13 @@ export default function BreakSystem() {
       const timestampIso = new Date().toISOString();
       let publicUrl = null;
 
-      if (cameraMode === 'START_BREAK' || cameraMode === 'END_BREAK') {
+      if (cameraMode === 'START_BREAK' || cameraMode === 'END_BREAK' || cameraMode === 'IN' || cameraMode === 'OUT') {
         const res = await fetch(capturedImage);
         const blob = await res.blob();
         
         const compressed = await imageCompression(blob, { 
-          maxSizeMB: 0.1, 
-          maxWidthOrHeight: 640,
+          maxSizeMB: 0.15, 
+          maxWidthOrHeight: 800,
           useWebWorker: true 
         });
         
@@ -1199,7 +1204,7 @@ export default function BreakSystem() {
       {/* CONTAINER APLIKASI */}
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* HEADER APLIKASI DENGAN GAMBAR LOGO DICIIPLIN-LOGO.PNG */}
+        {/* HEADER APLIKASI */}
         <div className="sticky top-0 w-full bg-white px-5 py-3.5 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
           <div className="flex items-center gap-2.5">
             <img 
@@ -1664,17 +1669,17 @@ export default function BreakSystem() {
                       <div className="space-y-1">
                         <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
                         {log.image_url ? (
-                          <img src={log.image_url} className="w-full aspect-[4/3] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
+                          <img src={log.image_url} className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
                         ) : (
-                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">No Image</div>
+                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">No Image</div>
                         )}
                       </div>
                       <div className="space-y-1">
                         <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
                         {log.after_break_image_url ? (
-                          <img src={log.after_break_image_url} className="w-full aspect-[4/3] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
+                          <img src={log.after_break_image_url} className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
                         ) : (
-                          <div className="w-full aspect-[4/3] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress</div>
+                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress</div>
                         )}
                       </div>
                     </div>
@@ -1737,8 +1742,8 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= FIXED BOTTOM NAV BAR PAS MENEMPEL ================= */}
-        <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 py-2 flex justify-between items-center z-50 shadow-[0_-4px_25px_rgba(0,0,0,0.05)]">
+        {/* ================= FIXED BOTTOM NAV BAR ================= */}
+        <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 py-2 flex justify-between items-center z-40 shadow-[0_-4px_25px_rgba(0,0,0,0.05)]">
           <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'absen' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiLayout className="text-lg" /> <span className="text-[9px] tracking-tight">Absen</span>
           </button>
@@ -1756,46 +1761,95 @@ export default function BreakSystem() {
           </button>
         </div>
 
-        {/* MODAL KAMERA VERIFIKASI */}
+        {/* MODAL KAMERA FULL SCREEN DENGAN BENTUK WAJAH GAYA TALENTA MEKARI */}
         {isCameraOpen && (
-          <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-white border border-slate-200 rounded-3xl max-w-xs w-full overflow-hidden shadow-2xl">
-              <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="font-bold text-[10px] text-slate-700 tracking-widest uppercase">VERIFIKASI: {cameraMode}</h3>
-                <button type="button" onClick={closeCamera} className="p-1 hover:bg-slate-200 text-slate-500 rounded-full transition-colors"><FiX className="h-4 w-4" /></button>
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md flex flex-col justify-between z-50 animate-in fade-in duration-200">
+            {/* MODAL HEADER */}
+            <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between text-white relative z-10">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping"></span>
+                <h3 className="font-black text-xs tracking-widest uppercase text-slate-200">VERIFIKASI WAJAH: {cameraMode}</h3>
               </div>
-              
-              <div className="p-4 space-y-3 text-center bg-white">
-                {!capturedImage ? (
-                  <div className="relative w-full aspect-[4/3] bg-slate-900 rounded-2xl overflow-hidden shadow-inner">
-                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
-                    <div className="absolute inset-4 border-2 border-dashed border-white/30 rounded-full pointer-events-none" />
-                    {humanDetectionStatus === 'HUMAN_DETECTED' && (
-                      <button type="button" onClick={handleCapture} className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white p-3 rounded-full shadow-lg border-2 border-white active:scale-95 transition-transform"><FiCamera className="text-xl" /></button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="w-full aspect-[4/3] rounded-2xl overflow-hidden border border-slate-200 shadow-inner relative">
-                      <img src={capturedImage} alt="Preview" className="w-full h-full object-cover" />
-                      <div className="absolute top-2 right-2 flex items-center gap-1 bg-emerald-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase"><FiCheckCircle /> VALID</div>
+              <button type="button" onClick={closeCamera} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors">
+                <FiX className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* AREA KAMERA & OVERLAY DENGAN FRAME KEPALA/WAJAH TALENTA */}
+            <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
+              {!capturedImage ? (
+                <div className="relative w-full h-full flex items-center justify-center">
+                  {/* VIDEO KAMERA PORTRAIT NATURAL */}
+                  <video 
+                    ref={videoRef} 
+                    autoPlay 
+                    playsInline 
+                    muted 
+                    className="w-full h-full object-cover -scale-x-100" 
+                  />
+                  
+                  {/* OVERLAY MASK OVAL BENTUK KEPALA/WAJAH (TALENTA MEKARI STYLE) */}
+                  <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6 bg-slate-950/40">
+                    <div className="relative w-full max-w-[280px] aspect-[3/4] rounded-[100px] border-4 border-dashed border-white/80 shadow-[0_0_0_9999px_rgba(15,23,42,0.65)] flex flex-col items-center justify-center">
+                      <div className="absolute top-8 text-center text-white/90 text-xs font-bold bg-slate-900/80 px-3 py-1 rounded-full border border-white/20 backdrop-blur-sm">
+                        Posisikan Wajah di Dalam Oval
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} className="flex-1 bg-slate-100 text-slate-700 font-bold py-2.5 rounded-xl text-xs border border-slate-200">Ulang</button>
-                      <button type="button" disabled={isLoading} onClick={handleConfirmSubmission} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-xs transition-colors">
-                        {isLoading ? 'Proses...' : 'Konfirmasi'}
+                  </div>
+
+                  {/* TOMBOL SHUTTER KONTROL */}
+                  {humanDetectionStatus === 'HUMAN_DETECTED' && (
+                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20">
+                      <button 
+                        type="button" 
+                        onClick={handleCapture} 
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white p-5 rounded-full shadow-2xl border-4 border-white/80 active:scale-95 transition-transform flex items-center justify-center"
+                      >
+                        <FiCamera className="text-2xl" />
                       </button>
                     </div>
-                  </div>
-                )}
-                
-                <div className="text-[10px] font-bold bg-slate-50 border border-slate-200 text-slate-500 py-2 rounded-xl flex items-center justify-center gap-1 font-mono">
-                  {humanDetectionStatus === 'LOADING_ENGINE' && <span className="animate-pulse">Mengaktifkan Kamera...</span>}
-                  {humanDetectionStatus === 'NOT_DETECTED' && <span>🚨 Kamera Tidak Siap</span>}
-                  {humanDetectionStatus === 'HUMAN_DETECTED' && <span>✓ Kamera Siap: Ambil Foto</span>}
-                  {humanDetectionStatus === 'SUCCESS' && <span>Siap Kirim Data Ke Cloud</span>}
+                  )}
                 </div>
-              </div>
+              ) : (
+                /* PREVIEW FOTO HASIL CAPTURE (PROPORSI NATURAL & ANTI KETARIK) */
+                <div className="relative w-full h-full flex flex-col items-center justify-center p-4 bg-slate-900">
+                  <div className="w-full max-w-sm aspect-[3/4] rounded-3xl overflow-hidden border-2 border-slate-700 shadow-2xl relative">
+                    <img src={capturedImage} alt="Preview Foto" className="w-full h-full object-cover" />
+                    <div className="absolute top-3 right-3 bg-emerald-500 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider shadow-md flex items-center gap-1">
+                      <FiCheckCircle /> WAJAH VALID
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* MODAL FOOTER AKSI */}
+            <div className="p-4 bg-slate-900 border-t border-slate-800 space-y-3">
+              {capturedImage ? (
+                <div className="flex gap-3 max-w-sm mx-auto">
+                  <button 
+                    type="button" 
+                    onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} 
+                    className="flex-1 bg-slate-800 text-slate-200 font-bold py-3.5 rounded-2xl text-xs border border-slate-700 hover:bg-slate-700 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <FiRefreshCw /> Foto Ulang
+                  </button>
+                  <button 
+                    type="button" 
+                    disabled={isLoading} 
+                    onClick={handleConfirmSubmission} 
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3.5 rounded-2xl text-xs shadow-lg shadow-indigo-600/30 transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    {isLoading ? 'Memproses Data...' : 'Konfirmasi Absen'}
+                  </button>
+                </div>
+              ) : (
+                <div className="text-xs font-black text-slate-300 text-center font-mono py-1">
+                  {humanDetectionStatus === 'LOADING_ENGINE' && <span className="animate-pulse text-indigo-400">Mengaktifkan Sensor Kamera...</span>}
+                  {humanDetectionStatus === 'NOT_DETECTED' && <span className="text-rose-400">🚨 Kamera Tidak Siap</span>}
+                  {humanDetectionStatus === 'HUMAN_DETECTED' && <span className="text-emerald-400">✓ Posisikan Wajah & Tekan Tombol Kamera</span>}
+                </div>
+              )}
             </div>
           </div>
         )}
