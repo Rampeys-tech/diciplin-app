@@ -130,15 +130,18 @@ export default function BreakSystem() {
                             profile?.full_name?.toLowerCase().includes('owner') || 
                             profile?.role?.toLowerCase() === 'manager';
 
+  // ================= STATE LEADERBOARD POIN (CREW & MANAGER) =================
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [managerLeaderboard, setManagerLeaderboard] = useState([]);
+  const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); // 'crew' | 'manager'
+  const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
+
   // ================= STATE GEOLOKASI =================
   const [humanDetectionStatus, setHumanDetectionStatus] = useState('LOADING_ENGINE'); 
   const [currentSystemTime, setCurrentSystemTime] = useState(new Date());
   const [userLocation, setUserLocation] = useState({ lat: null, lng: null });
   const [isVerifyingLocation, setIsVerifyingLocation] = useState(false);
 
-  // ================= STATE LEADERBOARD POIN =================
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
   
@@ -496,7 +499,7 @@ export default function BreakSystem() {
     try {
       const { data: profiles, error: pError } = await supabase
         .from('user_profiles')
-        .select('id, full_name, avatar, station_placement, total_points');
+        .select('id, full_name, avatar, station_placement, role, total_points');
         
       if (pError) {
         setIsFetchingLeaderboard(false);
@@ -508,62 +511,78 @@ export default function BreakSystem() {
         .select('user_id, break_start_time, break_end_time, actual_in, discipline_status, penalty_points, status_in');
 
       if (profiles) {
+        // PEMISAHAN PROFILE CREW VS MANAGER
         const filteredCrewProfiles = profiles.filter(p => {
           const nameLower = (p.full_name || '').toLowerCase();
           const placementLower = (p.station_placement || '').toLowerCase();
+          const roleLower = (p.role || '').toLowerCase();
           return !nameLower.includes('owner') && 
                  !placementLower.includes('owner') && 
                  !placementLower.includes('manager') && 
-                 !placementLower.includes('atasan');
+                 !placementLower.includes('atasan') &&
+                 roleLower !== 'manager';
         });
 
-        const calculatedLeaderboard = filteredCrewProfiles.map(crew => {
-          const pts = crew.total_points !== null && crew.total_points !== undefined ? Number(crew.total_points) : 100;
-          let totalBreakMinutes = 0;
-          let breakCount = 0;
-          let hasOverBreakHistory = false;
-          
-          const crewLogs = (logs || []).filter(l => l.user_id === crew.id);
+        const filteredManagerProfiles = profiles.filter(p => {
+          const nameLower = (p.full_name || '').toLowerCase();
+          const placementLower = (p.station_placement || '').toLowerCase();
+          const roleLower = (p.role || '').toLowerCase();
+          return nameLower.includes('owner') || 
+                 placementLower.includes('owner') || 
+                 placementLower.includes('manager') || 
+                 placementLower.includes('atasan') ||
+                 roleLower === 'manager';
+        });
 
-          crewLogs.forEach(log => {
-            if (log.discipline_status === 'Overbreak' || 
-                (log.penalty_points && Number(log.penalty_points) > 0) || 
-                (log.status_in && log.status_in.toLowerCase().includes('terlambat'))) {
-              hasOverBreakHistory = true;
-            }
+        const processLeaderboardData = (profileList) => {
+          return profileList.map(person => {
+            const pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
+            let totalBreakMinutes = 0;
+            let breakCount = 0;
+            let hasOverBreakHistory = false;
+            
+            const personLogs = (logs || []).filter(l => l.user_id === person.id);
 
-            if (log.break_start_time && log.break_end_time) {
-              breakCount += 1;
-              const start = new Date(log.break_start_time);
-              const end = new Date(log.break_end_time);
-              const actualMins = Math.floor((end.getTime() - start.getTime()) / 60000);
-              totalBreakMinutes += actualMins;
-
-              const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-              const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
-
-              if (actualMins > allowedMins) {
+            personLogs.forEach(log => {
+              if (log.discipline_status === 'Overbreak' || 
+                  (log.penalty_points && Number(log.penalty_points) > 0) || 
+                  (log.status_in && log.status_in.toLowerCase().includes('terlambat'))) {
                 hasOverBreakHistory = true;
               }
-            }
-          });
 
-          const isBebal = pts < 100 || (pts <= 100 && hasOverBreakHistory);
+              if (log.break_start_time && log.break_end_time) {
+                breakCount += 1;
+                const start = new Date(log.break_start_time);
+                const end = new Date(log.break_end_time);
+                const actualMins = Math.floor((end.getTime() - start.getTime()) / 60000);
+                totalBreakMinutes += actualMins;
 
-          return {
-            id: crew.id,
-            name: crew.full_name || 'Crew Member',
-            avatar: crew.avatar,
-            role: crew.station_placement || 'Staff Crew', 
-            points: pts,
-            isBebal: isBebal,
-            hasOverBreakHistory: hasOverBreakHistory,
-            breakInfo: breakCount > 0 ? `${breakCount}x Break (${totalBreakMinutes} Menit)${hasOverBreakHistory ? ' ⚠️ Over' : ' ✓ Sesuai'}` : 'Belum Ada Break'
-          };
-        });
+                const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
+                const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
 
-        calculatedLeaderboard.sort((a, b) => b.points - a.points);
-        setLeaderboard(calculatedLeaderboard);
+                if (actualMins > allowedMins) {
+                  hasOverBreakHistory = true;
+                }
+              }
+            });
+
+            const isBebal = pts < 100 || (pts <= 100 && hasOverBreakHistory);
+
+            return {
+              id: person.id,
+              name: person.full_name || 'Staff Member',
+              avatar: person.avatar,
+              role: person.station_placement || person.role || 'Staff Crew', 
+              points: pts,
+              isBebal: isBebal,
+              hasOverBreakHistory: hasOverBreakHistory,
+              breakInfo: breakCount > 0 ? `${breakCount}x Break (${totalBreakMinutes} Menit)${hasOverBreakHistory ? ' ⚠️ Over' : ' ✓ Sesuai'}` : 'Belum Ada Break'
+            };
+          }).sort((a, b) => b.points - a.points);
+        };
+
+        setLeaderboard(processLeaderboardData(filteredCrewProfiles));
+        setManagerLeaderboard(processLeaderboardData(filteredManagerProfiles));
       }
     } catch (e) {
       console.error("Error leaderboard:", e);
@@ -1283,6 +1302,7 @@ export default function BreakSystem() {
 
   const currentUserPoints = profile?.total_points !== null && profile?.total_points !== undefined ? Number(profile.total_points) : 100;
   const activeBadge = getCrewBadge(currentUserPoints);
+  const activeLeaderboardData = (isAtasanOrManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
 
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
@@ -1668,10 +1688,30 @@ export default function BreakSystem() {
           <div className="flex-1 px-4 py-4 space-y-4">
             <div className="flex flex-col space-y-0.5">
               <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
-                <FiAward className="text-amber-500 text-lg" /> Status Kedisiplinan Crew
+                <FiAward className="text-amber-500 text-lg" /> Status Kedisiplinan
               </h2>
-              <p className="text-[10px] text-slate-400 font-medium">Rekapitulasi: Masuk/Pulang, Istirahat, & Waterbreak.</p>
+              <p className="text-[10px] text-slate-400 font-medium">
+                {isAtasanOrManager ? 'Pilih kategori daftar poin yang ingin ditampilkan.' : 'Rekapitulasi poin kedisiplinan crew.'}
+              </p>
             </div>
+
+            {/* TAB FILTER KATEGORI CREW VS MANAGER (HANYA MUNCUL JIKA MANAGER/OWNER) */}
+            {isAtasanOrManager && (
+              <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
+                <button
+                  onClick={() => setLeaderboardCategory('crew')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${leaderboardCategory === 'crew' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Poin Crew
+                </button>
+                <button
+                  onClick={() => setLeaderboardCategory('manager')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${leaderboardCategory === 'manager' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Poin Manager 🔒
+                </button>
+              </div>
+            )}
 
             {isFetchingLeaderboard ? (
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks poin...</div>
@@ -1679,23 +1719,25 @@ export default function BreakSystem() {
               <div className="space-y-4">
                 {/* TOP TIER */}
                 <div className="space-y-2">
-                  <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1">🌟 PALING RAJIN (TOP TIER)</p>
+                  <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1">
+                    🌟 PALING RAJIN ({leaderboardCategory === 'manager' && isAtasanOrManager ? 'MANAGER' : 'CREW'})
+                  </p>
                   <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                    {leaderboard.filter(c => !c.isBebal).length === 0 ? (
+                    {activeLeaderboardData.filter(c => !c.isBebal).length === 0 ? (
                       <div className="p-4 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
                     ) : (
-                      leaderboard.filter(c => !c.isBebal).map((crew, index) => (
-                        <div className="p-3.5 flex items-center justify-between w-full" key={crew.id}>
+                      activeLeaderboardData.filter(c => !c.isBebal).map((person, index) => (
+                        <div className="p-3.5 flex items-center justify-between w-full" key={person.id}>
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
-                            <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
+                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
                             <div>
-                              <span className="text-xs font-bold text-slate-900 block">{crew.name}</span>
-                              <span className="text-[9px] text-indigo-600 font-black uppercase tracking-wider block">{crew.role}</span>
-                              <span className="text-[9px] text-slate-500 font-medium block mt-0.5 bg-slate-50 px-1.5 py-0.2 rounded border border-slate-100">{crew.breakInfo}</span>
+                              <span className="text-xs font-bold text-slate-900 block">{person.name}</span>
+                              <span className="text-[9px] text-indigo-600 font-black uppercase tracking-wider block">{person.role}</span>
+                              <span className="text-[9px] text-slate-500 font-medium block mt-0.5 bg-slate-50 px-1.5 py-0.2 rounded border border-slate-100">{person.breakInfo}</span>
                             </div>
                           </div>
-                          <span className="bg-emerald-50 text-emerald-700 text-xs font-black px-2.5 py-1 rounded-xl border border-emerald-200/60">{crew.points} Pts</span>
+                          <span className="bg-emerald-50 text-emerald-700 text-xs font-black px-2.5 py-1 rounded-xl border border-emerald-200/60">{person.points} Pts</span>
                         </div>
                       ))
                     )}
@@ -1704,23 +1746,25 @@ export default function BreakSystem() {
 
                 {/* BEBAL TIER */}
                 <div className="space-y-2">
-                  <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">⚠️ PERLU EVALUASI (BEBAL TIER)</p>
+                  <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">
+                    ⚠️ PERLU EVALUASI ({leaderboardCategory === 'manager' && isAtasanOrManager ? 'MANAGER' : 'CREW'})
+                  </p>
                   <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                    {leaderboard.filter(c => c.isBebal).length === 0 ? (
-                      <div className="p-4 text-center text-xs font-bold text-slate-400">0 Crew dalam zona bahaya kedisiplinan.</div>
+                    {activeLeaderboardData.filter(c => c.isBebal).length === 0 ? (
+                      <div className="p-4 text-center text-xs font-bold text-slate-400">0 User dalam zona bahaya kedisiplinan.</div>
                     ) : (
-                      leaderboard.filter(c => c.isBebal).map((crew, index) => (
-                        <div key={crew.id} className="p-3.5 flex items-center justify-between bg-rose-50/20">
+                      activeLeaderboardData.filter(c => c.isBebal).map((person, index) => (
+                        <div key={person.id} className="p-3.5 flex items-center justify-between bg-rose-50/20">
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-rose-500 w-4">{index + 1}.</span>
-                            <img src={crew.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
+                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
                             <div>
-                              <span className="text-xs font-bold text-rose-950 block">{crew.name}</span>
-                              <span className="text-[9px] text-rose-600 font-black uppercase tracking-wider block">{crew.role}</span>
-                              <span className="text-[9px] text-rose-900 font-medium block mt-0.5 bg-rose-100/40 px-1.5 py-0.2 rounded border border-rose-200">{crew.breakInfo}</span>
+                              <span className="text-xs font-bold text-rose-950 block">{person.name}</span>
+                              <span className="text-[9px] text-rose-600 font-black uppercase tracking-wider block">{person.role}</span>
+                              <span className="text-[9px] text-rose-900 font-medium block mt-0.5 bg-rose-100/40 px-1.5 py-0.2 rounded border border-rose-200">{person.breakInfo}</span>
                             </div>
                           </div>
-                          <span className="bg-rose-100 text-rose-700 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200 flex items-center gap-1"><FiFrown /> {crew.points} Pts</span>
+                          <span className="bg-rose-100 text-rose-700 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200 flex items-center gap-1"><FiFrown /> {person.points} Pts</span>
                         </div>
                       ))
                     )}
