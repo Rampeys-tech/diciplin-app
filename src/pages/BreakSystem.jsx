@@ -53,8 +53,15 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
-// Daftar Pilihan Jam Shift Bulat (24 Jam)
+// Daftar Pilihan Jam Shift Bulat (24 Jam Lengkap untuk Resto 24 Jam)
 const SHIFT_HOURS_OPTIONS = [
+  { label: '00:00 WITA (Midnight)', hour: 0 },
+  { label: '01:00 WITA', hour: 1 },
+  { label: '02:00 WITA', hour: 2 },
+  { label: '03:00 WITA', hour: 3 },
+  { label: '04:00 WITA', hour: 4 },
+  { label: '05:00 WITA', hour: 5 },
+  { label: '06:00 WITA', hour: 6 },
   { label: '07:00 WITA', hour: 7 },
   { label: '08:00 WITA', hour: 8 },
   { label: '09:00 WITA', hour: 9 },
@@ -67,8 +74,11 @@ const SHIFT_HOURS_OPTIONS = [
   { label: '16:00 WITA', hour: 16 },
   { label: '17:00 WITA', hour: 17 },
   { label: '18:00 WITA', hour: 18 },
+  { label: '19:00 WITA', hour: 19 },
+  { label: '20:00 WITA', hour: 20 },
   { label: '21:00 WITA', hour: 21 },
-  { label: '22:00 WITA (Shift Malam)', hour: 22 }
+  { label: '22:00 WITA (Shift Malam)', hour: 22 },
+  { label: '23:00 WITA', hour: 23 }
 ];
 
 export default function BreakSystem() {
@@ -283,7 +293,7 @@ export default function BreakSystem() {
         .maybeSingle();
 
       if (targetProfile && pointDeduction > 0) {
-        const existingPts = targetProfile.total_points !== null ? Number(targetProfile.total_points) : 100;
+        const existingPts = targetProfile.total_points !== null && targetProfile.total_points !== undefined ? Number(targetProfile.total_points) : 100;
         const newPts = Math.max(0, existingPts - pointDeduction);
 
         await supabase
@@ -345,7 +355,7 @@ export default function BreakSystem() {
         currentHourWita = parseInt(checkInHourStr);
       } catch (e) {}
 
-      const isNightShift = (currentHourWita === 22);
+      const isNightShift = (currentHourWita >= 22 || currentHourWita <= 4);
       const targetHours = isNightShift ? 8 : 9;
       setRequiredWorkHours(targetHours);
 
@@ -426,7 +436,7 @@ export default function BreakSystem() {
           const activeBreaks = logsData.filter(l => l.break_start_time && !l.break_end_time).map((log, index) => {
             const start = new Date(log.break_start_time);
             const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-            const allowedSec = (checkInHour === 22) ? 1800 : 3600; 
+            const allowedSec = (checkInHour >= 22 || checkInHour <= 4) ? 1800 : 3600; 
             const elapsedSec = Math.floor((Date.now() - start.getTime()) / 1000);
             const isOver = elapsedSec > allowedSec;
 
@@ -530,7 +540,7 @@ export default function BreakSystem() {
               totalBreakMinutes += actualMins;
 
               const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-              const allowedMins = (checkInHour === 22) ? 30 : 60;
+              const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
 
               if (actualMins > allowedMins) {
                 hasOverBreakHistory = true;
@@ -625,7 +635,7 @@ export default function BreakSystem() {
             const end = new Date(log.break_end_time);
             const elapsedMins = Math.floor((end.getTime() - start.getTime()) / 60000);
             const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-            const allowedMins = (checkInHour === 22) ? 30 : 60;
+            const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
             
             durationString = `${elapsedMins} Menit`;
             if (elapsedMins > allowedMins) {
@@ -792,19 +802,35 @@ export default function BreakSystem() {
         }
       }
 
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-
-      const { data: logs } = await supabase
+      const { data: activeLogs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status') 
         .eq('user_id', user.id)
-        .gte('created_at', todayStart.toISOString())
+        .is('actual_out', null)
         .order('created_at', { ascending: false })
         .limit(1);
 
-      if (logs && logs.length > 0) {
-        const currentLog = logs[0];
+      let currentLog = null;
+      if (activeLogs && activeLogs.length > 0) {
+        currentLog = activeLogs[0];
+      } else {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const { data: logs } = await supabase
+          .from('attendance_logs')
+          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status') 
+          .eq('user_id', user.id)
+          .gte('created_at', todayStart.toISOString())
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (logs && logs.length > 0) {
+          currentLog = logs[0];
+        }
+      }
+
+      if (currentLog) {
         setActiveLogId(currentLog.id);
         setHasCheckedIn(!!currentLog.actual_in);
         setHasCheckedOut(!!currentLog.actual_out);
@@ -828,7 +854,7 @@ export default function BreakSystem() {
             checkInHour = currentLog.actual_in ? new Date(currentLog.actual_in).getHours() : 0;
           }
 
-          const allowedBreakSec = (checkInHour === 22) ? 1800 : 3600; 
+          const allowedBreakSec = (checkInHour >= 22 || checkInHour <= 4) ? 1800 : 3600; 
           const startTimeMs = currentLog.break_start_time ? new Date(currentLog.break_start_time).getTime() : Date.now();
           const elapsed = Math.floor((Date.now() - startTimeMs) / 1000);
           
@@ -874,7 +900,6 @@ export default function BreakSystem() {
     }
   };
 
-  // BUKA MODAL PILIHAN SHIFT DAHULU SEBELUM KAMERA UNTUK ABSEN MASUK
   const triggerCheckInProcess = () => {
     setShowShiftPicker(true);
   };
@@ -1048,11 +1073,9 @@ export default function BreakSystem() {
         publicUrl = publicUrlData?.publicUrl || `https://nbfuhpfoqkwwdkpnlgwz.supabase.co/storage/v1/object/public/attendance-proofs/${filePath}`;
       }
 
-      // ================= 1. ABSEN MASUK (IN) BERBASIS SHIFT BULAT PILIHAN KRU =================
       if (cameraMode === 'IN') {
         const fallbackCompanyId = profile?.company_id || user?.user_metadata?.company_id || null;
 
-        // KALKULASI KETERLAMBATAN MASUK BERDASARKAN SHIFT PILIHAN KRU
         const scheduledTime = new Date();
         scheduledTime.setHours(selectedShiftHour, 0, 0, 0);
 
@@ -1063,7 +1086,7 @@ export default function BreakSystem() {
         if (now > scheduledTime) {
           lateMinutes = Math.floor((now.getTime() - scheduledTime.getTime()) / 60000);
           statusInText = `Shift ${selectedShiftHour.toString().padStart(2, '0')}:00 (Terlambat ${lateMinutes}m)`;
-          financialLoss = lateMinutes * 1000; // Rp 1.000 / menit keterlambatan
+          financialLoss = lateMinutes * 1000; 
         }
 
         const { error: insertError } = await supabase
@@ -1080,7 +1103,6 @@ export default function BreakSystem() {
 
         if (insertError) throw insertError;
 
-        // PEMOTONGAN POIN OTOMATIS JIKA TERLAMBAT (1 MENIT = -1 POIN)
         if (lateMinutes > 0) {
           const isOwnerOrManager = (profile?.full_name || '').toLowerCase().includes('owner') ||
                                    (profile?.station_placement || '').toLowerCase().includes('owner') ||
@@ -1094,8 +1116,8 @@ export default function BreakSystem() {
               .eq('id', user.id)
               .maybeSingle();
 
-            const existingPts = currentProf?.total_points !== null ? Number(currentProf.total_points) : 100;
-            const updatedPts = Math.max(0, existingPts - lateMinutes);
+            const existingPts = currentProf?.total_points ?? 100;
+            const updatedPts = Math.max(0, Number(existingPts) - lateMinutes);
 
             await supabase
               .from('user_profiles')
@@ -1112,7 +1134,7 @@ export default function BreakSystem() {
           .from('attendance_logs')
           .select('id, actual_in')
           .eq('user_id', user.id)
-          .gte('created_at', todayStart.toISOString())
+          .is('actual_out', null)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -1132,7 +1154,8 @@ export default function BreakSystem() {
           let currentHourStr = '0';
           const refTime = latestActiveLog?.actual_in ? new Date(latestActiveLog.actual_in) : (checkInTime || new Date());
           try { currentHourStr = refTime.getHours().toString(); } catch(e) {}
-          const breakDurationSec = (parseInt(currentHourStr) === 22) ? 1800 : 3600;
+          const checkInHr = parseInt(currentHourStr);
+          const breakDurationSec = (checkInHr >= 22 || checkInHr <= 4) ? 1800 : 3600;
 
           localStorage.setItem('resto_break_start_time', Date.now().toString());
           localStorage.setItem('resto_break_max_duration', breakDurationSec.toString());
@@ -1146,14 +1169,11 @@ export default function BreakSystem() {
           setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
         }
       } else if (cameraMode === 'END_BREAK') {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
           .select('id, break_start_time, actual_in')
           .eq('user_id', user.id)
-          .gte('created_at', todayStart.toISOString())
+          .is('actual_out', null)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -1166,7 +1186,7 @@ export default function BreakSystem() {
           const elapsedMins = Math.floor((endTimeMs - startTimeMs) / 60000);
           
           let checkInHour = latestActiveLog.actual_in ? new Date(latestActiveLog.actual_in).getHours() : 0;
-          const allowedMins = (checkInHour === 22) ? 30 : 60;
+          const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
           const isOver = elapsedMins > allowedMins;
 
           let penaltyPoints = 0;
@@ -1211,8 +1231,8 @@ export default function BreakSystem() {
               .eq('id', user.id)
               .maybeSingle();
 
-            const existingPoints = currentProf?.total_points !== null && currentProf?.total_points !== undefined ? Number(currentProf.total_points) : 100;
-            const updatedPoints = Math.max(0, existingPoints + pointChange);
+            const existingPoints = currentProf?.total_points ?? 100;
+            const updatedPoints = Math.max(0, Number(existingPoints) + pointChange);
 
             await supabase
               .from('user_profiles')
@@ -1226,14 +1246,11 @@ export default function BreakSystem() {
           setBreakStartTime(null);
         }
       } else if (cameraMode === 'OUT') {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
           .select('id')
           .eq('user_id', user.id)
-          .gte('created_at', todayStart.toISOString())
+          .is('actual_out', null)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -1508,7 +1525,7 @@ export default function BreakSystem() {
                   <div className="flex justify-between items-center text-[10px] text-slate-500 font-black uppercase tracking-wider">
                     <span className="flex items-center gap-1.5">
                       <FiCoffee className="text-indigo-600 text-base" /> 
-                      Alokasi: {checkInTime && checkInTime.getHours() === 22 ? '30 Menit' : '60 Menit'}
+                      Alokasi: {checkInTime && (checkInTime.getHours() >= 22 || checkInTime.getHours() <= 4) ? '30 Menit' : '60 Menit'}
                     </span>
                     <span className={`text-[8px] px-2.5 py-0.5 rounded-full font-black border uppercase tracking-wider ${hasCheckedIn && !hasCheckedOut ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-slate-100 text-slate-400'}`}>{hasCheckedIn && !hasCheckedOut ? 'Ready' : 'Locked'}</span>
                   </div>
