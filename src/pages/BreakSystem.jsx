@@ -136,15 +136,18 @@ export default function BreakSystem() {
   const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); // 'crew' | 'manager'
   const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
 
+  // ================= STATE LOG FOTO (CREW & MANAGER) =================
+  const [allCrewLogs, setAllCrewLogs] = useState([]);
+  const [managerCrewLogs, setManagerCrewLogs] = useState([]);
+  const [logCategory, setLogCategory] = useState('crew'); // 'crew' | 'manager'
+  const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
+
   // ================= STATE GEOLOKASI =================
   const [humanDetectionStatus, setHumanDetectionStatus] = useState('LOADING_ENGINE'); 
   const [currentSystemTime, setCurrentSystemTime] = useState(new Date());
   const [userLocation, setUserLocation] = useState({ lat: null, lng: null });
   const [isVerifyingLocation, setIsVerifyingLocation] = useState(false);
 
-  const [allCrewLogs, setAllCrewLogs] = useState([]);
-  const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
-  
   const [allProfiles, setAllProfiles] = useState([]);
   const [selectedCrewId, setSelectedCrewId] = useState('');
   const [selectedIzinType, setSelectedIzinType] = useState('toilet'); 
@@ -345,7 +348,6 @@ export default function BreakSystem() {
     }
   };
 
-  // KALKULASI KELAYAKAN PULANG (CHECKOUT) UNTUK SHIFT MIDNIGHT (8 JAM KERJA)
   useEffect(() => {
     if (!checkInTime || hasCheckedOut) {
       setIsEligibleForCheckOut(false);
@@ -353,15 +355,16 @@ export default function BreakSystem() {
     }
 
     const checkEligibility = () => {
-      let currentHourWita = new Date(checkInTime).getHours();
+      let checkInHour = 0;
       try {
         const checkInHourStr = checkInTime.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' });
-        currentHourWita = parseInt(checkInHourStr);
-      } catch (e) {}
+        checkInHour = parseInt(checkInHourStr);
+      } catch (e) {
+        checkInHour = new Date(checkInTime).getHours();
+      }
 
-      // Shift Malam / Midnight (Jam 22:00 - 04:00) durasi kerjanya 8 Jam, shift biasa 9 Jam
-      const isNightShift = (currentHourWita >= 22 || currentHourWita <= 4);
-      const targetHours = isNightShift ? 8 : 9;
+      const isShift22 = (selectedShiftHour === 22 || checkInHour === 22);
+      const targetHours = isShift22 ? 8 : 9;
       setRequiredWorkHours(targetHours);
 
       const now = new Date();
@@ -372,8 +375,8 @@ export default function BreakSystem() {
 
     checkEligibility();
     const eligibilityTimer = setInterval(checkEligibility, 5000); 
-    return () => clearInterval(eligibilityTimer);
-  }, [checkInTime, hasCheckedOut]);
+    return () => clearInterval(checkEligibility);
+  }, [checkInTime, hasCheckedOut, selectedShiftHour]);
 
   useEffect(() => {
     let timer = null;
@@ -441,7 +444,7 @@ export default function BreakSystem() {
           const activeBreaks = logsData.filter(l => l.break_start_time && !l.break_end_time).map((log, index) => {
             const start = new Date(log.break_start_time);
             const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-            const allowedSec = (checkInHour >= 22 || checkInHour <= 4) ? 1800 : 3600; 
+            const allowedSec = (checkInHour === 22) ? 1800 : 3600; 
             const elapsedSec = Math.floor((Date.now() - start.getTime()) / 1000);
             const isOver = elapsedSec > allowedSec;
 
@@ -559,7 +562,7 @@ export default function BreakSystem() {
                 totalBreakMinutes += actualMins;
 
                 const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-                const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
+                const allowedMins = (checkInHour === 22) ? 30 : 60;
 
                 if (actualMins > allowedMins) {
                   hasOverBreakHistory = true;
@@ -614,6 +617,7 @@ export default function BreakSystem() {
     }
   };
 
+  // PERBAIKAN: MEMISAHKAN ARSIP LOG FOTO BREAK ANTARA CREW VS MANAGER
   const fetchAllCrewLogs = async () => {
     setIsFetchingAllLogs(true);
     try {
@@ -625,11 +629,24 @@ export default function BreakSystem() {
 
       const { data: profiles, error: pError } = await supabase
         .from('user_profiles')
-        .select('id, full_name');
+        .select('id, full_name, station_placement, role');
 
       if (!lError && !pError && logs && profiles) {
         const profileMap = {};
-        profiles.forEach(p => { profileMap[p.id] = p.full_name; });
+        const isManagerMap = {};
+        
+        profiles.forEach(p => { 
+          profileMap[p.id] = p.full_name;
+          const nameLower = (p.full_name || '').toLowerCase();
+          const placementLower = (p.station_placement || '').toLowerCase();
+          const roleLower = (p.role || '').toLowerCase();
+          
+          isManagerMap[p.id] = nameLower.includes('owner') || 
+                               placementLower.includes('owner') || 
+                               placementLower.includes('manager') || 
+                               placementLower.includes('atasan') ||
+                               roleLower === 'manager';
+        });
 
         const cleanImageUrl = (rawUrl) => {
           if (!rawUrl) return null;
@@ -646,7 +663,10 @@ export default function BreakSystem() {
           return clean.trim();
         };
 
-        const mappedLogs = logs.map(log => {
+        const crewLogsArray = [];
+        const managerLogsArray = [];
+
+        logs.forEach(log => {
           let durationString = 'Sedang Istirahat';
           let isOver = false;
 
@@ -655,7 +675,7 @@ export default function BreakSystem() {
             const end = new Date(log.break_end_time);
             const elapsedMins = Math.floor((end.getTime() - start.getTime()) / 60000);
             const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-            const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
+            const allowedMins = (checkInHour === 22) ? 30 : 60;
             
             durationString = `${elapsedMins} Menit`;
             if (elapsedMins > allowedMins) {
@@ -664,7 +684,7 @@ export default function BreakSystem() {
             }
           }
 
-          return {
+          const processedLog = {
             ...log,
             image_url: cleanImageUrl(log.image_url),
             after_break_image_url: cleanImageUrl(log.after_break_image_url),
@@ -672,8 +692,16 @@ export default function BreakSystem() {
             formattedDuration: durationString,
             isOverBreak: isOver
           };
+
+          if (isManagerMap[log.user_id]) {
+            managerLogsArray.push(processedLog);
+          } else {
+            crewLogsArray.push(processedLog);
+          }
         });
-        setAllCrewLogs(mappedLogs);
+
+        setAllCrewLogs(crewLogsArray);
+        setManagerCrewLogs(managerLogsArray);
       }
     } catch (e) {
       console.error(e);
@@ -824,7 +852,7 @@ export default function BreakSystem() {
 
       const { data: activeLogs } = await supabase
         .from('attendance_logs')
-        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status') 
+        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
         .eq('user_id', user.id)
         .is('actual_out', null)
         .order('created_at', { ascending: false })
@@ -839,7 +867,7 @@ export default function BreakSystem() {
 
         const { data: logs } = await supabase
           .from('attendance_logs')
-          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status') 
+          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
           .eq('user_id', user.id)
           .gte('created_at', todayStart.toISOString())
           .order('created_at', { ascending: false })
@@ -854,7 +882,16 @@ export default function BreakSystem() {
         setActiveLogId(currentLog.id);
         setHasCheckedIn(!!currentLog.actual_in);
         setHasCheckedOut(!!currentLog.actual_out);
-        setCheckInTime(currentLog.actual_in ? new Date(currentLog.actual_in) : null);
+        
+        const inTime = currentLog.actual_in ? new Date(currentLog.actual_in) : null;
+        setCheckInTime(inTime);
+
+        if (currentLog.status_in && currentLog.status_in.includes('Shift ')) {
+          try {
+            const parsedHour = parseInt(currentLog.status_in.split('Shift ')[1].split(':')[0]);
+            if (!isNaN(parsedHour)) setSelectedShiftHour(parsedHour);
+          } catch(e) {}
+        }
         
         const breaking = (!!currentLog.break_start_time && !currentLog.break_end_time) || currentLog.discipline_status === 'Sedang Istirahat';
         
@@ -874,7 +911,7 @@ export default function BreakSystem() {
             checkInHour = currentLog.actual_in ? new Date(currentLog.actual_in).getHours() : 0;
           }
 
-          const allowedBreakSec = (checkInHour >= 22 || checkInHour <= 4) ? 1800 : 3600; 
+          const allowedBreakSec = (checkInHour === 22) ? 1800 : 3600; 
           const startTimeMs = currentLog.break_start_time ? new Date(currentLog.break_start_time).getTime() : Date.now();
           const elapsed = Math.floor((Date.now() - startTimeMs) / 1000);
           
@@ -1175,7 +1212,7 @@ export default function BreakSystem() {
           const refTime = latestActiveLog?.actual_in ? new Date(latestActiveLog.actual_in) : (checkInTime || new Date());
           try { currentHourStr = refTime.getHours().toString(); } catch(e) {}
           const checkInHr = parseInt(currentHourStr);
-          const breakDurationSec = (checkInHr >= 22 || checkInHr <= 4) ? 1800 : 3600;
+          const breakDurationSec = (selectedShiftHour === 22 || checkInHr === 22) ? 1800 : 3600;
 
           localStorage.setItem('resto_break_start_time', Date.now().toString());
           localStorage.setItem('resto_break_max_duration', breakDurationSec.toString());
@@ -1206,7 +1243,7 @@ export default function BreakSystem() {
           const elapsedMins = Math.floor((endTimeMs - startTimeMs) / 60000);
           
           let checkInHour = latestActiveLog.actual_in ? new Date(latestActiveLog.actual_in).getHours() : 0;
-          const allowedMins = (checkInHour >= 22 || checkInHour <= 4) ? 30 : 60;
+          const allowedMins = (selectedShiftHour === 22 || checkInHour === 22) ? 30 : 60;
           const isOver = elapsedMins > allowedMins;
 
           let penaltyPoints = 0;
@@ -1304,6 +1341,7 @@ export default function BreakSystem() {
   const currentUserPoints = profile?.total_points !== null && profile?.total_points !== undefined ? Number(profile.total_points) : 100;
   const activeBadge = getCrewBadge(currentUserPoints);
   const activeLeaderboardData = (isAtasanOrManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
+  const activeLogData = (isAtasanOrManager && logCategory === 'manager') ? managerCrewLogs : allCrewLogs;
 
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
@@ -1546,7 +1584,7 @@ export default function BreakSystem() {
                   <div className="flex justify-between items-center text-[10px] text-slate-500 font-black uppercase tracking-wider">
                     <span className="flex items-center gap-1.5">
                       <FiCoffee className="text-indigo-600 text-base" /> 
-                      Alokasi: {checkInTime && (checkInTime.getHours() >= 22 || checkInTime.getHours() <= 4) ? '30 Menit' : '60 Menit'}
+                      Alokasi: {selectedShiftHour === 22 ? '30 Menit' : '60 Menit'}
                     </span>
                     <span className={`text-[8px] px-2.5 py-0.5 rounded-full font-black border uppercase tracking-wider ${hasCheckedIn && !hasCheckedOut ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-slate-100 text-slate-400'}`}>{hasCheckedIn && !hasCheckedOut ? 'Ready' : 'Locked'}</span>
                   </div>
@@ -1776,23 +1814,43 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO ISTIRAHAT CREW ================= */}
+        {/* ================= TAB 4: LOG FOTO ISTIRAHAT CREW & MANAGER ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3">
             <div className="flex flex-col space-y-0.5">
               <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
-                <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat Crew
+                <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
               </h2>
               <p className="text-[10px] text-slate-400 font-medium">Data arsip foto verifikasi kamera cloud.</p>
             </div>
 
+            {/* TAB FILTER LOG CREW VS MANAGER (HANYA MUNCUL JIKA MANAGER/OWNER) */}
+            {isAtasanOrManager && (
+              <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
+                <button
+                  onClick={() => setLogCategory('crew')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${logCategory === 'crew' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Log Crew
+                </button>
+                <button
+                  onClick={() => setLogCategory('manager')}
+                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${logCategory === 'manager' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  Log Manager 🔒
+                </button>
+              </div>
+            )}
+
             {isFetchingAllLogs ? (
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
-            ) : allCrewLogs.length === 0 ? (
-              <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">Belum ada aktivitas log break kru hari ini.</div>
+            ) : activeLogData.length === 0 ? (
+              <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
+                Belum ada aktivitas log break {logCategory === 'manager' && isAtasanOrManager ? 'manager' : 'crew'} hari ini.
+              </div>
             ) : (
               <div className="space-y-3">
-                {allCrewLogs.map((log) => (
+                {activeLogData.map((log) => (
                   <div key={log.id} className="bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs space-y-2.5">
                     <div className="flex justify-between items-center border-b border-slate-100 pb-2">
                       <div>
