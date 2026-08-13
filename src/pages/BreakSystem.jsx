@@ -345,6 +345,7 @@ export default function BreakSystem() {
     }
   };
 
+  // KALKULASI KELAYAKAN PULANG (CHECKOUT) UNTUK SHIFT MIDNIGHT (8 JAM KERJA)
   useEffect(() => {
     if (!checkInTime || hasCheckedOut) {
       setIsEligibleForCheckOut(false);
@@ -358,6 +359,7 @@ export default function BreakSystem() {
         currentHourWita = parseInt(checkInHourStr);
       } catch (e) {}
 
+      // Shift Malam / Midnight (Jam 22:00 - 04:00) durasi kerjanya 8 Jam, shift biasa 9 Jam
       const isNightShift = (currentHourWita >= 22 || currentHourWita <= 4);
       const targetHours = isNightShift ? 8 : 9;
       setRequiredWorkHours(targetHours);
@@ -511,7 +513,6 @@ export default function BreakSystem() {
         .select('user_id, break_start_time, break_end_time, actual_in, discipline_status, penalty_points, status_in');
 
       if (profiles) {
-        // PEMISAHAN PROFILE CREW VS MANAGER
         const filteredCrewProfiles = profiles.filter(p => {
           const nameLower = (p.full_name || '').toLowerCase();
           const placementLower = (p.station_placement || '').toLowerCase();
