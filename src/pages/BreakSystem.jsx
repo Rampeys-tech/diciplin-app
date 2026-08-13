@@ -1481,9 +1481,9 @@ export default function BreakSystem() {
                     <div className="flex flex-col gap-1">
                       <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
                       <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
-                        <option value="toilet" className="text-slate-900">Toilet (5M)</option>
+                        <option value="toilet" className="text-slate-900">Toilet (10M)</option>
                         <option value="shalat" className="text-slate-900">Shalat (10M)</option>
-                        <option value="makan" className="text-slate-900">Makan (5M)</option>
+                        <option value="makan" className="text-slate-900">Makan (10M)</option>
                         <option value="custom" className="text-slate-900">Custom Menit</option>
                       </select>
                     </div>
