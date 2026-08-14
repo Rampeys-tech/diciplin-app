@@ -85,7 +85,7 @@ const SHIFT_HOURS_OPTIONS = [
   { label: '23:00 WITA', hour: 23 }
 ];
 
-// DAFTAR STATION KHUSUS CREW & STAFF
+// DAFTAR STATION KHUSUS CREW & STAFF (Sudah Diperbarui: Quality Control & Stocker)
 const CREW_STATION_OPTIONS = [
   'Station Noodle',
   'Station Dimsum',
@@ -95,8 +95,8 @@ const CREW_STATION_OPTIONS = [
   'Station Assembler',
   'Station Presenter',
   'Station Server',
-  'Staff QC',
-  'Staff Stocker',
+  'Quality Control',
+  'Stocker',
   'Cel',
   'Dishwasher'
 ];
@@ -206,7 +206,6 @@ export default function BreakSystem() {
         utterance.rate = 0.92; 
         utterance.pitch = 1.05;
 
-        // Pilih voice natural bahasa Indonesia yang tersedia di browser/perangkat
         const voices = window.speechSynthesis.getVoices();
         const idVoice = voices.find(v => (v.lang === 'id-ID' || v.lang === 'id_ID') && !v.name.includes('eSpeak')) ||
                         voices.find(v => v.lang.includes('id') || v.lang.includes('ID'));
@@ -265,7 +264,7 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= PERBAIKAN 1: KALKULASI SINKRON TOTAL IC, STANDBY, & BREAK =================
+  // KALKULASI SINKRON TOTAL IC, STANDBY, & BREAK
   const fetchActiveShiftStats = async () => {
     try {
       const { data: activeLogs, error: lError } = await supabase
@@ -291,7 +290,6 @@ export default function BreakSystem() {
         activeLogs.forEach(log => {
           const p = profileMap[log.user_id];
           if (p) {
-            // SINKRONISASI MUTLAK DENGAN LOGIKA BREAK LIVE MONITORING
             const isCurrentlyBreaking = (Boolean(log.break_start_time) && !Boolean(log.break_end_time)) || log.discipline_status === 'Sedang Istirahat';
 
             const nameLower = (p.full_name || '').toLowerCase();
@@ -310,7 +308,6 @@ export default function BreakSystem() {
               staffCount += 1;
             }
 
-            // Personil hanya dihitung standby di station jika TIDAK sedang break
             if (!isCurrentlyBreaking) {
               totalActiveNow += 1;
               let stationName = isMgr ? 'Manager Duty' : (p.station_placement || 'Staff Duty');
@@ -512,7 +509,7 @@ export default function BreakSystem() {
     return () => clearInterval(eligibilityTimer);
   }, [checkInTime, hasCheckedOut, selectedShiftHour]);
 
-  // ================= PERBAIKAN 2 & 3: ALARM SETIAP 5 MENIT SEBELUM BREAK HABIS =================
+  // ALARM SETIAP 5 MENIT SEBELUM BREAK HABIS & NOTIFIKASI
   useEffect(() => {
     let timer = null;
     if (isOnBreak) {
@@ -528,19 +525,16 @@ export default function BreakSystem() {
           setTimeLeft(remaining);
           setMaxBreakDuration(maxDurationSec);
 
-          // PENGINGAT 5 MENIT SEBELUM BREAK HABIS DENGAN SUARA NATURAL
           if (remaining <= 300 && remaining > 0 && !hasPlayed5MinAlarm) {
             setHasPlayedAlarm(true);
             speakAiVoice("Halo rekan crew, waktu istirahat Anda tersisa lima menit lagi. Silakan bersiap-siap kembali ke station kerja ya.");
           }
 
-          // WAKTU BREAK TEPAT HABIS
           if (remaining === 0 && !hasPlayed0MinAlarm) {
             setHasPlayed0MinAlarm(true);
             speakAiVoice("Waktu istirahat Anda telah selesai. Mohon segera kembali ke station dan lakukan presensi selesai break.");
           }
 
-          // OVER BREAK
           if (remaining < 0 && !hasNotifiedOverbreak && activeLogId) {
             setHasNotifiedOverbreak(true);
             speakAiVoice("Perhatian, waktu istirahat Anda telah melewati batas atau over break. Poin kedisiplinan mulai terpotong otomatis.");
@@ -768,6 +762,7 @@ export default function BreakSystem() {
     }
   };
 
+  // PERBAIKAN: FORMAT WAKTU MULAI & WAKTU SELESAI BREAK SECARA PRESISI
   const fetchAllCrewLogs = async () => {
     setIsFetchingAllLogs(true);
     try {
@@ -819,6 +814,16 @@ export default function BreakSystem() {
         logs.forEach(log => {
           let durationString = 'Sedang Istirahat';
           let isOver = false;
+          let startTimeString = '--:-- WITA';
+          let endTimeString = 'In Progress';
+
+          if (log.break_start_time) {
+            startTimeString = new Date(log.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA';
+          }
+
+          if (log.break_end_time) {
+            endTimeString = new Date(log.break_end_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA';
+          }
 
           if (log.break_start_time && log.break_end_time) {
             const start = new Date(log.break_start_time);
@@ -840,6 +845,8 @@ export default function BreakSystem() {
             after_break_image_url: cleanImageUrl(log.after_break_image_url),
             crewName: profileMap[log.user_id] || 'Crew Member',
             formattedDuration: durationString,
+            formattedStartTime: startTimeString,
+            formattedEndTime: endTimeString,
             isOverBreak: isOver
           };
 
@@ -1291,7 +1298,6 @@ export default function BreakSystem() {
         const scheduledTime = new Date();
         scheduledTime.setHours(selectedShiftHour, 0, 0, 0);
 
-        // OTOMATIS LEVEL MANAGER MENJADI 'Manager'
         const actualStationPlacement = isManager ? 'Manager' : selectedStation;
 
         let statusInText = `Shift ${selectedShiftHour.toString().padStart(2, '0')}:00 (Tepat Waktu) - ${actualStationPlacement}`;
@@ -1304,7 +1310,6 @@ export default function BreakSystem() {
           financialLoss = lateMinutes * 1000; 
         }
 
-        // UPDATE PENEMPATAN STATION DI PROFIL USER
         if (!isManager) {
           await supabase
             .from('user_profiles')
@@ -2055,14 +2060,14 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO ISTIRAHAT ================= */}
+        {/* ================= TAB 4: LOG FOTO ISTIRAHAT (DILENGKAPI WAKTU MULAI & SELESAI) ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3">
             <div className="flex flex-col space-y-0.5">
               <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
                 <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
               </h2>
-              <p className="text-[10px] text-slate-400 font-medium">Data arsip foto verifikasi kamera cloud.</p>
+              <p className="text-[10px] text-slate-400 font-medium">Data arsip foto verifikasi kamera & waktu break.</p>
             </div>
 
             {isManager && (
@@ -2103,16 +2108,29 @@ export default function BreakSystem() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
+                      {/* FOTO MULAI & WAKTU MULAI */}
                       <div className="space-y-1">
-                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
+                          <span className="text-[8px] font-black font-mono text-indigo-600 bg-indigo-50 px-1 py-0.2 rounded border border-indigo-100">
+                            {log.formattedStartTime}
+                          </span>
+                        </div>
                         {log.image_url ? (
                           <img src={log.image_url} className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
                         ) : (
                           <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">No Image</div>
                         )}
                       </div>
+
+                      {/* FOTO SELESAI & WAKTU SELESAI */}
                       <div className="space-y-1">
-                        <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
+                          <span className={`text-[8px] font-black font-mono px-1 py-0.2 rounded border ${log.formattedEndTime === 'In Progress' ? 'text-amber-600 bg-amber-50 border-amber-100' : 'text-emerald-700 bg-emerald-50 border-emerald-100'}`}>
+                            {log.formattedEndTime}
+                          </span>
+                        </div>
                         {log.after_break_image_url ? (
                           <img src={log.after_break_image_url} className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
                         ) : (
