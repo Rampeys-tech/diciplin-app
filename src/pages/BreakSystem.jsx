@@ -182,7 +182,7 @@ export default function BreakSystem() {
   const [isFetchingProfiles, setIsFetchingProfiles] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState('');
   const [selectedIzinType, setSelectedIzinType] = useState('toilet'); 
-  const [customIzinMinutes, setCustomIzinMinutes] = useState('5');
+  const [customIzinMinutes, setCustomIzinMinutes] = useState('10');
   const [isSubmittingIzin, setIsSubmittingIzin] = useState(false);
 
   const [editName, setEditName] = useState('');
@@ -258,6 +258,7 @@ export default function BreakSystem() {
     }
   };
 
+  // KALKULASI DINAMIS JUMLAH PERSONIL PER STATION
   const fetchActiveShiftStats = async () => {
     try {
       const { data: activeLogs, error: lError } = await supabase
@@ -303,7 +304,7 @@ export default function BreakSystem() {
 
             if (!isCurrentlyBreaking) {
               totalActiveNow += 1;
-              let stationName = isMgr ? 'Manager' : (p.station_placement || 'Staff Duty');
+              let stationName = isMgr ? 'Manager Duty' : (p.station_placement || 'Staff Duty');
               
               if (!isMgr && log.status_in && log.status_in.includes(' - ')) {
                 const parts = log.status_in.split(' - ');
@@ -313,7 +314,7 @@ export default function BreakSystem() {
               if (stationName && stationName !== 'Staff Duty') {
                 stationCounts[stationName] = (stationCounts[stationName] || 0) + 1;
               } else if (isMgr) {
-                stationCounts['Manager'] = (stationCounts['Manager'] || 0) + 1;
+                stationCounts['Manager Duty'] = (stationCounts['Manager Duty'] || 0) + 1;
               }
             }
           }
@@ -380,7 +381,7 @@ export default function BreakSystem() {
     setWaterBreaks(prev => prev.map(wb => {
       if (!wb.rawRawStart) return wb;
       const elapsedSec = Math.floor((Date.now() - wb.rawRawStart.getTime()) / 1000);
-      const totalAllowedSec = wb.allowedSec || 300;
+      const totalAllowedSec = wb.allowedSec || 600; // Default 10 menit (600 detik)
       const remainingSec = totalAllowedSec - elapsedSec;
       const isOver = remainingSec <= 0;
 
@@ -611,7 +612,7 @@ export default function BreakSystem() {
         if (wbData && wbData.length > 0) {
           const activeWBs = wbData.map(wb => {
             const start = new Date(wb.current_izin_start);
-            const durationSec = (wb.current_izin_duration || 5) * 60;
+            const durationSec = (wb.current_izin_duration || 10) * 60; // 10 menit
             const elapsedSec = Math.floor((Date.now() - start.getTime()) / 1000);
             return {
               id: wb.id,
@@ -852,7 +853,8 @@ export default function BreakSystem() {
     setIsSubmittingIzin(true);
     try {
       const startIso = new Date().toISOString();
-      const durationValue = selectedIzinType === 'toilet' ? 5 : selectedIzinType === 'shalat' ? 10 : selectedIzinType === 'makan' ? 5 : parseInt(customIzinMinutes);
+      // SEMUA WATER BREAK (TOILET, SHALAT, MAKAN) DEFAULT 10 MENIT
+      const durationValue = selectedIzinType === 'custom' ? parseInt(customIzinMinutes) : 10;
 
       const { error } = await supabase
         .from('user_profiles')
@@ -1312,7 +1314,8 @@ export default function BreakSystem() {
 
         if (insertError) throw insertError;
 
-        if (lateMinutes > 0 && !isManager) {
+        // PEMOTONGAN POIN JUGA BERLAKU UNTUK MANAGER
+        if (lateMinutes > 0) {
           const { data: currentProf } = await supabase
             .from('user_profiles')
             .select('total_points')
@@ -1421,21 +1424,20 @@ export default function BreakSystem() {
 
           if (updateError) throw updateError;
 
-          if (!isManager) {
-            const { data: currentProf } = await supabase
-              .from('user_profiles')
-              .select('total_points')
-              .eq('id', user.id)
-              .maybeSingle();
+          // POIN KEDISIPLINAN JUGA DIHITUNG UNTUK MANAGER
+          const { data: currentProf } = await supabase
+            .from('user_profiles')
+            .select('total_points')
+            .eq('id', user.id)
+            .maybeSingle();
 
-            const existingPoints = currentProf?.total_points ?? 100;
-            const updatedPoints = Math.max(0, Number(existingPoints) + pointChange);
+          const existingPoints = currentProf?.total_points ?? 100;
+          const updatedPoints = Math.max(0, Number(existingPoints) + pointChange);
 
-            await supabase
-              .from('user_profiles')
-              .update({ total_points: updatedPoints })
-              .eq('id', user.id);
-          }
+          await supabase
+            .from('user_profiles')
+            .update({ total_points: updatedPoints })
+            .eq('id', user.id);
 
           localStorage.removeItem('resto_break_start_time');
           localStorage.removeItem('resto_break_max_duration');
@@ -1565,8 +1567,8 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* WIDGET ELEGAN REKAP PERSONIL DI TIAP STATION */}
-            <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3">
+            {/* WIDGET ELEGAN REKAP PERSONIL DI TIAP STATION (RESPONSIF & TEKS TIDAK TERPOTONG) */}
+            <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3.5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <div className="flex items-center gap-2">
                   <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -1576,7 +1578,7 @@ export default function BreakSystem() {
                   <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
                     Total IC: {activeShiftStats.totalScheduledCrew}
                   </span>
-                  <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-200">
                     {activeShiftStats.totalActiveNow} Standby
                   </span>
                 </div>
@@ -1605,7 +1607,7 @@ export default function BreakSystem() {
                 </div>
               </div>
 
-              {/* DAFTAR GRID STATION HANYA JIKA ADA PERSONIL */}
+              {/* DAFTAR GRID STATION BERSIH & RAPI */}
               <div className="space-y-2 pt-1">
                 <div className="flex items-center justify-between">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -1619,13 +1621,17 @@ export default function BreakSystem() {
                     Tidak ada crew yang sedang standby di station (Sedang Break / Selesai Shift).
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-0.5">
+                  <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-0.5">
                     {Object.entries(activeShiftStats.stationCounts).map(([stationName, count]) => (
-                      <div key={stationName} className="bg-slate-50/90 hover:bg-slate-100/80 border border-slate-200/80 rounded-xl px-3 py-2 flex items-center justify-between transition-all">
-                        <span className="text-[11px] font-bold text-slate-800 truncate pr-1.5">{stationName}</span>
-                        <span className="text-[10px] font-black font-mono bg-slate-900 text-white px-2 py-0.5 rounded-lg shadow-2xs">
-                          {count} Orang
+                      <div key={stationName} className="bg-slate-50 hover:bg-indigo-50/40 border border-slate-200/80 rounded-xl p-2.5 flex flex-col justify-between transition-all min-h-[58px]">
+                        <span className="text-[10px] font-extrabold text-slate-700 leading-snug break-words">
+                          {stationName}
                         </span>
+                        <div className="flex justify-end mt-1.5">
+                          <span className="text-[9px] font-black font-mono bg-slate-900 text-white px-2 py-0.5 rounded-md shadow-2xs">
+                            {count} Orang
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1647,7 +1653,7 @@ export default function BreakSystem() {
                   <div className="h-8 w-8 bg-emerald-100 text-emerald-700 rounded-xl flex items-center justify-center text-sm font-black"><FiDroplet/></div>
                   <div>
                     <p className="text-[9px] font-black text-emerald-800 uppercase tracking-wider">IZIN {profile.current_izin_type} AKTIF</p>
-                    <p className="text-xs text-emerald-700 font-bold">Alokasi: {profile.current_izin_duration} Menit</p>
+                    <p className="text-xs text-emerald-700 font-bold">Alokasi: {profile.current_izin_duration || 10} Menit</p>
                   </div>
                 </div>
                 <button
@@ -1702,9 +1708,9 @@ export default function BreakSystem() {
                     <div className="flex flex-col gap-1">
                       <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
                       <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
-                        <option value="toilet" className="text-slate-900">Toilet (5M)</option>
+                        <option value="toilet" className="text-slate-900">Toilet (10M)</option>
                         <option value="shalat" className="text-slate-900">Shalat (10M)</option>
-                        <option value="makan" className="text-slate-900">Makan (5M)</option>
+                        <option value="makan" className="text-slate-900">Makan (10M)</option>
                         <option value="custom" className="text-slate-900">Custom Menit</option>
                       </select>
                     </div>
@@ -1842,7 +1848,7 @@ export default function BreakSystem() {
               )}
             </div>
 
-            {/* MAIN BREAK ACTIVE DILENGKAPI NAMA STATION */}
+            {/* MAIN BREAK ACTIVE */}
             <div className="space-y-2.5">
               <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
                 <FiCoffee className="text-indigo-600 text-sm" /> Main Break Active ({liveBreaks.length})
@@ -1881,7 +1887,7 @@ export default function BreakSystem() {
               )}
             </div>
 
-            {/* GHOSTING ALERT DILENGKAPI NAMA STATION */}
+            {/* GHOSTING ALERT */}
             <div className="space-y-2.5">
               <h3 className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1.5">
                 <FiAlertTriangle className="text-rose-500 text-sm" /> Ghosting Alert ({ghostingCrew.length})
@@ -1908,7 +1914,7 @@ export default function BreakSystem() {
               )}
             </div>
 
-            {/* SHORT WATERBREAK DILENGKAPI NAMA STATION */}
+            {/* SHORT WATERBREAK */}
             <div className="space-y-2.5">
               <h3 className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1.5">
                 <FiDroplet className="text-emerald-500 text-sm" /> Short Waterbreak Active ({waterBreaks.length})
@@ -2204,7 +2210,7 @@ export default function BreakSystem() {
                 </button>
               </div>
 
-              {/* 1. PEMILIHAN STATION HANYA UNTUK CREW & STAFF (MANAGER OTOMATIS) */}
+              {/* 1. PEMILIHAN STATION KHUSUS CREW */}
               {!isManager ? (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
