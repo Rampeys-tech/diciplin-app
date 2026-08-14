@@ -133,13 +133,13 @@ export default function BreakSystem() {
   // ================= STATE LEADERBOARD POIN (CREW & MANAGER) =================
   const [leaderboard, setLeaderboard] = useState([]);
   const [managerLeaderboard, setManagerLeaderboard] = useState([]);
-  const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); // 'crew' | 'manager'
+  const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); 
   const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
 
   // ================= STATE LOG FOTO (CREW & MANAGER) =================
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
-  const [logCategory, setLogCategory] = useState('crew'); // 'crew' | 'manager'
+  const [logCategory, setLogCategory] = useState('crew'); 
   const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
 
   // ================= STATE GEOLOKASI =================
@@ -149,6 +149,7 @@ export default function BreakSystem() {
   const [isVerifyingLocation, setIsVerifyingLocation] = useState(false);
 
   const [allProfiles, setAllProfiles] = useState([]);
+  const [isFetchingProfiles, setIsFetchingProfiles] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState('');
   const [selectedIzinType, setSelectedIzinType] = useState('toilet'); 
   const [customIzinMinutes, setCustomIzinMinutes] = useState('5');
@@ -207,6 +208,25 @@ export default function BreakSystem() {
     if (points >= 105) return { name: 'Discipline Master', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     if (points >= 100) return { name: 'Regular Crew', color: 'bg-blue-50 text-blue-700 border-blue-200' };
     return { name: 'Under Review', color: 'bg-rose-50 text-rose-700 border-rose-200' };
+  };
+
+  // FUNGSI MEMUAT DAFTAR CREW KONSISTEN
+  const fetchAllProfilesList = async () => {
+    setIsFetchingProfiles(true);
+    try {
+      const { data: profilesData, error } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, station_placement, role')
+        .order('full_name', { ascending: true });
+
+      if (!error && profilesData) {
+        setAllProfiles(profilesData);
+      }
+    } catch (err) {
+      console.error("Gagal memuat profil staff:", err);
+    } finally {
+      setIsFetchingProfiles(false);
+    }
   };
 
   useEffect(() => {
@@ -375,7 +395,7 @@ export default function BreakSystem() {
 
     checkEligibility();
     const eligibilityTimer = setInterval(checkEligibility, 5000); 
-    return () => clearInterval(checkEligibility);
+    return () => clearInterval(eligibilityTimer);
   }, [checkInTime, hasCheckedOut, selectedShiftHour]);
 
   useEffect(() => {
@@ -617,7 +637,6 @@ export default function BreakSystem() {
     }
   };
 
-  // PERBAIKAN: MEMISAHKAN ARSIP LOG FOTO BREAK ANTARA CREW VS MANAGER
   const fetchAllCrewLogs = async () => {
     setIsFetchingAllLogs(true);
     try {
@@ -935,7 +954,10 @@ export default function BreakSystem() {
   };
 
   useEffect(() => {
-    if (user?.id) fetchAttendanceStatus();
+    if (user?.id) {
+      fetchAttendanceStatus();
+      fetchAllProfilesList(); // PANGGIL DAFTAR PROFIL STAFF KETIKA AWAL DIBUKA
+    }
     const hour = new Date().getHours();
     if (hour < 11) {
       setGreeting('Selamat Pagi');
@@ -1473,17 +1495,31 @@ export default function BreakSystem() {
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex flex-col gap-1">
                       <label className="text-[9px] font-extrabold text-slate-400 uppercase">Pilih Anggota Crew</label>
-                      <select value={selectedCrewId} onChange={(e) => setSelectedCrewId(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
-                        <option value="" className="text-slate-900">-- Pilih Staff --</option>
-                        {allProfiles.map(p => <option key={p.id} value={p.id} className="text-slate-900">{p.full_name}</option>)}
+                      
+                      {/* DROPDOWN PEMILIHAN CREW STABIL & SELALU TERSEDIA */}
+                      <select 
+                        value={selectedCrewId} 
+                        onChange={(e) => setSelectedCrewId(e.target.value)} 
+                        onClick={() => { if (allProfiles.length === 0) fetchAllProfilesList(); }}
+                        className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium"
+                      >
+                        <option value="" className="text-slate-900">
+                          {isFetchingProfiles ? 'Memuat Staff...' : '-- Pilih Staff --'}
+                        </option>
+                        {allProfiles.map(p => (
+                          <option key={p.id} value={p.id} className="text-slate-900">
+                            {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
+                          </option>
+                        ))}
                       </select>
                     </div>
+
                     <div className="flex flex-col gap-1">
                       <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
                       <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
-                        <option value="toilet" className="text-slate-900">Toilet (10M)</option>
+                        <option value="toilet" className="text-slate-900">Toilet (5M)</option>
                         <option value="shalat" className="text-slate-900">Shalat (10M)</option>
-                        <option value="makan" className="text-slate-900">Makan (10M)</option>
+                        <option value="makan" className="text-slate-900">Makan (5M)</option>
                         <option value="custom" className="text-slate-900">Custom Menit</option>
                       </select>
                     </div>
