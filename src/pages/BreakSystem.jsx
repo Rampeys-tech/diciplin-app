@@ -196,15 +196,22 @@ export default function BreakSystem() {
   const localStreamRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  // Voice AI
+  // ================= SUARA AI REALISTIS / NATURAL HUMAN VOICE =================
   const speakAiVoice = (text) => {
     try {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'id-ID';
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
+        utterance.rate = 0.92; 
+        utterance.pitch = 1.05;
+
+        // Pilih voice natural bahasa Indonesia yang tersedia di browser/perangkat
+        const voices = window.speechSynthesis.getVoices();
+        const idVoice = voices.find(v => (v.lang === 'id-ID' || v.lang === 'id_ID') && !v.name.includes('eSpeak')) ||
+                        voices.find(v => v.lang.includes('id') || v.lang.includes('ID'));
+        if (idVoice) utterance.voice = idVoice;
+
         window.speechSynthesis.speak(utterance);
       }
     } catch (e) {
@@ -258,7 +265,7 @@ export default function BreakSystem() {
     }
   };
 
-  // KALKULASI DINAMIS JUMLAH PERSONIL PER STATION
+  // ================= PERBAIKAN 1: KALKULASI SINKRON TOTAL IC, STANDBY, & BREAK =================
   const fetchActiveShiftStats = async () => {
     try {
       const { data: activeLogs, error: lError } = await supabase
@@ -284,7 +291,8 @@ export default function BreakSystem() {
         activeLogs.forEach(log => {
           const p = profileMap[log.user_id];
           if (p) {
-            const isCurrentlyBreaking = (log.break_start_time && !log.break_end_time) || log.discipline_status === 'Sedang Istirahat';
+            // SINKRONISASI MUTLAK DENGAN LOGIKA BREAK LIVE MONITORING
+            const isCurrentlyBreaking = (Boolean(log.break_start_time) && !Boolean(log.break_end_time)) || log.discipline_status === 'Sedang Istirahat';
 
             const nameLower = (p.full_name || '').toLowerCase();
             const placementLower = (p.station_placement || '').toLowerCase();
@@ -302,6 +310,7 @@ export default function BreakSystem() {
               staffCount += 1;
             }
 
+            // Personil hanya dihitung standby di station jika TIDAK sedang break
             if (!isCurrentlyBreaking) {
               totalActiveNow += 1;
               let stationName = isMgr ? 'Manager Duty' : (p.station_placement || 'Staff Duty');
@@ -329,7 +338,7 @@ export default function BreakSystem() {
         });
       }
     } catch (e) {
-      console.error("Gagal menghitung shift aktif:", e);
+      console.error("Gagal sinkronisasi data shift aktif:", e);
     }
   };
 
@@ -364,7 +373,7 @@ export default function BreakSystem() {
 
         if (isManager && !announcedOverbreakCrew.current.has(crew.id)) {
           announcedOverbreakCrew.current.add(crew.id);
-          speakAiVoice(`Peringatan Manager! Kru atas nama ${crew.name} terdeteksi over break.`);
+          speakAiVoice(`Pemberitahuan Manager. Rekan kerja atas nama ${crew.name} di ${crew.station} terdeteksi telah over break.`);
         }
       }
 
@@ -381,7 +390,7 @@ export default function BreakSystem() {
     setWaterBreaks(prev => prev.map(wb => {
       if (!wb.rawRawStart) return wb;
       const elapsedSec = Math.floor((Date.now() - wb.rawRawStart.getTime()) / 1000);
-      const totalAllowedSec = wb.allowedSec || 600; // Default 10 menit (600 detik)
+      const totalAllowedSec = wb.allowedSec || 600; 
       const remainingSec = totalAllowedSec - elapsedSec;
       const isOver = remainingSec <= 0;
 
@@ -503,6 +512,7 @@ export default function BreakSystem() {
     return () => clearInterval(eligibilityTimer);
   }, [checkInTime, hasCheckedOut, selectedShiftHour]);
 
+  // ================= PERBAIKAN 2 & 3: ALARM SETIAP 5 MENIT SEBELUM BREAK HABIS =================
   useEffect(() => {
     let timer = null;
     if (isOnBreak) {
@@ -518,19 +528,22 @@ export default function BreakSystem() {
           setTimeLeft(remaining);
           setMaxBreakDuration(maxDurationSec);
 
+          // PENGINGAT 5 MENIT SEBELUM BREAK HABIS DENGAN SUARA NATURAL
           if (remaining <= 300 && remaining > 0 && !hasPlayed5MinAlarm) {
             setHasPlayedAlarm(true);
-            speakAiVoice("Perhatian untuk crew, waktu istirahat Anda tersisa lima menit lagi.");
+            speakAiVoice("Halo rekan crew, waktu istirahat Anda tersisa lima menit lagi. Silakan bersiap-siap kembali ke station kerja ya.");
           }
 
+          // WAKTU BREAK TEPAT HABIS
           if (remaining === 0 && !hasPlayed0MinAlarm) {
             setHasPlayed0MinAlarm(true);
-            speakAiVoice("Waktu istirahat Anda telah habis. Harap segera kembali ke station kerja.");
+            speakAiVoice("Waktu istirahat Anda telah selesai. Mohon segera kembali ke station dan lakukan presensi selesai break.");
           }
 
+          // OVER BREAK
           if (remaining < 0 && !hasNotifiedOverbreak && activeLogId) {
             setHasNotifiedOverbreak(true);
-            speakAiVoice("Peringatan! Anda terdeteksi over break. Poin kedisiplinan Anda terpotong.");
+            speakAiVoice("Perhatian, waktu istirahat Anda telah melewati batas atau over break. Poin kedisiplinan mulai terpotong otomatis.");
           }
         }
       }, 1000);
@@ -612,7 +625,7 @@ export default function BreakSystem() {
         if (wbData && wbData.length > 0) {
           const activeWBs = wbData.map(wb => {
             const start = new Date(wb.current_izin_start);
-            const durationSec = (wb.current_izin_duration || 10) * 60; // 10 menit
+            const durationSec = (wb.current_izin_duration || 10) * 60; 
             const elapsedSec = Math.floor((Date.now() - start.getTime()) / 1000);
             return {
               id: wb.id,
@@ -853,7 +866,6 @@ export default function BreakSystem() {
     setIsSubmittingIzin(true);
     try {
       const startIso = new Date().toISOString();
-      // SEMUA WATER BREAK (TOILET, SHALAT, MAKAN) DEFAULT 10 MENIT
       const durationValue = selectedIzinType === 'custom' ? parseInt(customIzinMinutes) : 10;
 
       const { error } = await supabase
