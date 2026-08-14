@@ -152,7 +152,7 @@ export default function BreakSystem() {
   const [isFetchingProfiles, setIsFetchingProfiles] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState('');
   const [selectedIzinType, setSelectedIzinType] = useState('toilet'); 
-  const [customIzinMinutes, setCustomIzinMinutes] = useState('5');
+  const [customIzinMinutes, setCustomIzinMinutes] = useState('10');
   const [isSubmittingIzin, setIsSubmittingIzin] = useState(false);
 
   const [editName, setEditName] = useState('');
@@ -735,7 +735,7 @@ export default function BreakSystem() {
     setIsSubmittingIzin(true);
     try {
       const startIso = new Date().toISOString();
-      const durationValue = selectedIzinType === 'toilet' ? 5 : selectedIzinType === 'shalat' ? 10 : selectedIzinType === 'makan' ? 5 : parseInt(customIzinMinutes);
+      const durationValue = selectedIzinType === 'toilet' ? 10 : selectedIzinType === 'shalat' ? 10 : selectedIzinType === 'makan' ? 10 : parseInt(customIzinMinutes);
 
       const { error } = await supabase
         .from('user_profiles')
@@ -1517,9 +1517,9 @@ export default function BreakSystem() {
                     <div className="flex flex-col gap-1">
                       <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
                       <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
-                        <option value="toilet" className="text-slate-900">Toilet (5M)</option>
+                        <option value="toilet" className="text-slate-900">Toilet (10M)</option>
                         <option value="shalat" className="text-slate-900">Shalat (10M)</option>
-                        <option value="makan" className="text-slate-900">Makan (5M)</option>
+                        <option value="makan" className="text-slate-900">Makan (10M)</option>
                         <option value="custom" className="text-slate-900">Custom Menit</option>
                       </select>
                     </div>
