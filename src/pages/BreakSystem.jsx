@@ -85,7 +85,7 @@ const SHIFT_HOURS_OPTIONS = [
   { label: '23:00 WITA', hour: 23 }
 ];
 
-// DAFTAR STATION KHUSUS CREW & STAFF (Sudah Diperbarui: Quality Control & Stocker)
+// DAFTAR STATION KHUSUS CREW & STAFF
 const CREW_STATION_OPTIONS = [
   'Station Noodle',
   'Station Dimsum',
@@ -196,7 +196,7 @@ export default function BreakSystem() {
   const localStreamRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  // ================= SUARA AI REALISTIS / NATURAL HUMAN VOICE =================
+  // Suara AI Natural
   const speakAiVoice = (text) => {
     try {
       if ('speechSynthesis' in window) {
@@ -430,7 +430,8 @@ export default function BreakSystem() {
 
       if (targetProfile && pointDeduction > 0) {
         const existingPts = targetProfile.total_points !== null && targetProfile.total_points !== undefined ? Number(targetProfile.total_points) : 100;
-        const newPts = Math.max(0, existingPts - pointDeduction);
+        // BISA MINUS KE BAWAH TANPA BATAS
+        const newPts = existingPts - pointDeduction;
 
         await supabase
           .from('user_profiles')
@@ -644,6 +645,7 @@ export default function BreakSystem() {
     }
   };
 
+  // ================= KALKULASI DETAIL POIN & REKAP KESALAHAN (DAPAT MINUS PENUH) =================
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -684,23 +686,38 @@ export default function BreakSystem() {
         });
 
         const processLeaderboardData = (profileList) => {
-          return profileList.map(person => {
-            const pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
+          const processed = profileList.map(person => {
+            let lateCount = 0;
+            let totalLateMinutes = 0;
+
+            let overBreakCount = 0;
+            let totalOverBreakMinutes = 0;
+
+            let overWaterbreakCount = 0;
             let totalBreakMinutes = 0;
-            let breakCount = 0;
-            let hasOverBreakHistory = false;
-            
+            let normalBreakCount = 0;
+
+            let calculatedDeductions = 0;
+
             const personLogs = (logs || []).filter(l => l.user_id === person.id);
 
             personLogs.forEach(log => {
-              if (log.discipline_status === 'Overbreak' || 
-                  (log.penalty_points && Number(log.penalty_points) > 0) || 
-                  (log.status_in && log.status_in.toLowerCase().includes('terlambat'))) {
-                hasOverBreakHistory = true;
+              // 1. Cek Keterlambatan Masuk Shift (Hanya jika terlambat > 0 menit)
+              if (log.status_in && log.status_in.toLowerCase().includes('terlambat')) {
+                try {
+                  const match = log.status_in.match(/Terlambat (\d+)m/);
+                  const mins = match && match[1] ? parseInt(match[1]) : 0;
+                  if (mins > 0 && mins < 720) {
+                    lateCount += 1;
+                    totalLateMinutes += mins;
+                    calculatedDeductions += mins;
+                  }
+                } catch(e) {}
               }
 
+              // 2. Cek Overbreak Istirahat
               if (log.break_start_time && log.break_end_time) {
-                breakCount += 1;
+                normalBreakCount += 1;
                 const start = new Date(log.break_start_time);
                 const end = new Date(log.break_end_time);
                 const actualMins = Math.floor((end.getTime() - start.getTime()) / 60000);
@@ -710,12 +727,53 @@ export default function BreakSystem() {
                 const allowedMins = (checkInHour === 22) ? 30 : 60;
 
                 if (actualMins > allowedMins) {
-                  hasOverBreakHistory = true;
+                  overBreakCount += 1;
+                  const overDuration = actualMins - allowedMins;
+                  totalOverBreakMinutes += overDuration;
+                  calculatedDeductions += overDuration;
                 }
+              } else if (log.discipline_status === 'Overbreak') {
+                overBreakCount += 1;
+                if (log.penalty_points && Number(log.penalty_points) > 0) {
+                  totalOverBreakMinutes += Number(log.penalty_points);
+                  calculatedDeductions += Number(log.penalty_points);
+                }
+              }
+
+              // 3. Cek Over Waterbreak
+              if (log.discipline_status && log.discipline_status.toLowerCase().includes('waterbreak')) {
+                overWaterbreakCount += 1;
               }
             });
 
-            const isBebal = pts < 100 || (pts <= 100 && hasOverBreakHistory);
+            // HITUNG POIN SEBENARNYA: JIKA DB STUCK DI 0 TAPI ADA TOTAL DENDA > 100, POIN HARUS MINUS
+            let pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
+            if (calculatedDeductions > 0 && pts <= 0) {
+              pts = 100 - calculatedDeductions;
+            } else if (calculatedDeductions > 0 && pts === 100) {
+              pts = 100 - calculatedDeductions;
+            }
+
+            // Menyusun keterangan spesifik & gamblang
+            const reasons = [];
+            if (lateCount > 0) reasons.push(`${lateCount}x Telat Masuk Shift (${totalLateMinutes}m)`);
+            if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak Istirahat (${totalOverBreakMinutes}m)`);
+            if (overWaterbreakCount > 0) reasons.push(`${overWaterbreakCount}x Over Waterbreak`);
+
+            let statusDescription = '';
+            const hasRealInfractions = reasons.length > 0;
+
+            if (hasRealInfractions) {
+              statusDescription = `⚠️ ` + reasons.join(' • ');
+            } else if (pts < 100) {
+              statusDescription = `⚠️ Pengurangan Disiplin (${pts - 100} Pts)`;
+            } else if (normalBreakCount > 0) {
+              statusDescription = `✓ ${normalBreakCount}x Break (${totalBreakMinutes} Menit) Sesuai`;
+            } else {
+              statusDescription = '✓ Disiplin Standar (100 Pts)';
+            }
+
+            const isBebal = pts < 100 || (hasRealInfractions && pts <= 100);
 
             return {
               id: person.id,
@@ -724,10 +782,11 @@ export default function BreakSystem() {
               role: person.station_placement || person.role || 'Staff Crew', 
               points: pts,
               isBebal: isBebal,
-              hasOverBreakHistory: hasOverBreakHistory,
-              breakInfo: breakCount > 0 ? `${breakCount}x Break (${totalBreakMinutes} Menit)${hasOverBreakHistory ? ' ⚠️ Over' : ' ✓ Sesuai'}` : 'Belum Ada Break'
+              breakInfo: statusDescription
             };
-          }).sort((a, b) => b.points - a.points);
+          });
+
+          return processed;
         };
 
         setLeaderboard(processLeaderboardData(filteredCrewProfiles));
@@ -762,7 +821,6 @@ export default function BreakSystem() {
     }
   };
 
-  // PERBAIKAN: FORMAT WAKTU MULAI & WAKTU SELESAI BREAK SECARA PRESISI
   const fetchAllCrewLogs = async () => {
     setIsFetchingAllLogs(true);
     try {
@@ -789,7 +847,7 @@ export default function BreakSystem() {
           isManagerMap[p.id] = nameLower.includes('owner') || 
                                placementLower.includes('owner') || 
                                placementLower.includes('manager') || 
-                               placementLower.includes('atasan') ||
+                               placementLower.includes('atasan') || 
                                roleLower === 'manager';
         });
 
@@ -1331,7 +1389,7 @@ export default function BreakSystem() {
 
         if (insertError) throw insertError;
 
-        // PEMOTONGAN POIN JUGA BERLAKU UNTUK MANAGER
+        // PEMOTONGAN POIN BERLAKU UNTUK SEMUA DAN BISA MINUS KE BAWAH
         if (lateMinutes > 0) {
           const { data: currentProf } = await supabase
             .from('user_profiles')
@@ -1339,8 +1397,8 @@ export default function BreakSystem() {
             .eq('id', user.id)
             .maybeSingle();
 
-          const existingPts = currentProf?.total_points ?? 100;
-          const updatedPts = Math.max(0, Number(existingPts) - lateMinutes);
+          const existingPts = currentProf?.total_points !== null && currentProf?.total_points !== undefined ? Number(currentProf.total_points) : 100;
+          const updatedPts = existingPts - lateMinutes; // BISA MINUS
 
           await supabase
             .from('user_profiles')
@@ -1441,15 +1499,15 @@ export default function BreakSystem() {
 
           if (updateError) throw updateError;
 
-          // POIN KEDISIPLINAN JUGA DIHITUNG UNTUK MANAGER
+          // POIN BISA MINUS KE BAWAH
           const { data: currentProf } = await supabase
             .from('user_profiles')
             .select('total_points')
             .eq('id', user.id)
             .maybeSingle();
 
-          const existingPoints = currentProf?.total_points ?? 100;
-          const updatedPoints = Math.max(0, Number(existingPoints) + pointChange);
+          const existingPoints = currentProf?.total_points !== null && currentProf?.total_points !== undefined ? Number(currentProf.total_points) : 100;
+          const updatedPoints = existingPoints + pointChange;
 
           await supabase
             .from('user_profiles')
@@ -1502,6 +1560,15 @@ export default function BreakSystem() {
   const activeBadge = getCrewBadge(currentUserPoints);
   const activeLeaderboardData = (isManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
   const activeLogData = (isManager && logCategory === 'manager') ? managerCrewLogs : allCrewLogs;
+
+  // SORTING: TOP TIER (TERTINGGI KE TERENDAH), EVALUASI (PALING RENDAH / PALING MINUS DULUAN)
+  const topTierList = activeLeaderboardData
+    .filter(c => !c.isBebal)
+    .sort((a, b) => b.points - a.points);
+
+  const bebalList = activeLeaderboardData
+    .filter(c => c.isBebal)
+    .sort((a, b) => a.points - b.points);
 
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
@@ -1584,7 +1651,7 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* WIDGET ELEGAN REKAP PERSONIL DI TIAP STATION (RESPONSIF & TEKS TIDAK TERPOTONG) */}
+            {/* WIDGET ELEGAN REKAP PERSONIL DI TIAP STATION */}
             <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3.5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <div className="flex items-center gap-2">
@@ -2004,15 +2071,16 @@ export default function BreakSystem() {
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks poin...</div>
             ) : (
               <div className="space-y-4">
+                {/* 1. TOP TIER (PALING RAJIN) - DIURUTKAN DARI POIN TERTINGGI KE RENDAH */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1">
                     🌟 PALING RAJIN ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
                   </p>
                   <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                    {activeLeaderboardData.filter(c => !c.isBebal).length === 0 ? (
+                    {topTierList.length === 0 ? (
                       <div className="p-4 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
                     ) : (
-                      activeLeaderboardData.filter(c => !c.isBebal).map((person, index) => (
+                      topTierList.map((person, index) => (
                         <div className="p-3.5 flex items-center justify-between w-full" key={person.id}>
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
@@ -2030,15 +2098,16 @@ export default function BreakSystem() {
                   </div>
                 </div>
 
+                {/* 2. ZONA BEBAL (PERLU EVALUASI) - DIURUTKAN DARI POIN PALING RENDAH / MINUS KE ATAS */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">
                     ⚠️ PERLU EVALUASI ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
                   </p>
                   <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                    {activeLeaderboardData.filter(c => c.isBebal).length === 0 ? (
+                    {bebalList.length === 0 ? (
                       <div className="p-4 text-center text-xs font-bold text-slate-400">0 User dalam zona bahaya kedisiplinan.</div>
                     ) : (
-                      activeLeaderboardData.filter(c => c.isBebal).map((person, index) => (
+                      bebalList.map((person, index) => (
                         <div key={person.id} className="p-3.5 flex items-center justify-between bg-rose-50/20">
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-rose-500 w-4">{index + 1}.</span>
@@ -2049,7 +2118,9 @@ export default function BreakSystem() {
                               <span className="text-[9px] text-rose-900 font-medium block mt-0.5 bg-rose-100/40 px-1.5 py-0.2 rounded border border-rose-200">{person.breakInfo}</span>
                             </div>
                           </div>
-                          <span className="bg-rose-100 text-rose-700 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200 flex items-center gap-1"><FiFrown /> {person.points} Pts</span>
+                          <span className={`text-xs font-black px-2.5 py-1 rounded-xl border flex items-center gap-1 ${person.points < 0 ? 'bg-rose-600 text-white border-rose-700 shadow-xs' : 'bg-rose-100 text-rose-700 border-rose-200'}`}>
+                            <FiFrown /> {person.points} Pts
+                          </span>
                         </div>
                       ))
                     )}
@@ -2060,7 +2131,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO ISTIRAHAT (DILENGKAPI WAKTU MULAI & SELESAI) ================= */}
+        {/* ================= TAB 4: LOG FOTO ISTIRAHAT ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3">
             <div className="flex flex-col space-y-0.5">
@@ -2108,7 +2179,7 @@ export default function BreakSystem() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
-                      {/* FOTO MULAI & WAKTU MULAI */}
+                      {/* FOTO MULAI */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
@@ -2123,7 +2194,7 @@ export default function BreakSystem() {
                         )}
                       </div>
 
-                      {/* FOTO SELESAI & WAKTU SELESAI */}
+                      {/* FOTO SELESAI */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
