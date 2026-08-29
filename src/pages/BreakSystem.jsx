@@ -38,7 +38,8 @@ import {
   FiUserCheck,
   FiBriefcase,
   FiLayers,
-  FiCheckSquare
+  FiCheckSquare,
+  FiChevronDown
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -100,6 +101,10 @@ const CREW_STATION_OPTIONS = [
   'Cel',
   'Dishwasher'
 ];
+
+// ================= KONFIGURASI PAGINATION LOG FOTO (ANTI CACHED-EGRESS BOROS) =================
+const LOGS_PAGE_SIZE = 20; // jumlah log yang ditarik per halaman, jangan tarik semua sekaligus
+const LOGS_MAX_AGE_DAYS = 7; // hanya ambil log 7 hari terakhir by default
 
 export default function BreakSystem() {
   const { user } = useAuth();
@@ -166,11 +171,14 @@ export default function BreakSystem() {
   const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); 
   const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
 
-  // ================= STATE LOG FOTO =================
+  // ================= STATE LOG FOTO (+ PAGINATION) =================
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
   const [logCategory, setLogCategory] = useState('crew'); 
   const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
+  const [isFetchingMoreLogs, setIsFetchingMoreLogs] = useState(false);
+  const [logsPage, setLogsPage] = useState(0);
+  const [hasMoreLogs, setHasMoreLogs] = useState(true);
 
   // ================= STATE GEOLOKASI =================
   const [humanDetectionStatus, setHumanDetectionStatus] = useState('LOADING_ENGINE'); 
@@ -430,7 +438,7 @@ export default function BreakSystem() {
 
       if (targetProfile && pointDeduction > 0) {
         const existingPts = targetProfile.total_points !== null && targetProfile.total_points !== undefined ? Number(targetProfile.total_points) : 100;
-        // BISA MINUS KE BAWAH TANPA BATAS
+        // BISA MINUS KE BAWAH TANPA BATAS 0
         const newPts = existingPts - pointDeduction;
 
         await supabase
@@ -645,7 +653,7 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= KALKULASI DETAIL POIN & REKAP KESALAHAN (DAPAT MINUS PENUH) =================
+  // ================= PERBAIKAN: DETAIL RINCIAN PENYEBAB PEMOTONGAN POIN & BISA MINUS KE BAWAH =================
   const fetchLeaderboard = async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -687,6 +695,8 @@ export default function BreakSystem() {
 
         const processLeaderboardData = (profileList) => {
           const processed = profileList.map(person => {
+            const pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
+            
             let lateCount = 0;
             let totalLateMinutes = 0;
 
@@ -696,8 +706,6 @@ export default function BreakSystem() {
             let overWaterbreakCount = 0;
             let totalBreakMinutes = 0;
             let normalBreakCount = 0;
-
-            let calculatedDeductions = 0;
 
             const personLogs = (logs || []).filter(l => l.user_id === person.id);
 
@@ -710,7 +718,6 @@ export default function BreakSystem() {
                   if (mins > 0 && mins < 720) {
                     lateCount += 1;
                     totalLateMinutes += mins;
-                    calculatedDeductions += mins;
                   }
                 } catch(e) {}
               }
@@ -728,15 +735,12 @@ export default function BreakSystem() {
 
                 if (actualMins > allowedMins) {
                   overBreakCount += 1;
-                  const overDuration = actualMins - allowedMins;
-                  totalOverBreakMinutes += overDuration;
-                  calculatedDeductions += overDuration;
+                  totalOverBreakMinutes += (actualMins - allowedMins);
                 }
               } else if (log.discipline_status === 'Overbreak') {
                 overBreakCount += 1;
                 if (log.penalty_points && Number(log.penalty_points) > 0) {
                   totalOverBreakMinutes += Number(log.penalty_points);
-                  calculatedDeductions += Number(log.penalty_points);
                 }
               }
 
@@ -746,15 +750,7 @@ export default function BreakSystem() {
               }
             });
 
-            // HITUNG POIN SEBENARNYA: JIKA DB STUCK DI 0 TAPI ADA TOTAL DENDA > 100, POIN HARUS MINUS
-            let pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
-            if (calculatedDeductions > 0 && pts <= 0) {
-              pts = 100 - calculatedDeductions;
-            } else if (calculatedDeductions > 0 && pts === 100) {
-              pts = 100 - calculatedDeductions;
-            }
-
-            // Menyusun keterangan spesifik & gamblang
+            // Menyusun keterangan spesifik & gamblang sesuai jenis kesalahan
             const reasons = [];
             if (lateCount > 0) reasons.push(`${lateCount}x Telat Masuk Shift (${totalLateMinutes}m)`);
             if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak Istirahat (${totalOverBreakMinutes}m)`);
@@ -821,14 +817,32 @@ export default function BreakSystem() {
     }
   };
 
-  const fetchAllCrewLogs = async () => {
-    setIsFetchingAllLogs(true);
+  // ================= PERBAIKAN UTAMA: PAGINATION + FILTER TANGGAL AGAR CACHED EGRESS TIDAK MELONJAK =================
+  // Sebelumnya fungsi ini menarik SEMUA log (dan SEMUA foto) sejak awal aplikasi berjalan, tanpa limit,
+  // setiap kali menu "Log Foto" dibuka. Sekarang dibatasi per halaman (LOGS_PAGE_SIZE) dan hanya
+  // log 7 hari terakhir (LOGS_MAX_AGE_DAYS) secara default, dengan opsi "Muat Lebih Banyak".
+  const fetchAllCrewLogs = async (loadMore = false) => {
+    if (loadMore) {
+      setIsFetchingMoreLogs(true);
+    } else {
+      setIsFetchingAllLogs(true);
+    }
+
     try {
+      const pageToFetch = loadMore ? logsPage : 0;
+      const rangeFrom = pageToFetch * LOGS_PAGE_SIZE;
+      const rangeTo = rangeFrom + LOGS_PAGE_SIZE - 1;
+
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - LOGS_MAX_AGE_DAYS);
+
       const { data: logs, error: lError } = await supabase
         .from('attendance_logs')
         .select('id, user_id, created_at, break_start_time, break_end_time, image_url, after_break_image_url, actual_in')
         .not('break_start_time', 'is', null)
-        .order('created_at', { ascending: false });
+        .gte('created_at', cutoffDate.toISOString())
+        .order('created_at', { ascending: false })
+        .range(rangeFrom, rangeTo);
 
       const { data: profiles, error: pError } = await supabase
         .from('user_profiles')
@@ -847,7 +861,7 @@ export default function BreakSystem() {
           isManagerMap[p.id] = nameLower.includes('owner') || 
                                placementLower.includes('owner') || 
                                placementLower.includes('manager') || 
-                               placementLower.includes('atasan') || 
+                               placementLower.includes('atasan') ||
                                roleLower === 'manager';
         });
 
@@ -866,8 +880,8 @@ export default function BreakSystem() {
           return clean.trim();
         };
 
-        const crewLogsArray = [];
-        const managerLogsArray = [];
+        const newCrewLogsArray = [];
+        const newManagerLogsArray = [];
 
         logs.forEach(log => {
           let durationString = 'Sedang Istirahat';
@@ -909,19 +923,29 @@ export default function BreakSystem() {
           };
 
           if (isManagerMap[log.user_id]) {
-            managerLogsArray.push(processedLog);
+            newManagerLogsArray.push(processedLog);
           } else {
-            crewLogsArray.push(processedLog);
+            newCrewLogsArray.push(processedLog);
           }
         });
 
-        setAllCrewLogs(crewLogsArray);
-        setManagerCrewLogs(managerLogsArray);
+        if (loadMore) {
+          setAllCrewLogs(prev => [...prev, ...newCrewLogsArray]);
+          setManagerCrewLogs(prev => [...prev, ...newManagerLogsArray]);
+        } else {
+          setAllCrewLogs(newCrewLogsArray);
+          setManagerCrewLogs(newManagerLogsArray);
+        }
+
+        setLogsPage(pageToFetch + 1);
+        // Kalau jumlah row yang balik lebih kecil dari page size, berarti sudah halaman terakhir
+        setHasMoreLogs(logs.length === LOGS_PAGE_SIZE);
       }
     } catch (e) {
       console.error(e);
     } finally {
       setIsFetchingAllLogs(false);
+      setIsFetchingMoreLogs(false);
     }
   };
 
@@ -961,10 +985,14 @@ export default function BreakSystem() {
       const compressed = await imageCompression(file, { maxSizeMB: 0.2, maxWidthOrHeight: 400 });
       const filePath = `avatars/${user.id}-${Date.now()}.jpg`;
 
+      // PERBAIKAN: cacheControl diperpanjang jadi 1 tahun. Nama file sudah unik (pakai Date.now()),
+      // jadi isinya tidak akan pernah berubah -> aman di-cache selama mungkin oleh browser/CDN,
+      // ini mengurangi cached egress dari foto yang ditarik berulang-ulang.
       const { error: uploadError } = await supabase.storage
         .from('attendance-proofs')
         .upload(filePath, compressed, {
           contentType: 'image/jpeg',
+          cacheControl: '31536000',
           upsert: true
         });
 
@@ -1029,7 +1057,9 @@ export default function BreakSystem() {
     } else if (activeTab === 'leaderboard') {
       fetchLeaderboard();
     } else if (activeTab === 'all-logs') {
-      fetchAllCrewLogs();
+      setLogsPage(0);
+      setHasMoreLogs(true);
+      fetchAllCrewLogs(false);
     } else if (activeTab === 'profile' && profile) {
       setEditName(profile.full_name || '');
       setEditPhone(profile.whatsapp_number || '');
@@ -1334,10 +1364,15 @@ export default function BreakSystem() {
         });
         
         const filePath = `logs/${user.id}-${Date.now()}.jpg`;
+
+        // PERBAIKAN: cacheControl diperpanjang jadi 1 tahun. Nama file sudah unik (user.id + Date.now()),
+        // jadi isinya immutable -> aman di-cache selama mungkin, mengurangi cached egress berulang
+        // setiap kali foto yang sama ditampilkan lagi di menu Log Foto.
         const { error: uploadError } = await supabase.storage
           .from('attendance-proofs')
           .upload(filePath, compressed, {
             contentType: 'image/jpeg',
+            cacheControl: '31536000',
             upsert: true
           });
 
@@ -1397,8 +1432,8 @@ export default function BreakSystem() {
             .eq('id', user.id)
             .maybeSingle();
 
-          const existingPts = currentProf?.total_points !== null && currentProf?.total_points !== undefined ? Number(currentProf.total_points) : 100;
-          const updatedPts = existingPts - lateMinutes; // BISA MINUS
+          const existingPts = currentProf?.total_points ?? 100;
+          const updatedPts = Number(existingPts) - lateMinutes;
 
           await supabase
             .from('user_profiles')
@@ -1499,15 +1534,15 @@ export default function BreakSystem() {
 
           if (updateError) throw updateError;
 
-          // POIN BISA MINUS KE BAWAH
+          // POIN KEDISIPLINAN JUGA DIHITUNG UNTUK MANAGER DAN BISA MINUS
           const { data: currentProf } = await supabase
             .from('user_profiles')
             .select('total_points')
             .eq('id', user.id)
             .maybeSingle();
 
-          const existingPoints = currentProf?.total_points !== null && currentProf?.total_points !== undefined ? Number(currentProf.total_points) : 100;
-          const updatedPoints = existingPoints + pointChange;
+          const existingPoints = currentProf?.total_points ?? 100;
+          const updatedPoints = Number(existingPoints) + pointChange;
 
           await supabase
             .from('user_profiles')
@@ -1561,7 +1596,7 @@ export default function BreakSystem() {
   const activeLeaderboardData = (isManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
   const activeLogData = (isManager && logCategory === 'manager') ? managerCrewLogs : allCrewLogs;
 
-  // SORTING: TOP TIER (TERTINGGI KE TERENDAH), EVALUASI (PALING RENDAH / PALING MINUS DULUAN)
+  // SORTING DINAMIS: TOP TIER (TERTINGGI KE TERENDAH), EVALUASI/BEBAL (TERENDAH KE TERTINGGI / MINUS DULUAN)
   const topTierList = activeLeaderboardData
     .filter(c => !c.isBebal)
     .sort((a, b) => b.points - a.points);
@@ -2084,7 +2119,7 @@ export default function BreakSystem() {
                         <div className="p-3.5 flex items-center justify-between w-full" key={person.id}>
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
-                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
+                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
                             <div>
                               <span className="text-xs font-bold text-slate-900 block">{person.name}</span>
                               <span className="text-[9px] text-indigo-600 font-black uppercase tracking-wider block">{person.role}</span>
@@ -2098,7 +2133,7 @@ export default function BreakSystem() {
                   </div>
                 </div>
 
-                {/* 2. ZONA BEBAL (PERLU EVALUASI) - DIURUTKAN DARI POIN PALING RENDAH / MINUS KE ATAS */}
+                {/* 2. ZONA BEBAL (PERLU EVALUASI) - DIURUTKAN DARI POIN PALING RENDAH DULU KE BAWAH (MINUS/0 DULUAN) */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">
                     ⚠️ PERLU EVALUASI ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
@@ -2111,16 +2146,14 @@ export default function BreakSystem() {
                         <div key={person.id} className="p-3.5 flex items-center justify-between bg-rose-50/20">
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-rose-500 w-4">{index + 1}.</span>
-                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
+                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
                             <div>
                               <span className="text-xs font-bold text-rose-950 block">{person.name}</span>
                               <span className="text-[9px] text-rose-600 font-black uppercase tracking-wider block">{person.role}</span>
                               <span className="text-[9px] text-rose-900 font-medium block mt-0.5 bg-rose-100/40 px-1.5 py-0.2 rounded border border-rose-200">{person.breakInfo}</span>
                             </div>
                           </div>
-                          <span className={`text-xs font-black px-2.5 py-1 rounded-xl border flex items-center gap-1 ${person.points < 0 ? 'bg-rose-600 text-white border-rose-700 shadow-xs' : 'bg-rose-100 text-rose-700 border-rose-200'}`}>
-                            <FiFrown /> {person.points} Pts
-                          </span>
+                          <span className="bg-rose-100 text-rose-700 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200 flex items-center gap-1"><FiFrown /> {person.points} Pts</span>
                         </div>
                       ))
                     )}
@@ -2131,14 +2164,14 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO ISTIRAHAT ================= */}
+        {/* ================= TAB 4: LOG FOTO ISTIRAHAT (SUDAH PAKAI PAGINATION) ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3">
             <div className="flex flex-col space-y-0.5">
               <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
                 <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
               </h2>
-              <p className="text-[10px] text-slate-400 font-medium">Data arsip foto verifikasi kamera & waktu break.</p>
+              <p className="text-[10px] text-slate-400 font-medium">Menampilkan {LOGS_MAX_AGE_DAYS} hari terakhir, {LOGS_PAGE_SIZE} log per halaman.</p>
             </div>
 
             {isManager && (
@@ -2162,7 +2195,7 @@ export default function BreakSystem() {
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
             ) : activeLogData.length === 0 ? (
               <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
-                Belum ada aktivitas log break {logCategory === 'manager' && isManager ? 'manager' : 'crew'} hari ini.
+                Belum ada aktivitas log break {logCategory === 'manager' && isManager ? 'manager' : 'crew'} dalam {LOGS_MAX_AGE_DAYS} hari terakhir.
               </div>
             ) : (
               <div className="space-y-3">
@@ -2179,7 +2212,6 @@ export default function BreakSystem() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
-                      {/* FOTO MULAI */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
@@ -2188,13 +2220,12 @@ export default function BreakSystem() {
                           </span>
                         </div>
                         {log.image_url ? (
-                          <img src={log.image_url} className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
+                          <img src={log.image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
                         ) : (
                           <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">No Image</div>
                         )}
                       </div>
 
-                      {/* FOTO SELESAI */}
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
@@ -2203,7 +2234,7 @@ export default function BreakSystem() {
                           </span>
                         </div>
                         {log.after_break_image_url ? (
-                          <img src={log.after_break_image_url} className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
+                          <img src={log.after_break_image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
                         ) : (
                           <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress</div>
                         )}
@@ -2211,6 +2242,23 @@ export default function BreakSystem() {
                     </div>
                   </div>
                 ))}
+
+                {/* TOMBOL MUAT LEBIH BANYAK - hanya tarik data tambahan kalau memang di-klik */}
+                {hasMoreLogs && (
+                  <button
+                    onClick={() => fetchAllCrewLogs(true)}
+                    disabled={isFetchingMoreLogs}
+                    className="w-full bg-white hover:bg-slate-50 border border-slate-200/70 text-slate-600 font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-colors disabled:opacity-60"
+                  >
+                    {isFetchingMoreLogs ? (
+                      <span className="animate-pulse">Memuat...</span>
+                    ) : (
+                      <>
+                        <FiChevronDown className="text-sm" /> Muat Lebih Banyak
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             )}
           </div>
