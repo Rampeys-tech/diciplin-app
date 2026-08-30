@@ -41,7 +41,8 @@ import {
   FiChevronDown,
   FiCalendar,
   FiActivity,
-  FiFileText
+  FiFileText,
+  FiFilter
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -162,17 +163,20 @@ export default function BreakSystem() {
   const [activeSubTabLeaderboard, setActiveSubTabLeaderboard] = useState('ranking');
   const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late');
   
+  // Filter Station Khusus Indisipliner
+  const [selectedStationFilter, setSelectedStationFilter] = useState('ALL');
+
   const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
   const [managerInfractionRankings, setManagerInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
 
-  // Modal Input Pelanggaran SOC / Unprosedural (Pilihan Poin Statis)
+  // Modal Input Pelanggaran SOC / Unprosedural
   const [showReportViolationModal, setShowReportViolationModal] = useState(false);
   const [reportTargetCrewId, setReportTargetCrewId] = useState('');
   const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
   const [reportNotes, setReportNotes] = useState('');
-  const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5'); // Default 5 poin
+  const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5');
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
   // State Log Foto
@@ -809,12 +813,15 @@ export default function BreakSystem() {
             });
           });
 
+          const personStation = person.station_placement || person.role || 'Staff Crew';
+
           if (lateCount > 0) {
             lateRankingList.push({
               id: person.id,
               name: person.full_name,
               avatar: person.avatar,
-              role: person.station_placement || person.role,
+              role: personStation,
+              station: personStation,
               count: lateCount,
               totalMinutes: totalLateMinutes,
               history: userInfractionHistory.filter(h => h.type.includes('Terlambat'))
@@ -826,7 +833,8 @@ export default function BreakSystem() {
               id: person.id,
               name: person.full_name,
               avatar: person.avatar,
-              role: person.station_placement || person.role,
+              role: personStation,
+              station: personStation,
               count: overBreakCount,
               totalMinutes: totalOverBreakMinutes,
               history: userInfractionHistory.filter(h => h.type.includes('Overbreak'))
@@ -838,7 +846,8 @@ export default function BreakSystem() {
               id: person.id,
               name: person.full_name,
               avatar: person.avatar,
-              role: person.station_placement || person.role,
+              role: personStation,
+              station: personStation,
               count: ghostingCount,
               totalMinutes: 0,
               history: userInfractionHistory.filter(h => h.type.includes('Ghosting'))
@@ -850,7 +859,8 @@ export default function BreakSystem() {
               id: person.id,
               name: person.full_name,
               avatar: person.avatar,
-              role: person.station_placement || person.role,
+              role: personStation,
+              station: personStation,
               count: socCount,
               totalMinutes: 0,
               history: userInfractionHistory.filter(h => !h.type.includes('Terlambat') && !h.type.includes('Overbreak') && !h.type.includes('Ghosting'))
@@ -880,7 +890,7 @@ export default function BreakSystem() {
             id: person.id,
             name: person.full_name || 'Staff Member',
             avatar: person.avatar,
-            role: person.station_placement || person.role || 'Staff Crew', 
+            role: personStation, 
             points: pts,
             isBebal: pts < 100 || (hasRealInfractions && pts <= 100),
             breakInfo: statusDescription,
@@ -1877,10 +1887,23 @@ export default function BreakSystem() {
     .filter(c => c.isBebal)
     .sort((a, b) => a.points - b.points);
 
+  // Helper filter data indisipliner berdasarkan station
+  const filterByStation = (list) => {
+    if (selectedStationFilter === 'ALL') return list;
+    return list.filter(item => {
+      const st = (item.station || item.role || '').toLowerCase();
+      return st.includes(selectedStationFilter.toLowerCase());
+    });
+  };
+
+  const currentFilteredLate = filterByStation(activeInfractionRanking.topLate);
+  const currentFilteredOverbreak = filterByStation(activeInfractionRanking.topOverbreak);
+  const currentFilteredGhosting = filterByStation(activeInfractionRanking.topGhosting);
+  const currentFilteredSoc = filterByStation(activeInfractionRanking.topSoc);
+
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
       
-      {/* CSS Override Anti Double Header */}
       <style>{`
         header.sticky.top-0, 
         div.min-h-screen > header,
@@ -2116,20 +2139,17 @@ export default function BreakSystem() {
                   </div>
                 )}
 
-                {/* 2. PANEL PENCATATAN PELANGGARAN SOC / UNPROSEDURAL (SEJAJAR DI HOMEPAGE) */}
+                {/* 2. PANEL PENCATATAN PELANGGARAN SOC / UNPROSEDURAL */}
                 {canReportViolation && (
                   <div className="bg-gradient-to-br from-slate-900 to-slate-950 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                      <div className="flex items-center gap-2">
-                        <div className="p-1.5 bg-orange-600 text-white rounded-lg"><FiFileText className="text-xs" /></div>
-                        <div>
-                          <h3 className="text-xs font-black uppercase tracking-wider">Input Tindakan Indisipliner</h3>
-                          <p className="text-[9px] text-slate-400">Catat pelanggaran SOC & unprosedural kerja.</p>
-                        </div>
+                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2.5">
+                      <div className="p-1.5 bg-orange-600 text-white rounded-lg">
+                        <FiFileText className="text-xs" />
                       </div>
-                      <span className="text-[8px] bg-orange-500/20 text-orange-400 border border-orange-500/30 px-2 py-0.5 rounded-md font-bold uppercase">
-                        QC / Stocker / Mgr
-                      </span>
+                      <div>
+                        <h3 className="text-xs font-black uppercase tracking-wider">Input Tindakan Indisipliner</h3>
+                        <p className="text-[9px] text-slate-400">Catat pelanggaran SOC & unprosedural kerja.</p>
+                      </div>
                     </div>
 
                     <button
@@ -2499,7 +2519,7 @@ export default function BreakSystem() {
                 </div>
               </div>
             ) : (
-              /* VIEW 2: INDISIPLINER DENGAN FILTER PILLS DI ATAS */
+              /* VIEW 2: INDISIPLINER DENGAN FILTER TABS & FILTER STATION */
               <div className="space-y-3.5">
                 
                 {/* FILTER PILLS KATEGORI INDISIPLINER */}
@@ -2537,6 +2557,25 @@ export default function BreakSystem() {
                   </button>
                 </div>
 
+                {/* FILTER DROPDOWN STATION */}
+                <div className="flex items-center justify-between bg-white border border-slate-200/80 px-3 py-2 rounded-xl shadow-2xs">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                    <FiFilter className="text-indigo-600" />
+                    <span>Filter Station:</span>
+                  </div>
+                  <select
+                    value={selectedStationFilter}
+                    onChange={(e) => setSelectedStationFilter(e.target.value)}
+                    className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-lg px-2.5 py-1 outline-none cursor-pointer"
+                  >
+                    <option value="ALL">Semua Station</option>
+                    {CREW_STATION_OPTIONS.map((st) => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
+                    <option value="Manager">Manager Duty</option>
+                  </select>
+                </div>
+
                 {/* KONTEN KATEGORI TERPILIH */}
                 {selectedInfractionCategory === 'late' && (
                   <div className="space-y-2 animate-in fade-in duration-200">
@@ -2548,12 +2587,12 @@ export default function BreakSystem() {
                     </div>
 
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                      {activeInfractionRanking.topLate.length === 0 ? (
+                      {currentFilteredLate.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil catatan terlambat pada periode {selectedMonth}. 🌟
+                          Nihil catatan terlambat pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
                         </div>
                       ) : (
-                        activeInfractionRanking.topLate.map((c, idx) => (
+                        currentFilteredLate.map((c, idx) => (
                           <div 
                             key={c.id} 
                             onClick={() => openInfractionDetailModal(c)}
@@ -2587,12 +2626,12 @@ export default function BreakSystem() {
                     </div>
 
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                      {activeInfractionRanking.topOverbreak.length === 0 ? (
+                      {currentFilteredOverbreak.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil catatan overbreak pada periode {selectedMonth}. 🌟
+                          Nihil catatan overbreak pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
                         </div>
                       ) : (
-                        activeInfractionRanking.topOverbreak.map((c, idx) => (
+                        currentFilteredOverbreak.map((c, idx) => (
                           <div 
                             key={c.id} 
                             onClick={() => openInfractionDetailModal(c)}
@@ -2620,18 +2659,18 @@ export default function BreakSystem() {
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
                       <p className="text-[10px] font-black text-red-800 uppercase tracking-widest flex items-center gap-1.5">
-                        <FiAlertTriangle className="text-red-600 text-xs" /> Ranking Terbanyak Ghosting (Luar Radius)
+                        <FiAlertTriangle className="text-red-600 text-xs" /> Ranking Terbanyak Ghosting
                       </p>
                       <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
                     </div>
 
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                      {activeInfractionRanking.topGhosting.length === 0 ? (
+                      {currentFilteredGhosting.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil catatan ghosting pada periode {selectedMonth}. 🌟
+                          Nihil catatan ghosting pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
                         </div>
                       ) : (
-                        activeInfractionRanking.topGhosting.map((c, idx) => (
+                        currentFilteredGhosting.map((c, idx) => (
                           <div 
                             key={c.id} 
                             onClick={() => openInfractionDetailModal(c)}
@@ -2659,18 +2698,18 @@ export default function BreakSystem() {
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
                       <p className="text-[10px] font-black text-orange-800 uppercase tracking-widest flex items-center gap-1.5">
-                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOC & Unprosedural (QC/Stocker/Manager)
+                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOC & Unprosedural
                       </p>
                       <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
                     </div>
 
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                      {activeInfractionRanking.topSoc.length === 0 ? (
+                      {currentFilteredSoc.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil pelanggaran SOC/unprosedural pada periode {selectedMonth}. 🌟
+                          Nihil pelanggaran SOC pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
                         </div>
                       ) : (
-                        activeInfractionRanking.topSoc.map((c, idx) => (
+                        currentFilteredSoc.map((c, idx) => (
                           <div 
                             key={c.id} 
                             onClick={() => openInfractionDetailModal(c)}
@@ -2763,7 +2802,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL INPUT PELANGGARAN SOC / UNPROSEDURAL (POIN STATIS 5, 10, 15) ================= */}
+        {/* ================= MODAL INPUT PELANGGARAN SOC / UNPROSEDURAL ================= */}
         {showReportViolationModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4">
@@ -2817,7 +2856,6 @@ export default function BreakSystem() {
                     </select>
                   </div>
 
-                  {/* Pilihan Statis Poin (5, 10, 15) */}
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-600 uppercase">Pengurangan Poin</label>
                     <select
