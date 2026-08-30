@@ -40,7 +40,8 @@ import {
   FiCheckSquare,
   FiChevronDown,
   FiCalendar,
-  FiActivity
+  FiActivity,
+  FiFileText
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -130,13 +131,25 @@ export default function BreakSystem() {
   const [hasNotifiedOverbreak, setHasNotifiedOverbreak] = useState(false);
   const announcedOverbreakCrew = useRef(new Set());
 
-  // Role Guard Manager
+  // Role Checker
+  const placementLower = (profile?.station_placement || '').toLowerCase();
+  const roleLower = (profile?.role || '').toLowerCase();
+  const nameLower = (profile?.full_name || '').toLowerCase();
+
   const isManager = Boolean(
-    profile?.station_placement?.toLowerCase() === 'manager' || 
-    profile?.station_placement?.toLowerCase() === 'atasan' || 
-    profile?.station_placement?.toLowerCase() === 'owner' || 
-    profile?.full_name?.toLowerCase().includes('owner') || 
-    profile?.role?.toLowerCase() === 'manager'
+    placementLower === 'manager' || 
+    placementLower === 'atasan' || 
+    placementLower === 'owner' || 
+    nameLower.includes('owner') || 
+    roleLower === 'manager'
+  );
+
+  // Akses pelaporan pelanggaran SOC/Unprosedural (Manager, QC, Stocker)
+  const canReportViolation = Boolean(
+    isManager || 
+    placementLower.includes('quality control') || 
+    placementLower.includes('qc') || 
+    placementLower.includes('stocker')
   );
 
   // ================= STATE LEADERBOARD, HISTORI & INDISIPLINER =================
@@ -147,14 +160,22 @@ export default function BreakSystem() {
   const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); 
   const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
 
-  // Poin 2: Filter Tabs Kategori Indisipliner
-  const [activeSubTabLeaderboard, setActiveSubTabLeaderboard] = useState('ranking'); // 'ranking' | 'indisipliner'
-  const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late'); // 'late' | 'overbreak' | 'waterbreak'
+  // Filter Tabs Kategori Indisipliner: 'late' | 'overbreak' | 'ghosting' | 'soc'
+  const [activeSubTabLeaderboard, setActiveSubTabLeaderboard] = useState('ranking');
+  const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late');
   
-  const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topOverWaterbreak: [] });
-  const [managerInfractionRankings, setManagerInfractionRankings] = useState({ topLate: [], topOverbreak: [], topOverWaterbreak: [] });
+  const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
+  const [managerInfractionRankings, setManagerInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
+
+  // Modal Input Pelanggaran SOC / Unprosedural
+  const [showReportViolationModal, setShowReportViolationModal] = useState(false);
+  const [reportTargetCrewId, setReportTargetCrewId] = useState('');
+  const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
+  const [reportNotes, setReportNotes] = useState('');
+  const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5');
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
   // State Log Foto
   const [allCrewLogs, setAllCrewLogs] = useState([]);
@@ -343,16 +364,11 @@ export default function BreakSystem() {
           const p = profileMap[log.user_id];
           if (p) {
             const isCurrentlyBreaking = (Boolean(log.break_start_time) && !Boolean(log.break_end_time)) || log.discipline_status === 'Sedang Istirahat';
+            const nLower = (p.full_name || '').toLowerCase();
+            const plLower = (p.station_placement || '').toLowerCase();
+            const rLower = (p.role || '').toLowerCase();
 
-            const nameLower = (p.full_name || '').toLowerCase();
-            const placementLower = (p.station_placement || '').toLowerCase();
-            const roleLower = (p.role || '').toLowerCase();
-
-            const isMgr = nameLower.includes('owner') || 
-                          placementLower.includes('owner') || 
-                          placementLower.includes('manager') || 
-                          placementLower.includes('atasan') || 
-                          roleLower === 'manager';
+            const isMgr = nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower === 'manager';
 
             if (isMgr) managerCount += 1;
             else staffCount += 1;
@@ -410,9 +426,7 @@ export default function BreakSystem() {
               .eq('id', prof.company_id)
               .maybeSingle();
               
-            if (!rError && rulesData) {
-              setOfficeRules(rulesData);
-            }
+            if (!rError && rulesData) setOfficeRules(rulesData);
           } catch (err) {
             console.error("Gagal sinkronisasi aturan:", err);
           }
@@ -632,17 +646,20 @@ export default function BreakSystem() {
     }
   }, []);
 
-  // ================= LEADERBOARD & REKAP INDISIPLINER SEPARASI ROLE =================
+  // ================= LEADERBOARD & INDISIPLINER (TERMASUK SOC & GHOSTING) =================
   const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
     try {
-      const [{ data: profiles, error: pError }, { data: logs }] = await Promise.all([
+      const [{ data: profiles, error: pError }, { data: logs }, { data: violations }] = await Promise.all([
         supabase
           .from('user_profiles')
           .select('id, full_name, avatar, station_placement, role, total_points'),
         supabase
           .from('attendance_logs')
-          .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in')
+          .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in, is_outside_radius, distance_meters'),
+        supabase
+          .from('operational_violations')
+          .select('*')
       ]);
         
       if (pError || !profiles) {
@@ -662,14 +679,10 @@ export default function BreakSystem() {
       }
 
       const isProfileManager = (p) => {
-        const nameLower = (p.full_name || '').toLowerCase();
-        const placementLower = (p.station_placement || '').toLowerCase();
-        const roleLower = (p.role || '').toLowerCase();
-        return nameLower.includes('owner') || 
-               placementLower.includes('owner') || 
-               placementLower.includes('manager') || 
-               placementLower.includes('atasan') || 
-               roleLower === 'manager';
+        const nLower = (p.full_name || '').toLowerCase();
+        const plLower = (p.station_placement || '').toLowerCase();
+        const rLower = (p.role || '').toLowerCase();
+        return nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower === 'manager';
       };
 
       const filteredCrewProfiles = profiles.filter(p => !isProfileManager(p));
@@ -678,7 +691,8 @@ export default function BreakSystem() {
       const processData = (profileList) => {
         const lateRankingList = [];
         const overbreakRankingList = [];
-        const waterbreakRankingList = [];
+        const ghostingRankingList = [];
+        const socRankingList = [];
 
         const leaderboardArray = profileList.map(person => {
           let pts = 100;
@@ -692,11 +706,13 @@ export default function BreakSystem() {
           let totalLateMinutes = 0;
           let overBreakCount = 0;
           let totalOverBreakMinutes = 0;
-          let overWaterbreakCount = 0;
-          let totalBreakMinutes = 0;
+          let ghostingCount = 0;
+          let socCount = 0;
           let normalBreakCount = 0;
+          let totalBreakMinutes = 0;
           const userInfractionHistory = [];
 
+          // 1. Periksa Log Kehadiran
           const personLogs = (logs || []).filter(l => {
             if (l.user_id !== person.id) return false;
             if (!l.created_at) return true;
@@ -705,14 +721,10 @@ export default function BreakSystem() {
 
           personLogs.forEach(log => {
             const logDate = new Date(log.created_at || log.actual_in);
-            const formattedDate = logDate.toLocaleDateString('id-ID', {
-              day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar'
-            });
-            const formattedTime = logDate.toLocaleTimeString('id-ID', {
-              hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar'
-            });
+            const formattedDate = logDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' });
+            const formattedTime = logDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' });
 
-            // 1. Cek Keterlambatan
+            // Cek Keterlambatan
             if (log.status_in && log.status_in.toLowerCase().includes('terlambat')) {
               try {
                 const match = log.status_in.match(/Terlambat (\d+)m/);
@@ -732,7 +744,7 @@ export default function BreakSystem() {
               } catch(e) {}
             }
 
-            // 2. Cek Overbreak
+            // Cek Overbreak
             if (log.break_start_time && log.break_end_time) {
               normalBreakCount += 1;
               const start = new Date(log.break_start_time);
@@ -753,7 +765,7 @@ export default function BreakSystem() {
                   detail: `Over +${overM} Menit (Total break ${actualMins}m)`,
                   date: formattedDate,
                   time: `${start.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
-                  note: 'Melebihi durasi break yang ditentukan'
+                  note: 'Melebihi alokasi waktu istirahat'
                 });
               }
             } else if (log.discipline_status === 'Overbreak') {
@@ -770,18 +782,38 @@ export default function BreakSystem() {
               });
             }
 
-            // 3. Cek Over Waterbreak
-            if (log.discipline_status && log.discipline_status.toLowerCase().includes('waterbreak')) {
-              overWaterbreakCount += 1;
+            // Cek Ghosting (di luar radius)
+            if (log.is_outside_radius || (log.discipline_status && log.discipline_status.toLowerCase().includes('ghosting'))) {
+              ghostingCount += 1;
               userInfractionHistory.push({
-                type: 'Over Waterbreak',
-                badgeColor: 'bg-purple-100 text-purple-800 border-purple-200',
-                detail: 'Melebihi alokasi izin pendek (toilet/shalat)',
+                type: 'Ghosting / Luar Radius',
+                badgeColor: 'bg-red-100 text-red-800 border-red-200',
+                detail: `${log.distance_meters || '50+'}m di luar area tugas`,
                 date: formattedDate,
                 time: `${formattedTime} WITA`,
-                note: 'Izin darurat melewati batas menit'
+                note: 'Meninggalkan area tugas outlet tanpa izin resmi'
               });
             }
+          });
+
+          // 2. Periksa Laporan Pelanggaran SOC / Unprosedural Manual
+          const personViolations = (violations || []).filter(v => {
+            if (v.crew_id !== person.id) return false;
+            if (!v.created_at) return true;
+            return v.created_at.substring(0, 7) === selectedMonth;
+          });
+
+          personViolations.forEach(v => {
+            socCount += 1;
+            const vDate = new Date(v.created_at);
+            userInfractionHistory.push({
+              type: v.violation_type || 'Pelanggaran SOC',
+              badgeColor: 'bg-orange-100 text-orange-800 border-orange-200',
+              detail: `Poin (-${v.penalty_points || 0}) • Pelapor: ${v.reporter_name || 'QC/Stocker/Manager'}`,
+              date: vDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' }),
+              time: `${vDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
+              note: v.notes
+            });
           });
 
           if (lateCount > 0) {
@@ -808,22 +840,35 @@ export default function BreakSystem() {
             });
           }
 
-          if (overWaterbreakCount > 0) {
-            waterbreakRankingList.push({
+          if (ghostingCount > 0) {
+            ghostingRankingList.push({
               id: person.id,
               name: person.full_name,
               avatar: person.avatar,
               role: person.station_placement || person.role,
-              count: overWaterbreakCount,
+              count: ghostingCount,
               totalMinutes: 0,
-              history: userInfractionHistory.filter(h => h.type.includes('Waterbreak'))
+              history: userInfractionHistory.filter(h => h.type.includes('Ghosting'))
+            });
+          }
+
+          if (socCount > 0) {
+            socRankingList.push({
+              id: person.id,
+              name: person.full_name,
+              avatar: person.avatar,
+              role: person.station_placement || person.role,
+              count: socCount,
+              totalMinutes: 0,
+              history: userInfractionHistory.filter(h => !h.type.includes('Terlambat') && !h.type.includes('Overbreak') && !h.type.includes('Ghosting'))
             });
           }
 
           const reasons = [];
           if (lateCount > 0) reasons.push(`${lateCount}x Telat (${totalLateMinutes}m)`);
           if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak (${totalOverBreakMinutes}m)`);
-          if (overWaterbreakCount > 0) reasons.push(`${overWaterbreakCount}x Over Waterbreak`);
+          if (ghostingCount > 0) reasons.push(`${ghostingCount}x Ghosting`);
+          if (socCount > 0) reasons.push(`${socCount}x Unprosedural/SOC`);
 
           let statusDescription = '';
           const hasRealInfractions = reasons.length > 0;
@@ -838,15 +883,13 @@ export default function BreakSystem() {
             statusDescription = '✓ Disiplin Standar (100 Pts)';
           }
 
-          const isBebal = pts < 100 || (hasRealInfractions && pts <= 100);
-
           return {
             id: person.id,
             name: person.full_name || 'Staff Member',
             avatar: person.avatar,
             role: person.station_placement || person.role || 'Staff Crew', 
             points: pts,
-            isBebal: isBebal,
+            isBebal: pts < 100 || (hasRealInfractions && pts <= 100),
             breakInfo: statusDescription,
             infractions: userInfractionHistory
           };
@@ -857,7 +900,8 @@ export default function BreakSystem() {
           rankings: {
             topLate: lateRankingList.sort((a, b) => b.count - a.count || b.totalMinutes - a.totalMinutes),
             topOverbreak: overbreakRankingList.sort((a, b) => b.count - a.count || b.totalMinutes - a.totalMinutes),
-            topOverWaterbreak: waterbreakRankingList.sort((a, b) => b.count - a.count)
+            topGhosting: ghostingRankingList.sort((a, b) => b.count - a.count),
+            topSoc: socRankingList.sort((a, b) => b.count - a.count)
           }
         };
       };
@@ -877,6 +921,57 @@ export default function BreakSystem() {
       setIsFetchingLeaderboard(false);
     }
   }, [selectedMonth, currentMonthYear]);
+
+  // Handle Form Submit Laporan Pelanggaran SOC / Unprosedural
+  const handleSubmitOperationalViolation = async (e) => {
+    e.preventDefault();
+    if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
+    if (!reportNotes.trim()) return alert("Tuliskan deskripsi/catatan pelanggaran.");
+
+    setIsSubmittingReport(true);
+    try {
+      const deduction = parseInt(reportPenaltyPoints) || 0;
+
+      // 1. Simpan ke operational_violations
+      const { error: insErr } = await supabase.from('operational_violations').insert({
+        crew_id: reportTargetCrewId,
+        reported_by: user?.id,
+        reporter_name: profile?.full_name || 'Supervisor/QC',
+        reporter_role: profile?.station_placement || profile?.role || 'Quality Control',
+        violation_type: reportViolationType,
+        notes: reportNotes.trim(),
+        penalty_points: deduction
+      });
+
+      if (insErr) throw insErr;
+
+      // 2. Potong poin kru yang bersangkutan
+      if (deduction > 0) {
+        const { data: targetProf } = await supabase
+          .from('user_profiles')
+          .select('total_points')
+          .eq('id', reportTargetCrewId)
+          .maybeSingle();
+
+        const currentPts = targetProf?.total_points ?? 100;
+        await supabase
+          .from('user_profiles')
+          .update({ total_points: currentPts - deduction })
+          .eq('id', reportTargetCrewId);
+      }
+
+      alert("✓ Laporan pelanggaran operasional berhasil disimpan & poin kedisiplinan diperbarui!");
+      setShowReportViolationModal(false);
+      setReportNotes('');
+      setReportTargetCrewId('');
+      fetchLeaderboard();
+      fetchAttendanceStatus();
+    } catch (err) {
+      alert(`Gagal mengirim laporan: ${err.message}`);
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  };
 
   const openInfractionDetailModal = (crewData) => {
     setSelectedCrewInfractionDetail(crewData);
@@ -902,11 +997,8 @@ export default function BreakSystem() {
   }, [user]);
 
   const fetchAllCrewLogs = useCallback(async (loadMore = false, pageNum = 0) => {
-    if (loadMore) {
-      setIsFetchingMoreLogs(true);
-    } else {
-      setIsFetchingAllLogs(true);
-    }
+    if (loadMore) setIsFetchingMoreLogs(true);
+    else setIsFetchingAllLogs(true);
 
     try {
       const pageToFetch = loadMore ? pageNum : 0;
@@ -935,15 +1027,11 @@ export default function BreakSystem() {
         
         profiles.forEach(p => { 
           profileMap[p.id] = p.full_name;
-          const nameLower = (p.full_name || '').toLowerCase();
-          const placementLower = (p.station_placement || '').toLowerCase();
-          const roleLower = (p.role || '').toLowerCase();
+          const nLower = (p.full_name || '').toLowerCase();
+          const plLower = (p.station_placement || '').toLowerCase();
+          const rLower = (p.role || '').toLowerCase();
           
-          isManagerMap[p.id] = nameLower.includes('owner') || 
-                               placementLower.includes('owner') || 
-                               placementLower.includes('manager') || 
-                               placementLower.includes('atasan') || 
-                               roleLower === 'manager';
+          isManagerMap[p.id] = nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower === 'manager';
         });
 
         const cleanImageUrl = (rawUrl) => {
@@ -1783,7 +1871,7 @@ export default function BreakSystem() {
   const currentUserPoints = profile?.total_points !== null && profile?.total_points !== undefined ? Number(profile.total_points) : 100;
   const activeBadge = getCrewBadge(currentUserPoints);
   
-  // Guard role: Jika bukan manager, otomatis hanya lihat list crew
+  // Guard role: Jika bukan manager, otomatis hanya lihat list crew (Poin 1)
   const activeLeaderboardData = (isManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
   const activeInfractionRanking = (isManager && leaderboardCategory === 'manager') ? managerInfractionRankings : crewInfractionRankings;
   const activeLogData = (isManager && logCategory === 'manager') ? managerCrewLogs : allCrewLogs;
@@ -1971,7 +2059,7 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* PANEL MANAGER */}
+            {/* PANEL MANAGER & OTORISASI IZIN */}
             {isManager && (
               <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
                 <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
@@ -2309,6 +2397,19 @@ export default function BreakSystem() {
               </div>
             )}
 
+            {/* TOMBOL LAPORKAN TINDAKAN UNPROSEDURAL / SOC (Khusus Manager, QC, Stocker) */}
+            {canReportViolation && (
+              <button
+                onClick={() => {
+                  if (allProfiles.length === 0) fetchAllProfilesList();
+                  setShowReportViolationModal(true);
+                }}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm transition-all active:scale-[0.98]"
+              >
+                <FiFileText className="text-rose-400 text-sm" /> Catat Pelanggaran SOC / Unprosedural
+              </button>
+            )}
+
             {isFetchingLeaderboard ? (
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks evaluasi...</div>
             ) : activeSubTabLeaderboard === 'ranking' ? (
@@ -2375,14 +2476,14 @@ export default function BreakSystem() {
                 </div>
               </div>
             ) : (
-              /* VIEW 2: INDISIPLINER DENGAN FILTER PILLS DI ATAS (Poin 2) */
+              /* VIEW 2: INDISIPLINER DENGAN FILTER PILLS DI ATAS (Poin 1 & 2) */
               <div className="space-y-3.5">
                 
                 {/* FILTER PILLS KATEGORI INDISIPLINER */}
-                <div className="grid grid-cols-3 gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
+                <div className="grid grid-cols-4 gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
                   <button
                     onClick={() => setSelectedInfractionCategory('late')}
-                    className={`py-2 px-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'late' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'late' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
                     <span>Terlambat</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topLate.length})</span>
@@ -2390,18 +2491,26 @@ export default function BreakSystem() {
 
                   <button
                     onClick={() => setSelectedInfractionCategory('overbreak')}
-                    className={`py-2 px-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'overbreak' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'overbreak' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
                     <span>Overbreak</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topOverbreak.length})</span>
                   </button>
 
                   <button
-                    onClick={() => setSelectedInfractionCategory('waterbreak')}
-                    className={`py-2 px-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'waterbreak' ? 'bg-purple-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    onClick={() => setSelectedInfractionCategory('ghosting')}
+                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'ghosting' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>Waterbreak</span>
-                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topOverWaterbreak.length})</span>
+                    <span>Ghosting</span>
+                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topGhosting.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedInfractionCategory('soc')}
+                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'soc' ? 'bg-orange-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    <span>Lainnya</span>
+                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topSoc.length})</span>
                   </button>
                 </div>
 
@@ -2484,36 +2593,75 @@ export default function BreakSystem() {
                   </div>
                 )}
 
-                {selectedInfractionCategory === 'waterbreak' && (
+                {selectedInfractionCategory === 'ghosting' && (
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
-                      <p className="text-[10px] font-black text-purple-800 uppercase tracking-widest flex items-center gap-1.5">
-                        <FiDroplet className="text-purple-600 text-xs" /> Ranking Terbanyak Over Waterbreak
+                      <p className="text-[10px] font-black text-red-800 uppercase tracking-widest flex items-center gap-1.5">
+                        <FiAlertTriangle className="text-red-600 text-xs" /> Ranking Terbanyak Ghosting (Luar Radius)
                       </p>
                       <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
                     </div>
 
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                      {activeInfractionRanking.topOverWaterbreak.length === 0 ? (
+                      {activeInfractionRanking.topGhosting.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil over waterbreak pada periode {selectedMonth}. 🌟
+                          Nihil catatan ghosting pada periode {selectedMonth}. 🌟
                         </div>
                       ) : (
-                        activeInfractionRanking.topOverWaterbreak.map((c, idx) => (
+                        activeInfractionRanking.topGhosting.map((c, idx) => (
                           <div 
                             key={c.id} 
                             onClick={() => openInfractionDetailModal(c)}
-                            className="p-3.5 flex items-center justify-between hover:bg-purple-50/40 cursor-pointer transition-colors"
+                            className="p-3.5 flex items-center justify-between hover:bg-red-50/40 cursor-pointer transition-colors"
                           >
                             <div className="flex items-center space-x-3">
-                              <span className="font-mono text-xs font-black text-purple-600 w-4">{idx + 1}.</span>
-                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-purple-100 shadow-2xs" alt="Avatar" />
+                              <span className="font-mono text-xs font-black text-red-600 w-4">{idx + 1}.</span>
+                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-red-100 shadow-2xs" alt="Avatar" />
                               <div>
                                 <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
                                 <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
                               </div>
                             </div>
-                            <span className="bg-purple-100 text-purple-800 text-xs font-black px-2.5 py-1 rounded-xl border border-purple-200">
+                            <span className="bg-red-100 text-red-800 text-xs font-black px-2.5 py-1 rounded-xl border border-red-200">
+                              {c.count}x Ghosting
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedInfractionCategory === 'soc' && (
+                  <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between px-1">
+                      <p className="text-[10px] font-black text-orange-800 uppercase tracking-widest flex items-center gap-1.5">
+                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOC & Unprosedural (QC/Stocker/Manager)
+                      </p>
+                      <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                      {activeInfractionRanking.topSoc.length === 0 ? (
+                        <div className="p-6 text-center text-xs font-semibold text-slate-400">
+                          Nihil pelanggaran SOC/unprosedural pada periode {selectedMonth}. 🌟
+                        </div>
+                      ) : (
+                        activeInfractionRanking.topSoc.map((c, idx) => (
+                          <div 
+                            key={c.id} 
+                            onClick={() => openInfractionDetailModal(c)}
+                            className="p-3.5 flex items-center justify-between hover:bg-orange-50/40 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              <span className="font-mono text-xs font-black text-orange-600 w-4">{idx + 1}.</span>
+                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-orange-100 shadow-2xs" alt="Avatar" />
+                              <div>
+                                <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
+                              </div>
+                            </div>
+                            <span className="bg-orange-100 text-orange-800 text-xs font-black px-2.5 py-1 rounded-xl border border-orange-200">
                               {c.count}x Pelanggaran
                             </span>
                           </div>
@@ -2570,7 +2718,7 @@ export default function BreakSystem() {
                       </div>
                       <p className="text-xs font-extrabold text-slate-900">{inf.detail}</p>
                       {inf.note && (
-                        <p className="text-[9px] text-slate-500 font-medium bg-white px-2 py-1 rounded-lg border border-slate-100">
+                        <p className="text-[9px] text-slate-600 font-medium bg-white px-2.5 py-1.5 rounded-xl border border-slate-100 leading-relaxed">
                           {inf.note}
                         </p>
                       )}
@@ -2588,6 +2736,97 @@ export default function BreakSystem() {
                 </button>
               </div>
 
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL INPUT PELANGGARAN SOC / UNPROSEDURAL ================= */}
+        {showReportViolationModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4">
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-orange-50 text-orange-600 rounded-xl">
+                    <FiFileText className="text-base" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                      Catat Pelanggaran Operasional
+                    </h3>
+                    <p className="text-[9px] text-slate-400 font-medium">Input tindakan unprosedural / di luar SOC</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowReportViolationModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 transition-colors">
+                  <FiX className="text-lg"/>
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitOperationalViolation} className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-600 uppercase">Pilih Kru yang Melanggar</label>
+                  <select
+                    value={reportTargetCrewId}
+                    onChange={(e) => setReportTargetCrewId(e.target.value)}
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500"
+                  >
+                    <option value="">-- Pilih Kru --</option>
+                    {allProfiles.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-600 uppercase">Jenis Pelanggaran</label>
+                    <select
+                      value={reportViolationType}
+                      onChange={(e) => setReportViolationType(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-900 outline-none"
+                    >
+                      <option value="Pelanggaran SOC">Pelanggaran SOC</option>
+                      <option value="Tindakan Unprosedural">Unprosedural</option>
+                      <option value="Kelalaian Operasional">Kelalaian Kerja</option>
+                      <option value="Tindakan Indisipliner Lain">Lainnya</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-600 uppercase">Pengurangan Poin</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={reportPenaltyPoints}
+                      onChange={(e) => setReportPenaltyPoints(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-slate-600 uppercase">Rincian Kejadian / Catatan</label>
+                  <textarea
+                    rows={3}
+                    value={reportNotes}
+                    onChange={(e) => setReportNotes(e.target.value)}
+                    placeholder="Contoh: Tidak memakai sarung tangan saat handling dimsum / mengabaikan resep..."
+                    required
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingReport}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all active:scale-[0.98]"
+                >
+                  {isSubmittingReport ? 'Menyimpan Laporan...' : 'Kirim & Simpan Pelanggaran'}
+                </button>
+              </form>
             </div>
           </div>
         )}
