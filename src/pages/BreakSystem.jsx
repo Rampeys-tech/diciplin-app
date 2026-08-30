@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../api';
 import { useAuth } from '../context/AuthContext';
 import imageCompression from 'browser-image-compression';
@@ -18,7 +18,6 @@ import {
   FiShield,
   FiCheckCircle,
   FiAlertCircle,
-  FiCalendar,
   FiImage,
   FiMapPin,
   FiAlertTriangle,
@@ -39,7 +38,9 @@ import {
   FiBriefcase,
   FiLayers,
   FiCheckSquare,
-  FiChevronDown
+  FiChevronDown,
+  FiCalendar,
+  FiActivity
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -58,35 +59,11 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   return R * c; 
 }
 
-// Daftar Pilihan Jam Shift Bulat (24 Jam Lengkap)
-const SHIFT_HOURS_OPTIONS = [
-  { label: '00:00 WITA (Midnight)', hour: 0 },
-  { label: '01:00 WITA', hour: 1 },
-  { label: '02:00 WITA', hour: 2 },
-  { label: '03:00 WITA', hour: 3 },
-  { label: '04:00 WITA', hour: 4 },
-  { label: '05:00 WITA', hour: 5 },
-  { label: '06:00 WITA', hour: 6 },
-  { label: '07:00 WITA', hour: 7 },
-  { label: '08:00 WITA', hour: 8 },
-  { label: '09:00 WITA', hour: 9 },
-  { label: '10:00 WITA', hour: 10 },
-  { label: '11:00 WITA', hour: 11 },
-  { label: '12:00 WITA', hour: 12 },
-  { label: '13:00 WITA', hour: 13 },
-  { label: '14:00 WITA', hour: 14 },
-  { label: '15:00 WITA', hour: 15 },
-  { label: '16:00 WITA', hour: 16 },
-  { label: '17:00 WITA', hour: 17 },
-  { label: '18:00 WITA', hour: 18 },
-  { label: '19:00 WITA', hour: 19 },
-  { label: '20:00 WITA', hour: 20 },
-  { label: '21:00 WITA', hour: 21 },
-  { label: '22:00 WITA (Shift Malam)', hour: 22 },
-  { label: '23:00 WITA', hour: 23 }
-];
+const SHIFT_HOURS_OPTIONS = Array.from({ length: 24 }, (_, i) => ({
+  label: `${i.toString().padStart(2, '0')}:00 WITA${i === 0 ? ' (Midnight)' : i === 22 ? ' (Shift Malam)' : ''}`,
+  hour: i
+}));
 
-// DAFTAR STATION KHUSUS CREW & STAFF
 const CREW_STATION_OPTIONS = [
   'Station Noodle',
   'Station Dimsum',
@@ -102,21 +79,20 @@ const CREW_STATION_OPTIONS = [
   'Dishwasher'
 ];
 
-// ================= KONFIGURASI PAGINATION LOG FOTO (ANTI CACHED-EGRESS BOROS) =================
-const LOGS_PAGE_SIZE = 20; // jumlah log yang ditarik per halaman, jangan tarik semua sekaligus
-const LOGS_MAX_AGE_DAYS = 7; // hanya ambil log 7 hari terakhir by default
+const LOGS_PAGE_SIZE = 20;
+const LOGS_MAX_AGE_DAYS = 60;
 
 export default function BreakSystem() {
   const { user } = useAuth();
   const [profile, setProfile] = useState(null);
   const [activeTab, setActiveTab] = useState('absen');
-  const [officeRules, setOfficeRules] = useState(null);
+  const [, setOfficeRules] = useState(null);
 
   // ================= STATE ABSENSI UTAMA =================
   const [isOnBreak, setIsOnBreak] = useState(false);
   const [breakStartTime, setBreakStartTime] = useState(null);
   const [timeLeft, setTimeLeft] = useState(3600); 
-  const [maxBreakDuration, setMaxBreakDuration] = useState(3600); 
+  const [, setMaxBreakDuration] = useState(3600); 
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraMode, setCameraMode] = useState(''); 
   const [capturedImage, setCapturedImage] = useState(null);
@@ -131,12 +107,10 @@ export default function BreakSystem() {
   const [activeLogId, setActiveLogId] = useState(null);
   const [requiredWorkHours, setRequiredWorkHours] = useState(9); 
 
-  // Modal Pilihan Jam Shift & Station
   const [showShiftPicker, setShowShiftPicker] = useState(false);
   const [selectedShiftHour, setSelectedShiftHour] = useState(9);
   const [selectedStation, setSelectedStation] = useState('Station Noodle');
 
-  // ================= STATE REKAP OPERASIONAL PER STATION =================
   const [activeShiftStats, setActiveShiftStats] = useState({
     totalScheduledCrew: 0,
     totalActiveNow: 0,
@@ -145,33 +119,44 @@ export default function BreakSystem() {
     stationCounts: {}
   });
 
-  // ================= STATE MONITORING & LIVE DATA =================
-  const [breakLogs, setBreakLogs] = useState([]);
-  const [isFetchingLogs, setIsFetchingLogs] = useState(false);
+  const [, setBreakLogs] = useState([]);
   const [liveBreaks, setLiveBreaks] = useState([]);
   const [ghostingCrew, setGhostingCrew] = useState([]);
   const [waterBreaks, setWaterBreaks] = useState([]);
   const [isFetchingLive, setIsFetchingLive] = useState(false);
   
-  // Triggers Voice Alarm AI
-  const [hasPlayed5MinAlarm, setHasPlayedAlarm] = useState(false);
+  const [hasPlayed5MinAlarm, setHasPlayed5MinAlarm] = useState(false);
   const [hasPlayed0MinAlarm, setHasPlayed0MinAlarm] = useState(false);
   const [hasNotifiedOverbreak, setHasNotifiedOverbreak] = useState(false);
   const announcedOverbreakCrew = useRef(new Set());
 
-  const isManager = profile?.station_placement?.toLowerCase() === 'manager' || 
-                    profile?.station_placement?.toLowerCase() === 'atasan' || 
-                    profile?.station_placement?.toLowerCase() === 'owner' || 
-                    profile?.full_name?.toLowerCase().includes('owner') || 
-                    profile?.role?.toLowerCase() === 'manager';
+  // Role Guard Manager
+  const isManager = Boolean(
+    profile?.station_placement?.toLowerCase() === 'manager' || 
+    profile?.station_placement?.toLowerCase() === 'atasan' || 
+    profile?.station_placement?.toLowerCase() === 'owner' || 
+    profile?.full_name?.toLowerCase().includes('owner') || 
+    profile?.role?.toLowerCase() === 'manager'
+  );
 
-  // ================= STATE LEADERBOARD POIN =================
+  // ================= STATE LEADERBOARD, HISTORI & INDISIPLINER =================
+  const currentMonthYear = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthYear);
   const [leaderboard, setLeaderboard] = useState([]);
   const [managerLeaderboard, setManagerLeaderboard] = useState([]);
   const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); 
   const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
 
-  // ================= STATE LOG FOTO (+ PAGINATION) =================
+  // Poin 2: Filter Tabs Kategori Indisipliner
+  const [activeSubTabLeaderboard, setActiveSubTabLeaderboard] = useState('ranking'); // 'ranking' | 'indisipliner'
+  const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late'); // 'late' | 'overbreak' | 'waterbreak'
+  
+  const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topOverWaterbreak: [] });
+  const [managerInfractionRankings, setManagerInfractionRankings] = useState({ topLate: [], topOverbreak: [], topOverWaterbreak: [] });
+  const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
+  const [showInfractionModal, setShowInfractionModal] = useState(false);
+
+  // State Log Foto
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
   const [logCategory, setLogCategory] = useState('crew'); 
@@ -179,15 +164,15 @@ export default function BreakSystem() {
   const [isFetchingMoreLogs, setIsFetchingMoreLogs] = useState(false);
   const [logsPage, setLogsPage] = useState(0);
   const [hasMoreLogs, setHasMoreLogs] = useState(true);
+  const isLogsFetchedRef = useRef(false);
 
-  // ================= STATE GEOLOKASI =================
   const [humanDetectionStatus, setHumanDetectionStatus] = useState('LOADING_ENGINE'); 
   const [currentSystemTime, setCurrentSystemTime] = useState(new Date());
-  const [userLocation, setUserLocation] = useState({ lat: null, lng: null });
+  const [, setUserLocation] = useState({ lat: null, lng: null });
   const [isVerifyingLocation, setIsVerifyingLocation] = useState(false);
 
   const [allProfiles, setAllProfiles] = useState([]);
-  const [isFetchingProfiles, setIsFetchingProfiles] = useState(false);
+  const [, setIsFetchingProfiles] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState('');
   const [selectedIzinType, setSelectedIzinType] = useState('toilet'); 
   const [customIzinMinutes, setCustomIzinMinutes] = useState('10');
@@ -196,7 +181,7 @@ export default function BreakSystem() {
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
-  const [oldPassword, setOldPassword] = useState('');
+  const [, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
@@ -204,10 +189,9 @@ export default function BreakSystem() {
   const localStreamRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  // Suara AI Natural
-  const speakAiVoice = (text) => {
+  const speakAiVoice = useCallback((text) => {
     try {
-      if ('speechSynthesis' in window) {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'id-ID';
@@ -224,7 +208,40 @@ export default function BreakSystem() {
     } catch (e) {
       console.error("SpeechSynthesis Error:", e);
     }
-  };
+  }, []);
+
+  const triggerSystemNotification = useCallback((title, body) => {
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.ready.then((reg) => {
+            reg.showNotification(title, {
+              body,
+              icon: '/Diciplin-logo.png',
+              badge: '/Diciplin-logo.png',
+              vibrate: [300, 100, 300, 100, 300],
+              requireInteraction: true
+            });
+          });
+        } else {
+          new Notification(title, { body, icon: '/Diciplin-logo.png' });
+        }
+      }
+    } catch (e) {
+      console.error("Notification trigger error:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
+    }
+  }, []);
 
   const formatCountdown = (seconds) => {
     if (seconds < 0) {
@@ -238,14 +255,15 @@ export default function BreakSystem() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const closeCamera = () => {
+  const closeCamera = useCallback(() => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
     }
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     setIsCameraOpen(false);
     setCapturedImage(null);
-  };
+  }, []);
 
   const getCrewBadge = (points) => {
     if (points >= 120) return { name: 'Elite Guardian', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
@@ -254,7 +272,33 @@ export default function BreakSystem() {
     return { name: 'Under Review', color: 'bg-rose-50 text-rose-700 border-rose-200' };
   };
 
-  const fetchAllProfilesList = async () => {
+  const checkAndPerformMonthlyReset = useCallback(async (currentProf) => {
+    if (!currentProf || !user?.id) return;
+    const now = new Date();
+    const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const userLastReset = currentProf.last_points_reset_month;
+
+    if (userLastReset && userLastReset !== currentMonthKey) {
+      try {
+        await supabase.from('discipline_monthly_history').insert({
+          user_id: user.id,
+          month_year: userLastReset,
+          final_points: currentProf.total_points ?? 100
+        });
+
+        await supabase.from('user_profiles').update({
+          total_points: 100,
+          last_points_reset_month: currentMonthKey
+        }).eq('id', user.id);
+
+        setProfile(prev => prev ? ({ ...prev, total_points: 100, last_points_reset_month: currentMonthKey }) : prev);
+      } catch (err) {
+        console.error("Gagal auto reset bulanan:", err);
+      }
+    }
+  }, [user]);
+
+  const fetchAllProfilesList = useCallback(async () => {
     setIsFetchingProfiles(true);
     try {
       const { data: profilesData, error } = await supabase
@@ -270,20 +314,20 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingProfiles(false);
     }
-  };
+  }, []);
 
-  // KALKULASI SINKRON TOTAL IC, STANDBY, & BREAK
-  const fetchActiveShiftStats = async () => {
+  const fetchActiveShiftStats = useCallback(async () => {
     try {
-      const { data: activeLogs, error: lError } = await supabase
-        .from('attendance_logs')
-        .select('user_id, status_in, break_start_time, break_end_time, discipline_status')
-        .not('actual_in', 'is', null)
-        .is('actual_out', null);
-
-      const { data: profiles, error: pError } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, station_placement, role');
+      const [{ data: activeLogs, error: lError }, { data: profiles, error: pError }] = await Promise.all([
+        supabase
+          .from('attendance_logs')
+          .select('user_id, status_in, break_start_time, break_end_time, discipline_status')
+          .not('actual_in', 'is', null)
+          .is('actual_out', null),
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, station_placement, role')
+      ]);
 
       if (!lError && !pError && activeLogs && profiles) {
         const profileMap = {};
@@ -310,11 +354,8 @@ export default function BreakSystem() {
                           placementLower.includes('atasan') || 
                           roleLower === 'manager';
 
-            if (isMgr) {
-              managerCount += 1;
-            } else {
-              staffCount += 1;
-            }
+            if (isMgr) managerCount += 1;
+            else staffCount += 1;
 
             if (!isCurrentlyBreaking) {
               totalActiveNow += 1;
@@ -345,236 +386,174 @@ export default function BreakSystem() {
     } catch (e) {
       console.error("Gagal sinkronisasi data shift aktif:", e);
     }
-  };
-
-  useEffect(() => {
-    const clockTimer = setInterval(() => setCurrentSystemTime(new Date()), 1000);
-    return () => clearInterval(clockTimer);
   }, []);
 
-  useEffect(() => {
-    const liveTrackerTimer = setInterval(() => {
-      if (liveBreaks.length > 0) updateDurationsLocally();
-      if (waterBreaks.length > 0) updateWaterBreaksLocally();
-    }, 1000);
-    return () => clearInterval(liveTrackerTimer);
-  }, [liveBreaks, waterBreaks, isManager]);
-
-  const updateDurationsLocally = () => {
-    setLiveBreaks(prev => prev.map(crew => {
-      if (!crew.rawRawStart) return crew;
-      const elapsedSec = Math.floor((Date.now() - crew.rawRawStart.getTime()) / 1000);
-      const allowedSec = crew.allowedSec || 3600;
-      const isOver = elapsedSec > allowedSec;
-      const timeLeftSec = allowedSec - elapsedSec;
-      
-      let displayDuration = `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s berjalan`;
-      let isWarning = timeLeftSec <= 300 && timeLeftSec > 0;
-
-      if (isOver) {
-        const overSec = elapsedSec - allowedSec;
-        const overMins = Math.floor(overSec / 60);
-        displayDuration = `Over +${overMins}m ${overSec % 60}s (Poin -${overMins})`;
-
-        if (isManager && !announcedOverbreakCrew.current.has(crew.id)) {
-          announcedOverbreakCrew.current.add(crew.id);
-          speakAiVoice(`Pemberitahuan Manager. Rekan kerja atas nama ${crew.name} di ${crew.station} terdeteksi telah over break.`);
-        }
-      }
-
-      return {
-        ...crew,
-        duration: displayDuration,
-        isOverBreak: isOver,
-        isWarningBreak: isWarning
-      };
-    }));
-  };
-
-  const updateWaterBreaksLocally = () => {
-    setWaterBreaks(prev => prev.map(wb => {
-      if (!wb.rawRawStart) return wb;
-      const elapsedSec = Math.floor((Date.now() - wb.rawRawStart.getTime()) / 1000);
-      const totalAllowedSec = wb.allowedSec || 600; 
-      const remainingSec = totalAllowedSec - elapsedSec;
-      const isOver = remainingSec <= 0;
-
-      let displayCountdown = '';
-      if (isOver) {
-        const overSec = Math.abs(remainingSec);
-        const overMins = Math.max(1, Math.floor(overSec / 60));
-        displayCountdown = `Over +${Math.floor(overSec / 60)}m ${overSec % 60}s (Poin -${overMins})`;
-      } else {
-        displayCountdown = `${Math.floor(remainingSec / 60)}m ${remainingSec % 60}s sisa`;
-      }
-
-      return {
-        ...wb,
-        duration: displayCountdown,
-        isOverBreak: isOver,
-        elapsedSec: elapsedSec,
-        allowedSec: totalAllowedSec
-      };
-    }));
-  };
-
-  const handleStopWaterbreak = async (crewId) => {
+  const fetchAttendanceStatus = useCallback(async () => {
+    if (!user?.id) return;
     try {
-      const targetId = crewId || user?.id;
-      if (!targetId) return;
-
-      const currentWb = waterBreaks.find(w => w.id === targetId);
-      let pointDeduction = 0;
-      if (currentWb && currentWb.isOverBreak) {
-        const overSec = currentWb.elapsedSec - currentWb.allowedSec;
-        pointDeduction = Math.max(1, Math.floor(overSec / 60));
-      }
-
-      const { data: targetProfile } = await supabase
+      const { data: prof } = await supabase
         .from('user_profiles')
-        .select('total_points')
-        .eq('id', targetId)
+        .select('*')
+        .eq('id', user.id)
         .maybeSingle();
-
-      if (targetProfile && pointDeduction > 0) {
-        const existingPts = targetProfile.total_points !== null && targetProfile.total_points !== undefined ? Number(targetProfile.total_points) : 100;
-        // BISA MINUS KE BAWAH TANPA BATAS 0
-        const newPts = existingPts - pointDeduction;
-
-        await supabase
-          .from('user_profiles')
-          .update({ total_points: newPts })
-          .eq('id', targetId);
-      }
-
-      const { error } = await supabase
-        .from('user_profiles')
-        .update({
-          current_izin_start: null,
-          current_izin_duration: null,
-          current_izin_type: null
-        })
-        .eq('id', targetId);
-
-      if (error) throw error;
-      
-      alert(`✓ Status Waterbreak Selesai!${pointDeduction > 0 ? ` (-${pointDeduction} Poin)` : ''}`);
-      await fetchAttendanceStatus();
-      await fetchLiveBreakData();
-      await fetchLeaderboard();
-      await fetchActiveShiftStats();
-    } catch (err) {
-      alert(`Gagal menghentikan waterbreak: ${err.message}`);
-    }
-  };
-
-  const formatWITATime = (date) => {
-    try {
-      return date.toLocaleTimeString('id-ID', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Makassar'
-      });
-    } catch (e) {
-      return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    }
-  };
-
-  const formatWITADate = (date) => {
-    try {
-      return date.toLocaleDateString('id-ID', {
-        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Makassar'
-      });
-    } catch (e) {
-      return date.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    }
-  };
-
-  useEffect(() => {
-    if (!checkInTime || hasCheckedOut) {
-      setIsEligibleForCheckOut(false);
-      return;
-    }
-
-    const checkEligibility = () => {
-      let checkInHour = 0;
-      try {
-        const checkInHourStr = checkInTime.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' });
-        checkInHour = parseInt(checkInHourStr);
-      } catch (e) {
-        checkInHour = new Date(checkInTime).getHours();
-      }
-
-      const isShift22 = (selectedShiftHour === 22 || checkInHour === 22);
-      const targetHours = isShift22 ? 8 : 9;
-      setRequiredWorkHours(targetHours);
-
-      const now = new Date();
-      const durationMs = now.getTime() - new Date(checkInTime).getTime();
-      const durationHours = durationMs / (1000 * 60 * 60);
-      setIsEligibleForCheckOut(durationHours >= targetHours);
-    };
-
-    checkEligibility();
-    const eligibilityTimer = setInterval(checkEligibility, 5000); 
-    return () => clearInterval(eligibilityTimer);
-  }, [checkInTime, hasCheckedOut, selectedShiftHour]);
-
-  // ALARM SETIAP 5 MENIT SEBELUM BREAK HABIS & NOTIFIKASI
-  useEffect(() => {
-    let timer = null;
-    if (isOnBreak) {
-      timer = setInterval(async () => {
-        const savedStart = localStorage.getItem('resto_break_start_time');
-        const savedDuration = localStorage.getItem('resto_break_max_duration') || '3600';
         
-        if (savedStart) {
-          const maxDurationSec = parseInt(savedDuration);
-          const elapsedSeconds = Math.floor((Date.now() - parseInt(savedStart)) / 1000);
-          const remaining = maxDurationSec - elapsedSeconds;
-          
-          setTimeLeft(remaining);
-          setMaxBreakDuration(maxDurationSec);
+      if (prof) {
+        setProfile(prof);
+        checkAndPerformMonthlyReset(prof);
+        if (prof.station_placement) setSelectedStation(prof.station_placement);
 
-          if (remaining <= 300 && remaining > 0 && !hasPlayed5MinAlarm) {
-            setHasPlayedAlarm(true);
-            speakAiVoice("Halo rekan crew, waktu istirahat Anda tersisa lima menit lagi. Silakan bersiap-siap kembali ke station kerja ya.");
-          }
-
-          if (remaining === 0 && !hasPlayed0MinAlarm) {
-            setHasPlayed0MinAlarm(true);
-            speakAiVoice("Waktu istirahat Anda telah selesai. Mohon segera kembali ke station dan lakukan presensi selesai break.");
-          }
-
-          if (remaining < 0 && !hasNotifiedOverbreak && activeLogId) {
-            setHasNotifiedOverbreak(true);
-            speakAiVoice("Perhatian, waktu istirahat Anda telah melewati batas atau over break. Poin kedisiplinan mulai terpotong otomatis.");
+        if (prof.company_id) {
+          try {
+            const { data: rulesData, error: rError } = await supabase
+              .from('companies') 
+              .select('latitude, longitude, radius_meter')
+              .eq('id', prof.company_id)
+              .maybeSingle();
+              
+            if (!rError && rulesData) {
+              setOfficeRules(rulesData);
+            }
+          } catch (err) {
+            console.error("Gagal sinkronisasi aturan:", err);
           }
         }
-      }, 1000);
-    }
-    return () => clearInterval(timer);
-  }, [isOnBreak, timeLeft, hasPlayed5MinAlarm, hasPlayed0MinAlarm, hasNotifiedOverbreak, activeLogId]);
+      }
 
-  const fetchLiveBreakData = async () => {
+      const safeWindow = new Date();
+      safeWindow.setHours(safeWindow.getHours() - 36);
+
+      const { data: activeLogs } = await supabase
+        .from('attendance_logs')
+        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
+        .eq('user_id', user.id)
+        .is('actual_out', null)
+        .gte('created_at', safeWindow.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      let currentLog = activeLogs?.[0];
+
+      if (!currentLog) {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const { data: logs } = await supabase
+          .from('attendance_logs')
+          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
+          .eq('user_id', user.id)
+          .gte('created_at', todayStart.toISOString())
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        currentLog = logs?.[0];
+      }
+
+      if (currentLog) {
+        setActiveLogId(currentLog.id);
+        setHasCheckedIn(!!currentLog.actual_in);
+        setHasCheckedOut(!!currentLog.actual_out);
+        
+        const inTime = currentLog.actual_in ? new Date(currentLog.actual_in) : null;
+        setCheckInTime(inTime);
+
+        if (currentLog.status_in && currentLog.status_in.includes('Shift ')) {
+          try {
+            const parsedHour = parseInt(currentLog.status_in.split('Shift ')[1].split(':')[0]);
+            if (!isNaN(parsedHour)) setSelectedShiftHour(parsedHour);
+          } catch(e) {}
+        }
+        
+        const breaking = (!!currentLog.break_start_time && !currentLog.break_end_time) || currentLog.discipline_status === 'Sedang Istirahat';
+        
+        if (breaking) {
+          setIsOnBreak(true);
+          if (currentLog.break_start_time) {
+            setBreakStartTime(new Date(currentLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
+          } else {
+            setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
+          }
+          
+          let checkInHour = 0;
+          try {
+            const hourStr = currentLog.actual_in ? new Date(currentLog.actual_in).toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' }) : '0';
+            checkInHour = parseInt(hourStr);
+          } catch(e) {
+            checkInHour = currentLog.actual_in ? new Date(currentLog.actual_in).getHours() : 0;
+          }
+
+          const allowedBreakSec = (checkInHour === 22) ? 1800 : 3600; 
+          const startTimeMs = currentLog.break_start_time ? new Date(currentLog.break_start_time).getTime() : Date.now();
+          const elapsed = Math.floor((Date.now() - startTimeMs) / 1000);
+          
+          setTimeLeft(allowedBreakSec - elapsed);
+          setMaxBreakDuration(allowedBreakSec);
+        } else {
+          setIsOnBreak(false);
+          setBreakStartTime(null);
+        }
+      } else {
+        setHasCheckedIn(false);
+        setHasCheckedOut(false);
+        setCheckInTime(null);
+        setIsOnBreak(false);
+        setActiveLogId(null);
+        setBreakStartTime(null);
+      }
+    } catch (err) {
+      console.error("Gagal memuat status kehadiran:", err);
+    }
+  }, [user, checkAndPerformMonthlyReset]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('attendance_realtime_alert')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'attendance_logs' },
+        (payload) => {
+          const newRow = payload.new;
+          if (newRow.user_id === user.id && newRow.discipline_status === 'Overbreak') {
+            triggerSystemNotification(
+              "⚠️ PERINGATAN OVERBREAK!",
+              "Waktu istirahat Anda telah habis! Poin kedisiplinan Anda mulai terpotong otomatis."
+            );
+          }
+          if (isManager && newRow.user_id !== user.id && newRow.discipline_status === 'Overbreak') {
+            triggerSystemNotification(
+              "🚨 ALERT MANAGER: CREW OVERBREAK!",
+              "Rekan kru terdeteksi melewati batas istirahat. Segera periksa radar live."
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, isManager, triggerSystemNotification]);
+
+  const fetchLiveBreakData = useCallback(async () => {
     setIsFetchingLive(true);
     try {
-      const { data: logsData, error: logsError } = await supabase
-        .from('attendance_logs')
-        .select('id, user_id, break_start_time, break_end_time, actual_in, actual_out, discipline_status, is_outside_radius, distance_meters, status_in')
-        .not('actual_in', 'is', null)
-        .is('actual_out', null);
+      const [{ data: logsData, error: logsError }, { data: wbData }, { data: profilesData, error: profilesError }] = await Promise.all([
+        supabase
+          .from('attendance_logs')
+          .select('id, user_id, break_start_time, break_end_time, actual_in, actual_out, discipline_status, is_outside_radius, distance_meters, status_in')
+          .not('actual_in', 'is', null)
+          .is('actual_out', null),
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, station_placement, current_izin_start, current_izin_duration, current_izin_type')
+          .not('current_izin_start', 'is', null),
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, station_placement')
+      ]);
 
-      if (logsError) throw logsError;
-
-      const { data: wbData } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, station_placement, current_izin_start, current_izin_duration, current_izin_type')
-        .not('current_izin_start', 'is', null);
-
-      const { data: profilesData, error: profilesError } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, station_placement');
-
-      if (profilesError) throw profilesError;
+      if (logsError || profilesError) return;
 
       if (profilesData) {
         setAllProfiles(profilesData);
@@ -651,153 +630,261 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingLive(false);
     }
-  };
+  }, []);
 
-  // ================= PERBAIKAN: DETAIL RINCIAN PENYEBAB PEMOTONGAN POIN & BISA MINUS KE BAWAH =================
-  const fetchLeaderboard = async () => {
+  // ================= LEADERBOARD & REKAP INDISIPLINER SEPARASI ROLE =================
+  const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
     try {
-      const { data: profiles, error: pError } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, avatar, station_placement, role, total_points');
+      const [{ data: profiles, error: pError }, { data: logs }] = await Promise.all([
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, avatar, station_placement, role, total_points'),
+        supabase
+          .from('attendance_logs')
+          .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in')
+      ]);
         
-      if (pError) {
+      if (pError || !profiles) {
         setIsFetchingLeaderboard(false);
         return;
       }
 
-      const { data: logs } = await supabase
-        .from('attendance_logs')
-        .select('user_id, break_start_time, break_end_time, actual_in, discipline_status, penalty_points, status_in');
+      let historyMap = {};
+      if (selectedMonth !== currentMonthYear) {
+        const { data: historyData } = await supabase
+          .from('discipline_monthly_history')
+          .select('*')
+          .eq('month_year', selectedMonth);
+        if (historyData) {
+          historyData.forEach(h => { historyMap[h.user_id] = h.final_points; });
+        }
+      }
 
-      if (profiles) {
-        const filteredCrewProfiles = profiles.filter(p => {
-          const nameLower = (p.full_name || '').toLowerCase();
-          const placementLower = (p.station_placement || '').toLowerCase();
-          const roleLower = (p.role || '').toLowerCase();
-          return !nameLower.includes('owner') && 
-                 !placementLower.includes('owner') && 
-                 !placementLower.includes('manager') && 
-                 !placementLower.includes('atasan') &&
-                 roleLower !== 'manager';
-        });
+      const isProfileManager = (p) => {
+        const nameLower = (p.full_name || '').toLowerCase();
+        const placementLower = (p.station_placement || '').toLowerCase();
+        const roleLower = (p.role || '').toLowerCase();
+        return nameLower.includes('owner') || 
+               placementLower.includes('owner') || 
+               placementLower.includes('manager') || 
+               placementLower.includes('atasan') || 
+               roleLower === 'manager';
+      };
 
-        const filteredManagerProfiles = profiles.filter(p => {
-          const nameLower = (p.full_name || '').toLowerCase();
-          const placementLower = (p.station_placement || '').toLowerCase();
-          const roleLower = (p.role || '').toLowerCase();
-          return nameLower.includes('owner') || 
-                 placementLower.includes('owner') || 
-                 placementLower.includes('manager') || 
-                 placementLower.includes('atasan') || 
-                 roleLower === 'manager';
-        });
+      const filteredCrewProfiles = profiles.filter(p => !isProfileManager(p));
+      const filteredManagerProfiles = profiles.filter(p => isProfileManager(p));
 
-        const processLeaderboardData = (profileList) => {
-          const processed = profileList.map(person => {
-            const pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
-            
-            let lateCount = 0;
-            let totalLateMinutes = 0;
+      const processData = (profileList) => {
+        const lateRankingList = [];
+        const overbreakRankingList = [];
+        const waterbreakRankingList = [];
 
-            let overBreakCount = 0;
-            let totalOverBreakMinutes = 0;
+        const leaderboardArray = profileList.map(person => {
+          let pts = 100;
+          if (selectedMonth === currentMonthYear) {
+            pts = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
+          } else {
+            pts = historyMap[person.id] !== undefined ? Number(historyMap[person.id]) : 100;
+          }
+          
+          let lateCount = 0;
+          let totalLateMinutes = 0;
+          let overBreakCount = 0;
+          let totalOverBreakMinutes = 0;
+          let overWaterbreakCount = 0;
+          let totalBreakMinutes = 0;
+          let normalBreakCount = 0;
+          const userInfractionHistory = [];
 
-            let overWaterbreakCount = 0;
-            let totalBreakMinutes = 0;
-            let normalBreakCount = 0;
-
-            const personLogs = (logs || []).filter(l => l.user_id === person.id);
-
-            personLogs.forEach(log => {
-              // 1. Cek Keterlambatan Masuk Shift (Hanya jika terlambat > 0 menit)
-              if (log.status_in && log.status_in.toLowerCase().includes('terlambat')) {
-                try {
-                  const match = log.status_in.match(/Terlambat (\d+)m/);
-                  const mins = match && match[1] ? parseInt(match[1]) : 0;
-                  if (mins > 0 && mins < 720) {
-                    lateCount += 1;
-                    totalLateMinutes += mins;
-                  }
-                } catch(e) {}
-              }
-
-              // 2. Cek Overbreak Istirahat
-              if (log.break_start_time && log.break_end_time) {
-                normalBreakCount += 1;
-                const start = new Date(log.break_start_time);
-                const end = new Date(log.break_end_time);
-                const actualMins = Math.floor((end.getTime() - start.getTime()) / 60000);
-                totalBreakMinutes += actualMins;
-
-                const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-                const allowedMins = (checkInHour === 22) ? 30 : 60;
-
-                if (actualMins > allowedMins) {
-                  overBreakCount += 1;
-                  totalOverBreakMinutes += (actualMins - allowedMins);
-                }
-              } else if (log.discipline_status === 'Overbreak') {
-                overBreakCount += 1;
-                if (log.penalty_points && Number(log.penalty_points) > 0) {
-                  totalOverBreakMinutes += Number(log.penalty_points);
-                }
-              }
-
-              // 3. Cek Over Waterbreak
-              if (log.discipline_status && log.discipline_status.toLowerCase().includes('waterbreak')) {
-                overWaterbreakCount += 1;
-              }
-            });
-
-            // Menyusun keterangan spesifik & gamblang sesuai jenis kesalahan
-            const reasons = [];
-            if (lateCount > 0) reasons.push(`${lateCount}x Telat Masuk Shift (${totalLateMinutes}m)`);
-            if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak Istirahat (${totalOverBreakMinutes}m)`);
-            if (overWaterbreakCount > 0) reasons.push(`${overWaterbreakCount}x Over Waterbreak`);
-
-            let statusDescription = '';
-            const hasRealInfractions = reasons.length > 0;
-
-            if (hasRealInfractions) {
-              statusDescription = `⚠️ ` + reasons.join(' • ');
-            } else if (pts < 100) {
-              statusDescription = `⚠️ Pengurangan Disiplin (${pts - 100} Pts)`;
-            } else if (normalBreakCount > 0) {
-              statusDescription = `✓ ${normalBreakCount}x Break (${totalBreakMinutes} Menit) Sesuai`;
-            } else {
-              statusDescription = '✓ Disiplin Standar (100 Pts)';
-            }
-
-            const isBebal = pts < 100 || (hasRealInfractions && pts <= 100);
-
-            return {
-              id: person.id,
-              name: person.full_name || 'Staff Member',
-              avatar: person.avatar,
-              role: person.station_placement || person.role || 'Staff Crew', 
-              points: pts,
-              isBebal: isBebal,
-              breakInfo: statusDescription
-            };
+          const personLogs = (logs || []).filter(l => {
+            if (l.user_id !== person.id) return false;
+            if (!l.created_at) return true;
+            return l.created_at.substring(0, 7) === selectedMonth;
           });
 
-          return processed;
-        };
+          personLogs.forEach(log => {
+            const logDate = new Date(log.created_at || log.actual_in);
+            const formattedDate = logDate.toLocaleDateString('id-ID', {
+              day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar'
+            });
+            const formattedTime = logDate.toLocaleTimeString('id-ID', {
+              hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar'
+            });
 
-        setLeaderboard(processLeaderboardData(filteredCrewProfiles));
-        setManagerLeaderboard(processLeaderboardData(filteredManagerProfiles));
-      }
+            // 1. Cek Keterlambatan
+            if (log.status_in && log.status_in.toLowerCase().includes('terlambat')) {
+              try {
+                const match = log.status_in.match(/Terlambat (\d+)m/);
+                const mins = match && match[1] ? parseInt(match[1]) : 0;
+                if (mins > 0 && mins < 720) {
+                  lateCount += 1;
+                  totalLateMinutes += mins;
+                  userInfractionHistory.push({
+                    type: 'Terlambat Masuk Shift',
+                    badgeColor: 'bg-amber-100 text-amber-800 border-amber-200',
+                    detail: `${mins} Menit terlambat`,
+                    date: formattedDate,
+                    time: `${formattedTime} WITA`,
+                    note: log.status_in
+                  });
+                }
+              } catch(e) {}
+            }
+
+            // 2. Cek Overbreak
+            if (log.break_start_time && log.break_end_time) {
+              normalBreakCount += 1;
+              const start = new Date(log.break_start_time);
+              const end = new Date(log.break_end_time);
+              const actualMins = Math.floor((end.getTime() - start.getTime()) / 60000);
+              totalBreakMinutes += actualMins;
+
+              const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
+              const allowedMins = (checkInHour === 22) ? 30 : 60;
+
+              if (actualMins > allowedMins) {
+                const overM = actualMins - allowedMins;
+                overBreakCount += 1;
+                totalOverBreakMinutes += overM;
+                userInfractionHistory.push({
+                  type: 'Overbreak Istirahat',
+                  badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
+                  detail: `Over +${overM} Menit (Total break ${actualMins}m)`,
+                  date: formattedDate,
+                  time: `${start.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
+                  note: 'Melebihi durasi break yang ditentukan'
+                });
+              }
+            } else if (log.discipline_status === 'Overbreak') {
+              overBreakCount += 1;
+              const penalty = log.penalty_points ? Number(log.penalty_points) : 1;
+              totalOverBreakMinutes += penalty;
+              userInfractionHistory.push({
+                type: 'Overbreak Terdeteksi',
+                badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
+                detail: `Overbreak aktif (${penalty} Poin deduksi)`,
+                date: formattedDate,
+                time: `${formattedTime} WITA`,
+                note: 'Belum presensi selesai break'
+              });
+            }
+
+            // 3. Cek Over Waterbreak
+            if (log.discipline_status && log.discipline_status.toLowerCase().includes('waterbreak')) {
+              overWaterbreakCount += 1;
+              userInfractionHistory.push({
+                type: 'Over Waterbreak',
+                badgeColor: 'bg-purple-100 text-purple-800 border-purple-200',
+                detail: 'Melebihi alokasi izin pendek (toilet/shalat)',
+                date: formattedDate,
+                time: `${formattedTime} WITA`,
+                note: 'Izin darurat melewati batas menit'
+              });
+            }
+          });
+
+          if (lateCount > 0) {
+            lateRankingList.push({
+              id: person.id,
+              name: person.full_name,
+              avatar: person.avatar,
+              role: person.station_placement || person.role,
+              count: lateCount,
+              totalMinutes: totalLateMinutes,
+              history: userInfractionHistory.filter(h => h.type.includes('Terlambat'))
+            });
+          }
+
+          if (overBreakCount > 0) {
+            overbreakRankingList.push({
+              id: person.id,
+              name: person.full_name,
+              avatar: person.avatar,
+              role: person.station_placement || person.role,
+              count: overBreakCount,
+              totalMinutes: totalOverBreakMinutes,
+              history: userInfractionHistory.filter(h => h.type.includes('Overbreak'))
+            });
+          }
+
+          if (overWaterbreakCount > 0) {
+            waterbreakRankingList.push({
+              id: person.id,
+              name: person.full_name,
+              avatar: person.avatar,
+              role: person.station_placement || person.role,
+              count: overWaterbreakCount,
+              totalMinutes: 0,
+              history: userInfractionHistory.filter(h => h.type.includes('Waterbreak'))
+            });
+          }
+
+          const reasons = [];
+          if (lateCount > 0) reasons.push(`${lateCount}x Telat (${totalLateMinutes}m)`);
+          if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak (${totalOverBreakMinutes}m)`);
+          if (overWaterbreakCount > 0) reasons.push(`${overWaterbreakCount}x Over Waterbreak`);
+
+          let statusDescription = '';
+          const hasRealInfractions = reasons.length > 0;
+
+          if (hasRealInfractions) {
+            statusDescription = `⚠️ ` + reasons.join(' • ');
+          } else if (pts < 100) {
+            statusDescription = `⚠️ Pengurangan Disiplin (${pts - 100} Pts)`;
+          } else if (normalBreakCount > 0) {
+            statusDescription = `✓ ${normalBreakCount}x Break (${totalBreakMinutes} Menit) Sesuai`;
+          } else {
+            statusDescription = '✓ Disiplin Standar (100 Pts)';
+          }
+
+          const isBebal = pts < 100 || (hasRealInfractions && pts <= 100);
+
+          return {
+            id: person.id,
+            name: person.full_name || 'Staff Member',
+            avatar: person.avatar,
+            role: person.station_placement || person.role || 'Staff Crew', 
+            points: pts,
+            isBebal: isBebal,
+            breakInfo: statusDescription,
+            infractions: userInfractionHistory
+          };
+        });
+
+        return {
+          leaderboard: leaderboardArray,
+          rankings: {
+            topLate: lateRankingList.sort((a, b) => b.count - a.count || b.totalMinutes - a.totalMinutes),
+            topOverbreak: overbreakRankingList.sort((a, b) => b.count - a.count || b.totalMinutes - a.totalMinutes),
+            topOverWaterbreak: waterbreakRankingList.sort((a, b) => b.count - a.count)
+          }
+        };
+      };
+
+      const crewProcessed = processData(filteredCrewProfiles);
+      const managerProcessed = processData(filteredManagerProfiles);
+
+      setLeaderboard(crewProcessed.leaderboard);
+      setCrewInfractionRankings(crewProcessed.rankings);
+
+      setManagerLeaderboard(managerProcessed.leaderboard);
+      setManagerInfractionRankings(managerProcessed.rankings);
+
     } catch (e) {
       console.error("Error leaderboard:", e);
     } finally {
       setIsFetchingLeaderboard(false);
     }
+  }, [selectedMonth, currentMonthYear]);
+
+  const openInfractionDetailModal = (crewData) => {
+    setSelectedCrewInfractionDetail(crewData);
+    setShowInfractionModal(true);
   };
 
-  const fetchBreakLogs = async () => {
+  const fetchBreakLogs = useCallback(async () => {
     if (!user?.id) return;
-    setIsFetchingLogs(true);
     try {
       const { data, error } = await supabase
         .from('attendance_logs')
@@ -807,21 +894,14 @@ export default function BreakSystem() {
         .limit(10);
 
       if (!error && data) {
-        const filteredLogs = data.filter(log => log.break_start_time);
-        setBreakLogs(filteredLogs);
+        setBreakLogs(data.filter(log => log.break_start_time));
       }
     } catch (e) {
       console.error("Gagal memuat rekap log break:", e);
-    } finally {
-      setIsFetchingLogs(false);
     }
-  };
+  }, [user]);
 
-  // ================= PERBAIKAN UTAMA: PAGINATION + FILTER TANGGAL AGAR CACHED EGRESS TIDAK MELONJAK =================
-  // Sebelumnya fungsi ini menarik SEMUA log (dan SEMUA foto) sejak awal aplikasi berjalan, tanpa limit,
-  // setiap kali menu "Log Foto" dibuka. Sekarang dibatasi per halaman (LOGS_PAGE_SIZE) dan hanya
-  // log 7 hari terakhir (LOGS_MAX_AGE_DAYS) secara default, dengan opsi "Muat Lebih Banyak".
-  const fetchAllCrewLogs = async (loadMore = false) => {
+  const fetchAllCrewLogs = useCallback(async (loadMore = false, pageNum = 0) => {
     if (loadMore) {
       setIsFetchingMoreLogs(true);
     } else {
@@ -829,24 +909,25 @@ export default function BreakSystem() {
     }
 
     try {
-      const pageToFetch = loadMore ? logsPage : 0;
+      const pageToFetch = loadMore ? pageNum : 0;
       const rangeFrom = pageToFetch * LOGS_PAGE_SIZE;
       const rangeTo = rangeFrom + LOGS_PAGE_SIZE - 1;
 
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - LOGS_MAX_AGE_DAYS);
 
-      const { data: logs, error: lError } = await supabase
-        .from('attendance_logs')
-        .select('id, user_id, created_at, break_start_time, break_end_time, image_url, after_break_image_url, actual_in')
-        .not('break_start_time', 'is', null)
-        .gte('created_at', cutoffDate.toISOString())
-        .order('created_at', { ascending: false })
-        .range(rangeFrom, rangeTo);
-
-      const { data: profiles, error: pError } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, station_placement, role');
+      const [{ data: logs, error: lError }, { data: profiles, error: pError }] = await Promise.all([
+        supabase
+          .from('attendance_logs')
+          .select('id, user_id, created_at, break_start_time, break_end_time, image_url, after_break_image_url, actual_in')
+          .not('break_start_time', 'is', null)
+          .gte('created_at', cutoffDate.toISOString())
+          .order('created_at', { ascending: false })
+          .range(rangeFrom, rangeTo),
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, station_placement, role')
+      ]);
 
       if (!lError && !pError && logs && profiles) {
         const profileMap = {};
@@ -861,7 +942,7 @@ export default function BreakSystem() {
           isManagerMap[p.id] = nameLower.includes('owner') || 
                                placementLower.includes('owner') || 
                                placementLower.includes('manager') || 
-                               placementLower.includes('atasan') ||
+                               placementLower.includes('atasan') || 
                                roleLower === 'manager';
         });
 
@@ -938,7 +1019,6 @@ export default function BreakSystem() {
         }
 
         setLogsPage(pageToFetch + 1);
-        // Kalau jumlah row yang balik lebih kecil dari page size, berarti sudah halaman terakhir
         setHasMoreLogs(logs.length === LOGS_PAGE_SIZE);
       }
     } catch (e) {
@@ -947,107 +1027,236 @@ export default function BreakSystem() {
       setIsFetchingAllLogs(false);
       setIsFetchingMoreLogs(false);
     }
-  };
+  }, []);
 
-  const handleGrantIzin = async (e) => {
-    e.preventDefault();
-    if (!selectedCrewId) return alert('Silakan pilih crew terlebih dahulu');
-    setIsSubmittingIzin(true);
+  const updateDurationsLocally = useCallback(() => {
+    setLiveBreaks(prev => prev.map(crew => {
+      if (!crew.rawRawStart) return crew;
+      const elapsedSec = Math.floor((Date.now() - crew.rawRawStart.getTime()) / 1000);
+      const allowedSec = crew.allowedSec || 3600;
+      const isOver = elapsedSec > allowedSec;
+      const timeLeftSec = allowedSec - elapsedSec;
+      
+      let displayDuration = `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s berjalan`;
+      let isWarning = timeLeftSec <= 300 && timeLeftSec > 0;
+
+      if (isOver) {
+        const overSec = elapsedSec - allowedSec;
+        const overMins = Math.floor(overSec / 60);
+        displayDuration = `Over +${overMins}m ${overSec % 60}s (Poin -${overMins})`;
+
+        if (isManager && !announcedOverbreakCrew.current.has(crew.id)) {
+          announcedOverbreakCrew.current.add(crew.id);
+          speakAiVoice(`Pemberitahuan Manager. Rekan kerja atas nama ${crew.name} di ${crew.station} terdeteksi telah over break.`);
+          triggerSystemNotification(
+            "🚨 OVERBREAK TERDETEKSI!",
+            `Kru ${crew.name} (${crew.station}) telah melewati batas waktu istirahat!`
+          );
+        }
+      }
+
+      return {
+        ...crew,
+        duration: displayDuration,
+        isOverBreak: isOver,
+        isWarningBreak: isWarning
+      };
+    }));
+  }, [isManager, speakAiVoice, triggerSystemNotification]);
+
+  const updateWaterBreaksLocally = useCallback(() => {
+    setWaterBreaks(prev => prev.map(wb => {
+      if (!wb.rawRawStart) return wb;
+      const elapsedSec = Math.floor((Date.now() - wb.rawRawStart.getTime()) / 1000);
+      const totalAllowedSec = wb.allowedSec || 600; 
+      const remainingSec = totalAllowedSec - elapsedSec;
+      const isOver = remainingSec <= 0;
+
+      let displayCountdown = '';
+      if (isOver) {
+        const overSec = Math.abs(remainingSec);
+        const overMins = Math.max(1, Math.floor(overSec / 60));
+        displayCountdown = `Over +${Math.floor(overSec / 60)}m ${overSec % 60}s (Poin -${overMins})`;
+      } else {
+        displayCountdown = `${Math.floor(remainingSec / 60)}m ${remainingSec % 60}s sisa`;
+      }
+
+      return {
+        ...wb,
+        duration: displayCountdown,
+        isOverBreak: isOver,
+        elapsedSec,
+        allowedSec: totalAllowedSec
+      };
+    }));
+  }, []);
+
+  const handleStopWaterbreak = async (crewId) => {
     try {
-      const startIso = new Date().toISOString();
-      const durationValue = selectedIzinType === 'custom' ? parseInt(customIzinMinutes) : 10;
+      const targetId = crewId || user?.id;
+      if (!targetId) return;
+
+      const currentWb = waterBreaks.find(w => w.id === targetId);
+      let pointDeduction = 0;
+      if (currentWb && currentWb.isOverBreak) {
+        const overSec = currentWb.elapsedSec - currentWb.allowedSec;
+        pointDeduction = Math.max(1, Math.floor(overSec / 60));
+      }
+
+      const { data: targetProfile } = await supabase
+        .from('user_profiles')
+        .select('total_points')
+        .eq('id', targetId)
+        .maybeSingle();
+
+      if (targetProfile && pointDeduction > 0) {
+        const existingPts = targetProfile.total_points !== null && targetProfile.total_points !== undefined ? Number(targetProfile.total_points) : 100;
+        const newPts = existingPts - pointDeduction;
+
+        await supabase
+          .from('user_profiles')
+          .update({ total_points: newPts })
+          .eq('id', targetId);
+      }
 
       const { error } = await supabase
         .from('user_profiles')
         .update({
-          current_izin_start: startIso,
-          current_izin_duration: durationValue,
-          current_izin_type: selectedIzinType.toUpperCase()
+          current_izin_start: null,
+          current_izin_duration: null,
+          current_izin_type: null
         })
-        .eq('id', selectedCrewId);
+        .eq('id', targetId);
 
       if (error) throw error;
-      alert('✓ Otorisasi izin sementara berhasil diberikan ke radar crew!');
-      fetchLiveBreakData();
+      
+      alert(`✓ Status Waterbreak Selesai!${pointDeduction > 0 ? ` (-${pointDeduction} Poin)` : ''}`);
+      await Promise.all([
+        fetchAttendanceStatus(),
+        fetchLiveBreakData(),
+        fetchLeaderboard(),
+        fetchActiveShiftStats()
+      ]);
     } catch (err) {
-      alert(`Gagal memberikan izin: ${err.message}`);
-    } finally {
-      setIsSubmittingIzin(false);
+      alert(`Gagal menghentikan waterbreak: ${err.message}`);
     }
   };
 
-  const handleAvatarUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file || !user?.id) return;
-    
+  const formatWITATime = (date) => {
     try {
-      setIsUpdatingProfile(true);
-      const compressed = await imageCompression(file, { maxSizeMB: 0.2, maxWidthOrHeight: 400 });
-      const filePath = `avatars/${user.id}-${Date.now()}.jpg`;
-
-      // PERBAIKAN: cacheControl diperpanjang jadi 1 tahun. Nama file sudah unik (pakai Date.now()),
-      // jadi isinya tidak akan pernah berubah -> aman di-cache selama mungkin oleh browser/CDN,
-      // ini mengurangi cached egress dari foto yang ditarik berulang-ulang.
-      const { error: uploadError } = await supabase.storage
-        .from('attendance-proofs')
-        .upload(filePath, compressed, {
-          contentType: 'image/jpeg',
-          cacheControl: '31536000',
-          upsert: true
-        });
-
-      if (uploadError) throw uploadError;
-
-      const { data: publicUrlData } = supabase.storage
-        .from('attendance-proofs')
-        .getPublicUrl(filePath);
-
-      const publicUrl = publicUrlData?.publicUrl;
-
-      if (publicUrl) {
-        setEditAvatar(publicUrl);
-      }
-    } catch (err) {
-      console.error("Gagal unggah foto:", err);
-      alert(`Gagal unggah foto profil: ${err.message}`);
-    } finally {
-      setIsUpdatingProfile(false);
+      return date.toLocaleTimeString('id-ID', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Makassar'
+      });
+    } catch (e) {
+      return date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     }
   };
 
-  const handleUpdateProfile = async (e) => {
-    e.preventDefault();
-    if (!user?.id) return;
-    setIsUpdatingProfile(true);
+  useEffect(() => {
+    const clockTimer = setInterval(() => setCurrentSystemTime(new Date()), 1000);
+    return () => clearInterval(clockTimer);
+  }, []);
 
-    try {
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .update({
-          full_name: editName,
-          whatsapp_number: editPhone,
-          avatar: editAvatar
-        })
-        .eq('id', user.id);
+  useEffect(() => {
+    return () => {
+      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    };
+  }, []);
 
-      if (profileError) throw profileError;
+  useEffect(() => {
+    const liveTrackerTimer = setInterval(() => {
+      if (liveBreaks.length > 0) updateDurationsLocally();
+      if (waterBreaks.length > 0) updateWaterBreaksLocally();
+    }, 1000);
+    return () => clearInterval(liveTrackerTimer);
+  }, [liveBreaks.length, waterBreaks.length, updateDurationsLocally, updateWaterBreaksLocally]);
 
-      if (newPassword) {
-        const { error: passError } = await supabase.auth.updateUser({ password: newPassword });
-        if (passError) throw passError;
-        setOldPassword('');
-        setNewPassword('');
+  useEffect(() => {
+    if (!checkInTime || hasCheckedOut) {
+      setIsEligibleForCheckOut(false);
+      return;
+    }
+
+    const checkEligibility = () => {
+      let checkInHour = 0;
+      try {
+        const checkInHourStr = checkInTime.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' });
+        checkInHour = parseInt(checkInHourStr);
+      } catch (e) {
+        checkInHour = new Date(checkInTime).getHours();
       }
 
-      alert('✓ Profil Anda berhasil diperbarui!');
-      await fetchAttendanceStatus();
-      await fetchLeaderboard();
-    } catch (err) {
-      alert(`Gagal perbarui profil: ${err.message}`);
-    } finally {
-      setIsUpdatingProfile(false);
+      const isShift22 = (selectedShiftHour === 22 || checkInHour === 22);
+      const targetHours = isShift22 ? 8 : 9;
+      setRequiredWorkHours(targetHours);
+
+      const now = new Date();
+      const durationMs = now.getTime() - new Date(checkInTime).getTime();
+      const durationHours = durationMs / (1000 * 60 * 60);
+      setIsEligibleForCheckOut(durationHours >= targetHours);
+    };
+
+    checkEligibility();
+    const eligibilityTimer = setInterval(checkEligibility, 5000); 
+    return () => clearInterval(eligibilityTimer);
+  }, [checkInTime, hasCheckedOut, selectedShiftHour]);
+
+  useEffect(() => {
+    let timer = null;
+    if (isOnBreak) {
+      timer = setInterval(async () => {
+        const savedStart = localStorage.getItem('resto_break_start_time');
+        const savedDuration = localStorage.getItem('resto_break_max_duration') || '3600';
+        
+        if (savedStart) {
+          const maxDurationSec = parseInt(savedDuration);
+          const elapsedSeconds = Math.floor((Date.now() - parseInt(savedStart)) / 1000);
+          const remaining = maxDurationSec - elapsedSeconds;
+          
+          setTimeLeft(remaining);
+          setMaxBreakDuration(maxDurationSec);
+
+          if (remaining <= 300 && remaining > 0 && !hasPlayed5MinAlarm) {
+            setHasPlayed5MinAlarm(true);
+            speakAiVoice("Halo rekan crew, waktu istirahat Anda tersisa lima menit lagi. Silakan bersiap-siap kembali ke station kerja ya.");
+            triggerSystemNotification(
+              "⏰ WAKTU ISTIRAHAT TERSISA 5 MENIT!",
+              "Waktu break Anda hampir selesai (sisa 5 menit). Silakan bersiap kembali ke station kerja."
+            );
+          }
+
+          if (remaining === 0 && !hasPlayed0MinAlarm) {
+            setHasPlayed0MinAlarm(true);
+            speakAiVoice("Waktu istirahat Anda telah selesai. Mohon segera kembali ke station dan lakukan presensi selesai break.");
+            triggerSystemNotification(
+              "🔔 WAKTU BREAK SELESAI!",
+              "Alokasi break Anda telah habis. Harap segera lakukan foto selesai istirahat."
+            );
+          }
+
+          if (remaining < 0 && !hasNotifiedOverbreak && activeLogId) {
+            setHasNotifiedOverbreak(true);
+            speakAiVoice("Perhatian, waktu istirahat Anda telah melewati batas atau over break. Poin kedisiplinan mulai terpotong otomatis.");
+            triggerSystemNotification(
+              "🚨 ANDA OVERBREAK!",
+              "Waktu break telah melewati batas! Poin kedisiplinan Anda mulai terpotong otomatis per menit."
+            );
+
+            try {
+              await supabase
+                .from('attendance_logs')
+                .update({ discipline_status: 'Overbreak' })
+                .eq('id', activeLogId);
+            } catch(e) {
+              console.error("Gagal update overbreak status:", e);
+            }
+          }
+        }
+      }, 1000);
     }
-  };
+    return () => clearInterval(timer);
+  }, [isOnBreak, hasPlayed5MinAlarm, hasPlayed0MinAlarm, hasNotifiedOverbreak, activeLogId, speakAiVoice, triggerSystemNotification]);
 
   useEffect(() => {
     if (activeTab === 'history') {
@@ -1057,129 +1266,18 @@ export default function BreakSystem() {
     } else if (activeTab === 'leaderboard') {
       fetchLeaderboard();
     } else if (activeTab === 'all-logs') {
-      setLogsPage(0);
-      setHasMoreLogs(true);
-      fetchAllCrewLogs(false);
+      if (!isLogsFetchedRef.current) {
+        setLogsPage(0);
+        setHasMoreLogs(true);
+        fetchAllCrewLogs(false, 0);
+        isLogsFetchedRef.current = true;
+      }
     } else if (activeTab === 'profile' && profile) {
       setEditName(profile.full_name || '');
       setEditPhone(profile.whatsapp_number || '');
       setEditAvatar(profile.avatar || '');
     }
-  }, [activeTab, profile]);
-
-  const fetchAttendanceStatus = async () => {
-    if (!user?.id) return;
-    try {
-      const { data: prof } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle();
-        
-      if (prof) {
-        setProfile(prof);
-        if (prof.station_placement) setSelectedStation(prof.station_placement);
-
-        if (prof.company_id) {
-          try {
-            const { data: rulesData, error: rError } = await supabase
-              .from('companies') 
-              .select('latitude, longitude, radius_meter')
-              .eq('id', prof.company_id)
-              .maybeSingle();
-              
-            if (!rError && rulesData) {
-              setOfficeRules(rulesData);
-            }
-          } catch (err) {
-            console.error("Gagal sinkronisasi aturan:", err);
-          }
-        }
-      }
-
-      const { data: activeLogs } = await supabase
-        .from('attendance_logs')
-        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
-        .eq('user_id', user.id)
-        .is('actual_out', null)
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      let currentLog = null;
-      if (activeLogs && activeLogs.length > 0) {
-        currentLog = activeLogs[0];
-      } else {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        const { data: logs } = await supabase
-          .from('attendance_logs')
-          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
-          .eq('user_id', user.id)
-          .gte('created_at', todayStart.toISOString())
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (logs && logs.length > 0) {
-          currentLog = logs[0];
-        }
-      }
-
-      if (currentLog) {
-        setActiveLogId(currentLog.id);
-        setHasCheckedIn(!!currentLog.actual_in);
-        setHasCheckedOut(!!currentLog.actual_out);
-        
-        const inTime = currentLog.actual_in ? new Date(currentLog.actual_in) : null;
-        setCheckInTime(inTime);
-
-        if (currentLog.status_in && currentLog.status_in.includes('Shift ')) {
-          try {
-            const parsedHour = parseInt(currentLog.status_in.split('Shift ')[1].split(':')[0]);
-            if (!isNaN(parsedHour)) setSelectedShiftHour(parsedHour);
-          } catch(e) {}
-        }
-        
-        const breaking = (!!currentLog.break_start_time && !currentLog.break_end_time) || currentLog.discipline_status === 'Sedang Istirahat';
-        
-        if (breaking) {
-          setIsOnBreak(true);
-          if (currentLog.break_start_time) {
-            setBreakStartTime(new Date(currentLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
-          } else {
-            setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
-          }
-          
-          let checkInHour = 0;
-          try {
-            const hourStr = currentLog.actual_in ? new Date(currentLog.actual_in).toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' }) : '0';
-            checkInHour = parseInt(hourStr);
-          } catch(e) {
-            checkInHour = currentLog.actual_in ? new Date(currentLog.actual_in).getHours() : 0;
-          }
-
-          const allowedBreakSec = (checkInHour === 22) ? 1800 : 3600; 
-          const startTimeMs = currentLog.break_start_time ? new Date(currentLog.break_start_time).getTime() : Date.now();
-          const elapsed = Math.floor((Date.now() - startTimeMs) / 1000);
-          
-          setTimeLeft(allowedBreakSec - elapsed);
-          setMaxBreakDuration(allowedBreakSec);
-        } else {
-          setIsOnBreak(false);
-          setBreakStartTime(null);
-        }
-      } else {
-        setHasCheckedIn(false);
-        setHasCheckedOut(false);
-        setCheckInTime(null);
-        setIsOnBreak(false);
-        setActiveLogId(null);
-        setBreakStartTime(null);
-      }
-    } catch (err) {
-      console.error("Gagal memuat status kehadiran:", err);
-    }
-  };
+  }, [activeTab, profile, fetchBreakLogs, fetchLiveBreakData, fetchLeaderboard, fetchAllCrewLogs]);
 
   useEffect(() => {
     if (user?.id) {
@@ -1198,7 +1296,7 @@ export default function BreakSystem() {
       setGreeting('Selamat Malam');
       setMotivationQuote('Terima kasih atas dedikasi hebatmu menjaga kualitas outlet hari ini! 🌟');
     }
-  }, [user]);
+  }, [user, fetchAttendanceStatus, fetchAllProfilesList, fetchActiveShiftStats]);
 
   const runLiveHumanDetection = () => {
     if (!videoRef.current || capturedImage) return;
@@ -1261,7 +1359,7 @@ export default function BreakSystem() {
 
             if (prof?.company_id) {
               const { data: rulesData } = await supabase
-                .from('companies')
+                .from('companies') 
                 .select('latitude, longitude, radius_meter')
                 .eq('id', prof.company_id)
                 .maybeSingle();
@@ -1309,7 +1407,7 @@ export default function BreakSystem() {
           setHumanDetectionStatus("NOT_DETECTED");
         }
       },
-      (error) => {
+      () => {
         setIsVerifyingLocation(false);
         alert("🔒 Gagal membaca lokasi GPS. Mohon izinkan akses lokasi di browser.");
       },
@@ -1346,6 +1444,7 @@ export default function BreakSystem() {
 
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
     }
 
     try {
@@ -1358,16 +1457,14 @@ export default function BreakSystem() {
         const blob = await res.blob();
         
         const compressed = await imageCompression(blob, { 
-          maxSizeMB: 0.15, 
-          maxWidthOrHeight: 800,
-          useWebWorker: true 
+          maxSizeMB: 0.05, 
+          maxWidthOrHeight: 720, 
+          useWebWorker: true,
+          fileType: 'image/jpeg'
         });
         
         const filePath = `logs/${user.id}-${Date.now()}.jpg`;
 
-        // PERBAIKAN: cacheControl diperpanjang jadi 1 tahun. Nama file sudah unik (user.id + Date.now()),
-        // jadi isinya immutable -> aman di-cache selama mungkin, mengurangi cached egress berulang
-        // setiap kali foto yang sama ditampilkan lagi di menu Log Foto.
         const { error: uploadError } = await supabase.storage
           .from('attendance-proofs')
           .upload(filePath, compressed, {
@@ -1387,7 +1484,6 @@ export default function BreakSystem() {
 
       if (cameraMode === 'IN') {
         const fallbackCompanyId = profile?.company_id || user?.user_metadata?.company_id || null;
-
         const scheduledTime = new Date();
         scheduledTime.setHours(selectedShiftHour, 0, 0, 0);
 
@@ -1424,7 +1520,6 @@ export default function BreakSystem() {
 
         if (insertError) throw insertError;
 
-        // PEMOTONGAN POIN BERLAKU UNTUK SEMUA DAN BISA MINUS KE BAWAH
         if (lateMinutes > 0) {
           const { data: currentProf } = await supabase
             .from('user_profiles')
@@ -1442,9 +1537,6 @@ export default function BreakSystem() {
         }
 
       } else if (cameraMode === 'START_BREAK') {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
           .select('id, actual_in')
@@ -1478,7 +1570,7 @@ export default function BreakSystem() {
           setIsOnBreak(true);
           setTimeLeft(breakDurationSec);
           setMaxBreakDuration(breakDurationSec);
-          setHasPlayedAlarm(false);
+          setHasPlayed5MinAlarm(false);
           setHasPlayed0MinAlarm(false);
           setHasNotifiedOverbreak(false);
           setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
@@ -1513,7 +1605,7 @@ export default function BreakSystem() {
             const overMins = elapsedMins - allowedMins;
             penaltyPoints = overMins; 
             pointChange = -overMins; 
-            financialLoss = overMins * 1000;            
+            financialLoss = overMins * 1000;             
             finalStatus = 'Overbreak';
           } else {
             penaltyPoints = 0;
@@ -1534,7 +1626,6 @@ export default function BreakSystem() {
 
           if (updateError) throw updateError;
 
-          // POIN KEDISIPLINAN JUGA DIHITUNG UNTUK MANAGER DAN BISA MINUS
           const { data: currentProf } = await supabase
             .from('user_profiles')
             .select('total_points')
@@ -1575,6 +1666,7 @@ export default function BreakSystem() {
         }
       }
 
+      isLogsFetchedRef.current = false;
       await fetchAttendanceStatus();
       if (activeTab === 'history') await fetchBreakLogs(); 
       await fetchLiveBreakData();
@@ -1591,12 +1683,111 @@ export default function BreakSystem() {
     }
   };
 
+  const handleGrantIzin = async (e) => {
+    e.preventDefault();
+    if (!selectedCrewId) return alert('Silakan pilih crew terlebih dahulu');
+    setIsSubmittingIzin(true);
+    try {
+      const startIso = new Date().toISOString();
+      const durationValue = selectedIzinType === 'custom' ? parseInt(customIzinMinutes) : 10;
+
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          current_izin_start: startIso,
+          current_izin_duration: durationValue,
+          current_izin_type: selectedIzinType.toUpperCase()
+        })
+        .eq('id', selectedCrewId);
+
+      if (error) throw error;
+      alert('✓ Otorisasi izin sementara berhasil diberikan ke radar crew!');
+      fetchLiveBreakData();
+    } catch (err) {
+      alert(`Gagal memberikan izin: ${err.message}`);
+    } finally {
+      setIsSubmittingIzin(false);
+    }
+  };
+
+  const handleAvatarUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !user?.id) return;
+    
+    try {
+      setIsUpdatingProfile(true);
+      const compressed = await imageCompression(file, { maxSizeMB: 0.05, maxWidthOrHeight: 400 });
+      const filePath = `avatars/${user.id}-${Date.now()}.jpg`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('attendance-proofs')
+        .upload(filePath, compressed, {
+          contentType: 'image/jpeg',
+          cacheControl: '31536000',
+          upsert: true
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('attendance-proofs')
+        .getPublicUrl(filePath);
+
+      const publicUrl = publicUrlData?.publicUrl;
+
+      if (publicUrl) {
+        setEditAvatar(publicUrl);
+      }
+    } catch (err) {
+      console.error("Gagal unggah foto:", err);
+      alert(`Gagal unggah foto profil: ${err.message}`);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  const handleUpdateProfile = async (e) => {
+    e.preventDefault();
+    if (!user?.id) return;
+    setIsUpdatingProfile(true);
+
+    try {
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .update({
+          full_name: editName,
+          whatsapp_number: editPhone,
+          avatar: editAvatar
+        })
+        .eq('id', user.id);
+
+      if (profileError) throw profileError;
+
+      if (newPassword) {
+        const { error: passError } = await supabase.auth.updateUser({ password: newPassword });
+        if (passError) throw passError;
+        setOldPassword('');
+        setNewPassword('');
+      }
+
+      alert('✓ Profil Anda berhasil diperbarui!');
+      await fetchAttendanceStatus();
+      await fetchLeaderboard();
+    } catch (err) {
+      alert(`Gagal perbarui profil: ${err.message}`);
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
   const currentUserPoints = profile?.total_points !== null && profile?.total_points !== undefined ? Number(profile.total_points) : 100;
   const activeBadge = getCrewBadge(currentUserPoints);
+  
+  // Guard role: Jika bukan manager, otomatis hanya lihat list crew
   const activeLeaderboardData = (isManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
+  const activeInfractionRanking = (isManager && leaderboardCategory === 'manager') ? managerInfractionRankings : crewInfractionRankings;
   const activeLogData = (isManager && logCategory === 'manager') ? managerCrewLogs : allCrewLogs;
 
-  // SORTING DINAMIS: TOP TIER (TERTINGGI KE TERENDAH), EVALUASI/BEBAL (TERENDAH KE TERTINGGI / MINUS DULUAN)
   const topTierList = activeLeaderboardData
     .filter(c => !c.isBebal)
     .sort((a, b) => b.points - a.points);
@@ -1607,16 +1798,6 @@ export default function BreakSystem() {
 
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
-      
-      <style>{`
-        header.sticky.top-0, 
-        div.min-h-screen > header,
-        body > div > header {
-          display: none !important;
-        }
-      `}</style>
-
-      {/* CONTAINER APLIKASI */}
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
         {/* HEADER APLIKASI */}
@@ -1625,8 +1806,8 @@ export default function BreakSystem() {
             <img 
               src="/Diciplin-logo.png" 
               onError={(e) => { 
-                e.target.onerror = null;
-                e.target.src = "/logo.png";
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = "/logo.png";
               }} 
               alt="Diciplin Logo" 
               className="h-8 w-auto object-contain" 
@@ -1686,7 +1867,7 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* WIDGET ELEGAN REKAP PERSONIL DI TIAP STATION */}
+            {/* LIVE STATION MONITORING */}
             <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3.5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <div className="flex items-center gap-2">
@@ -1703,7 +1884,6 @@ export default function BreakSystem() {
                 </div>
               </div>
 
-              {/* CARD REKAP ATAS (CREW & MANAGER) */}
               <div className="grid grid-cols-2 gap-2">
                 <div className="bg-gradient-to-br from-indigo-50/70 to-slate-50 border border-indigo-100/70 rounded-xl p-2.5 flex items-center gap-2.5">
                   <div className="p-2 bg-indigo-600 text-white rounded-lg text-xs font-black shadow-xs">
@@ -1726,7 +1906,6 @@ export default function BreakSystem() {
                 </div>
               </div>
 
-              {/* DAFTAR GRID STATION BERSIH & RAPI */}
               <div className="space-y-2 pt-1">
                 <div className="flex items-center justify-between">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -1758,7 +1937,6 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* GPS GEOLOCATION LOADER */}
             {isVerifyingLocation && (
               <div className="bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs rounded-xl p-3 flex items-center justify-center gap-2 font-bold animate-pulse">
                 <FiMapPin className="animate-bounce text-sm"/> Mengunci GPS Outlet...
@@ -1814,7 +1992,7 @@ export default function BreakSystem() {
                         className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium"
                       >
                         <option value="" className="text-slate-900">
-                          {isFetchingProfiles ? 'Memuat Staff...' : '-- Pilih Staff --'}
+                          {allProfiles.length === 0 ? 'Memuat Staff...' : '-- Pilih Staff --'}
                         </option>
                         {allProfiles.map(p => (
                           <option key={p.id} value={p.id} className="text-slate-900">
@@ -2073,40 +2251,69 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 3: LEADERBOARD POIN ================= */}
+        {/* ================= TAB 3: LEADERBOARD & REKAP INDISIPLINER ================= */}
         {activeTab === 'leaderboard' && (
           <div className="flex-1 px-4 py-4 space-y-4">
-            <div className="flex flex-col space-y-0.5">
-              <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
-                <FiAward className="text-amber-500 text-lg" /> Status Kedisiplinan
-              </h2>
-              <p className="text-[10px] text-slate-400 font-medium">
-                {isManager ? 'Pilih kategori daftar poin yang ingin ditampilkan.' : 'Rekapitulasi poin kedisiplinan crew.'}
-              </p>
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col space-y-0.5">
+                <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                  <FiAward className="text-amber-500 text-lg" /> Status & Evaluasi
+                </h2>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  {selectedMonth === currentMonthYear ? 'Data periode bulan berjalan.' : `Arsip data ${selectedMonth}.`}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 py-1 shadow-2xs">
+                <FiCalendar className="text-indigo-600 text-xs" />
+                <input 
+                  type="month" 
+                  value={selectedMonth} 
+                  onChange={(e) => setSelectedMonth(e.target.value)} 
+                  className="text-[10px] font-black text-slate-700 bg-transparent outline-none cursor-pointer"
+                />
+              </div>
             </div>
 
+            {/* SUB-NAVBAR TABS */}
+            <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
+              <button
+                onClick={() => setActiveSubTabLeaderboard('ranking')}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${activeSubTabLeaderboard === 'ranking' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                <FiAward className="text-sm" /> Skor Poin
+              </button>
+              <button
+                onClick={() => setActiveSubTabLeaderboard('indisipliner')}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${activeSubTabLeaderboard === 'indisipliner' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                <FiAlertTriangle className="text-sm" /> Indisipliner
+              </button>
+            </div>
+
+            {/* HANYA MUNCUL JIKA AKUN MANAGER (Poin 1) */}
             {isManager && (
               <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
                 <button
                   onClick={() => setLeaderboardCategory('crew')}
-                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${leaderboardCategory === 'crew' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                  className={`flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${leaderboardCategory === 'crew' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
                 >
-                  Poin Crew
+                  Data Crew
                 </button>
                 <button
                   onClick={() => setLeaderboardCategory('manager')}
-                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${leaderboardCategory === 'manager' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                  className={`flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${leaderboardCategory === 'manager' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
                 >
-                  Poin Manager 🔒
+                  Data Manager 🔒
                 </button>
               </div>
             )}
 
             {isFetchingLeaderboard ? (
-              <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks poin...</div>
-            ) : (
+              <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks evaluasi...</div>
+            ) : activeSubTabLeaderboard === 'ranking' ? (
+              /* VIEW 1: SKOR POIN */
               <div className="space-y-4">
-                {/* 1. TOP TIER (PALING RAJIN) - DIURUTKAN DARI POIN TERTINGGI KE RENDAH */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1">
                     🌟 PALING RAJIN ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
@@ -2116,7 +2323,11 @@ export default function BreakSystem() {
                       <div className="p-4 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
                     ) : (
                       topTierList.map((person, index) => (
-                        <div className="p-3.5 flex items-center justify-between w-full" key={person.id}>
+                        <div 
+                          className="p-3.5 flex items-center justify-between w-full hover:bg-slate-50/80 cursor-pointer transition-colors" 
+                          key={person.id}
+                          onClick={() => openInfractionDetailModal(person)}
+                        >
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
                             <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
@@ -2133,7 +2344,6 @@ export default function BreakSystem() {
                   </div>
                 </div>
 
-                {/* 2. ZONA BEBAL (PERLU EVALUASI) - DIURUTKAN DARI POIN PALING RENDAH DULU KE BAWAH (MINUS/0 DULUAN) */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">
                     ⚠️ PERLU EVALUASI ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
@@ -2143,7 +2353,11 @@ export default function BreakSystem() {
                       <div className="p-4 text-center text-xs font-bold text-slate-400">0 User dalam zona bahaya kedisiplinan.</div>
                     ) : (
                       bebalList.map((person, index) => (
-                        <div key={person.id} className="p-3.5 flex items-center justify-between bg-rose-50/20">
+                        <div 
+                          key={person.id} 
+                          className="p-3.5 flex items-center justify-between bg-rose-50/20 hover:bg-rose-50/50 cursor-pointer transition-colors"
+                          onClick={() => openInfractionDetailModal(person)}
+                        >
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-rose-500 w-4">{index + 1}.</span>
                             <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
@@ -2160,18 +2374,232 @@ export default function BreakSystem() {
                   </div>
                 </div>
               </div>
+            ) : (
+              /* VIEW 2: INDISIPLINER DENGAN FILTER PILLS DI ATAS (Poin 2) */
+              <div className="space-y-3.5">
+                
+                {/* FILTER PILLS KATEGORI INDISIPLINER */}
+                <div className="grid grid-cols-3 gap-1.5 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
+                  <button
+                    onClick={() => setSelectedInfractionCategory('late')}
+                    className={`py-2 px-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'late' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    <span>Terlambat</span>
+                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topLate.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedInfractionCategory('overbreak')}
+                    className={`py-2 px-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'overbreak' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    <span>Overbreak</span>
+                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topOverbreak.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedInfractionCategory('waterbreak')}
+                    className={`py-2 px-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'waterbreak' ? 'bg-purple-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    <span>Waterbreak</span>
+                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topOverWaterbreak.length})</span>
+                  </button>
+                </div>
+
+                {/* KONTEN KATEGORI TERPILIH */}
+                {selectedInfractionCategory === 'late' && (
+                  <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between px-1">
+                      <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest flex items-center gap-1.5">
+                        <FiClock className="text-amber-600 text-xs" /> Ranking Terbanyak Terlambat
+                      </p>
+                      <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                      {activeInfractionRanking.topLate.length === 0 ? (
+                        <div className="p-6 text-center text-xs font-semibold text-slate-400">
+                          Nihil catatan terlambat pada periode {selectedMonth}. 🌟
+                        </div>
+                      ) : (
+                        activeInfractionRanking.topLate.map((c, idx) => (
+                          <div 
+                            key={c.id} 
+                            onClick={() => openInfractionDetailModal(c)}
+                            className="p-3.5 flex items-center justify-between hover:bg-amber-50/40 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              <span className="font-mono text-xs font-black text-amber-600 w-4">{idx + 1}.</span>
+                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-amber-100 shadow-2xs" alt="Avatar" />
+                              <div>
+                                <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
+                              </div>
+                            </div>
+                            <span className="bg-amber-100 text-amber-800 text-xs font-black px-2.5 py-1 rounded-xl border border-amber-200">
+                              {c.count}x Telat ({c.totalMinutes}m)
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedInfractionCategory === 'overbreak' && (
+                  <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between px-1">
+                      <p className="text-[10px] font-black text-rose-800 uppercase tracking-widest flex items-center gap-1.5">
+                        <FiCoffee className="text-rose-600 text-xs" /> Ranking Terbanyak Overbreak
+                      </p>
+                      <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                      {activeInfractionRanking.topOverbreak.length === 0 ? (
+                        <div className="p-6 text-center text-xs font-semibold text-slate-400">
+                          Nihil catatan overbreak pada periode {selectedMonth}. 🌟
+                        </div>
+                      ) : (
+                        activeInfractionRanking.topOverbreak.map((c, idx) => (
+                          <div 
+                            key={c.id} 
+                            onClick={() => openInfractionDetailModal(c)}
+                            className="p-3.5 flex items-center justify-between hover:bg-rose-50/40 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              <span className="font-mono text-xs font-black text-rose-600 w-4">{idx + 1}.</span>
+                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-2xs" alt="Avatar" />
+                              <div>
+                                <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
+                              </div>
+                            </div>
+                            <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200">
+                              {c.count}x Over (+{c.totalMinutes}m)
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedInfractionCategory === 'waterbreak' && (
+                  <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between px-1">
+                      <p className="text-[10px] font-black text-purple-800 uppercase tracking-widest flex items-center gap-1.5">
+                        <FiDroplet className="text-purple-600 text-xs" /> Ranking Terbanyak Over Waterbreak
+                      </p>
+                      <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                      {activeInfractionRanking.topOverWaterbreak.length === 0 ? (
+                        <div className="p-6 text-center text-xs font-semibold text-slate-400">
+                          Nihil over waterbreak pada periode {selectedMonth}. 🌟
+                        </div>
+                      ) : (
+                        activeInfractionRanking.topOverWaterbreak.map((c, idx) => (
+                          <div 
+                            key={c.id} 
+                            onClick={() => openInfractionDetailModal(c)}
+                            className="p-3.5 flex items-center justify-between hover:bg-purple-50/40 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              <span className="font-mono text-xs font-black text-purple-600 w-4">{idx + 1}.</span>
+                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-purple-100 shadow-2xs" alt="Avatar" />
+                              <div>
+                                <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
+                              </div>
+                            </div>
+                            <span className="bg-purple-100 text-purple-800 text-xs font-black px-2.5 py-1 rounded-xl border border-purple-200">
+                              {c.count}x Pelanggaran
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              </div>
             )}
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO ISTIRAHAT (SUDAH PAKAI PAGINATION) ================= */}
+        {/* ================= MODAL DETAIL INDISIPLINER ================= */}
+        {showInfractionModal && selectedCrewInfractionDetail && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+              
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/60">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 bg-rose-100 text-rose-700 rounded-xl text-base">
+                    <FiActivity />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-tight">Detail Riwayat Indisipliner</h3>
+                    <p className="text-[9px] text-slate-400 font-bold">{selectedCrewInfractionDetail.name} ({selectedMonth})</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowInfractionModal(false)}
+                  className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 transition-colors"
+                >
+                  <FiX className="text-lg"/>
+                </button>
+              </div>
+
+              <div className="p-4 flex-1 overflow-y-auto space-y-2.5">
+                {(!selectedCrewInfractionDetail.history && !selectedCrewInfractionDetail.infractions) || 
+                 ((selectedCrewInfractionDetail.history || selectedCrewInfractionDetail.infractions).length === 0) ? (
+                  <div className="py-8 text-center text-xs font-semibold text-slate-400">
+                    Tidak ada catatan tindakan indisipliner pada bulan ini. Kru disiplin! 🌟
+                  </div>
+                ) : (
+                  (selectedCrewInfractionDetail.history || selectedCrewInfractionDetail.infractions).map((inf, i) => (
+                    <div key={i} className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 space-y-1.5 shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[8px] font-black px-2 py-0.5 rounded-md border uppercase ${inf.badgeColor}`}>
+                          {inf.type}
+                        </span>
+                        <span className="text-[9px] font-mono font-bold text-slate-500">
+                          {inf.date} • {inf.time}
+                        </span>
+                      </div>
+                      <p className="text-xs font-extrabold text-slate-900">{inf.detail}</p>
+                      {inf.note && (
+                        <p className="text-[9px] text-slate-500 font-medium bg-white px-2 py-1 rounded-lg border border-slate-100">
+                          {inf.note}
+                        </p>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-50 border-t border-slate-100">
+                <button
+                  onClick={() => setShowInfractionModal(false)}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider"
+                >
+                  Tutup Rincian
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ================= TAB 4: LOG FOTO ISTIRAHAT ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3">
             <div className="flex flex-col space-y-0.5">
               <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
                 <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
               </h2>
-              <p className="text-[10px] text-slate-400 font-medium">Menampilkan {LOGS_MAX_AGE_DAYS} hari terakhir, {LOGS_PAGE_SIZE} log per halaman.</p>
+              <p className="text-[10px] text-slate-400 font-medium">Foto diarsip otomatis maksimal 60 hari.</p>
             </div>
 
             {isManager && (
@@ -2195,7 +2623,7 @@ export default function BreakSystem() {
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
             ) : activeLogData.length === 0 ? (
               <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
-                Belum ada aktivitas log break {logCategory === 'manager' && isManager ? 'manager' : 'crew'} dalam {LOGS_MAX_AGE_DAYS} hari terakhir.
+                Belum ada aktivitas log break dalam 60 hari terakhir.
               </div>
             ) : (
               <div className="space-y-3">
@@ -2222,7 +2650,7 @@ export default function BreakSystem() {
                         {log.image_url ? (
                           <img src={log.image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
                         ) : (
-                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">No Image</div>
+                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">Foto Telah Diarsip</div>
                         )}
                       </div>
 
@@ -2236,17 +2664,16 @@ export default function BreakSystem() {
                         {log.after_break_image_url ? (
                           <img src={log.after_break_image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
                         ) : (
-                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress</div>
+                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress / Diarsip</div>
                         )}
                       </div>
                     </div>
                   </div>
                 ))}
 
-                {/* TOMBOL MUAT LEBIH BANYAK - hanya tarik data tambahan kalau memang di-klik */}
                 {hasMoreLogs && (
                   <button
-                    onClick={() => fetchAllCrewLogs(true)}
+                    onClick={() => fetchAllCrewLogs(true, logsPage)}
                     disabled={isFetchingMoreLogs}
                     className="w-full bg-white hover:bg-slate-50 border border-slate-200/70 text-slate-600 font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-colors disabled:opacity-60"
                   >
@@ -2316,7 +2743,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= FIXED BOTTOM NAV BAR ================= */}
+        {/* FIXED BOTTOM NAV BAR */}
         <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 py-2 flex justify-between items-center z-40 shadow-[0_-4px_25px_rgba(0,0,0,0.05)]">
           <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'absen' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiLayout className="text-lg" /> <span className="text-[9px] tracking-tight">Absen</span>
@@ -2335,7 +2762,7 @@ export default function BreakSystem() {
           </button>
         </div>
 
-        {/* MODAL PILIHAN JAM SHIFT & STATION KHUSUS CREW */}
+        {/* MODAL PILIHAN SHIFT */}
         {showShiftPicker && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4">
@@ -2359,7 +2786,6 @@ export default function BreakSystem() {
                 </button>
               </div>
 
-              {/* 1. PEMILIHAN STATION KHUSUS CREW */}
               {!isManager ? (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -2398,7 +2824,6 @@ export default function BreakSystem() {
                 </div>
               )}
 
-              {/* 2. PEMILIHAN JAM SHIFT */}
               <div className="space-y-1.5 pt-1">
                 <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider">
                   {!isManager ? '2. Pilih Jam Masuk Shift' : 'Pilih Jam Masuk Shift'}
@@ -2421,17 +2846,16 @@ export default function BreakSystem() {
                 </div>
               </div>
 
-              {/* ACTION FOOTER */}
               <div className="pt-2 space-y-2">
                 <button 
-                  type="button"
+                  type="button" 
                   onClick={handleConfirmShiftAndOpenCamera} 
                   className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5"
                 >
                   <FiCamera className="text-sm" /> Lanjutkan Buka Kamera
                 </button>
                 <button 
-                  type="button"
+                  type="button" 
                   onClick={() => setShowShiftPicker(false)} 
                   className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl text-xs transition-colors"
                 >
