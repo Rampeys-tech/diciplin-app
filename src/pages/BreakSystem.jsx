@@ -144,7 +144,6 @@ export default function BreakSystem() {
     roleLower === 'manager'
   );
 
-  // Akses pelaporan pelanggaran SOC/Unprosedural (Manager, QC, Stocker)
   const canReportViolation = Boolean(
     isManager || 
     placementLower.includes('quality control') || 
@@ -160,7 +159,6 @@ export default function BreakSystem() {
   const [leaderboardCategory, setLeaderboardCategory] = useState('crew'); 
   const [isFetchingLeaderboard, setIsFetchingLeaderboard] = useState(false);
 
-  // Filter Tabs Kategori Indisipliner: 'late' | 'overbreak' | 'ghosting' | 'soc'
   const [activeSubTabLeaderboard, setActiveSubTabLeaderboard] = useState('ranking');
   const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late');
   
@@ -169,12 +167,12 @@ export default function BreakSystem() {
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
 
-  // Modal Input Pelanggaran SOC / Unprosedural
+  // Modal Input Pelanggaran SOC / Unprosedural (Pilihan Poin Statis)
   const [showReportViolationModal, setShowReportViolationModal] = useState(false);
   const [reportTargetCrewId, setReportTargetCrewId] = useState('');
   const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
   const [reportNotes, setReportNotes] = useState('');
-  const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5');
+  const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5'); // Default 5 poin
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
   // State Log Foto
@@ -646,7 +644,7 @@ export default function BreakSystem() {
     }
   }, []);
 
-  // ================= LEADERBOARD & INDISIPLINER (TERMASUK SOC & GHOSTING) =================
+  // ================= LEADERBOARD & INDISIPLINER =================
   const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -712,7 +710,6 @@ export default function BreakSystem() {
           let totalBreakMinutes = 0;
           const userInfractionHistory = [];
 
-          // 1. Periksa Log Kehadiran
           const personLogs = (logs || []).filter(l => {
             if (l.user_id !== person.id) return false;
             if (!l.created_at) return true;
@@ -724,7 +721,6 @@ export default function BreakSystem() {
             const formattedDate = logDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' });
             const formattedTime = logDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' });
 
-            // Cek Keterlambatan
             if (log.status_in && log.status_in.toLowerCase().includes('terlambat')) {
               try {
                 const match = log.status_in.match(/Terlambat (\d+)m/);
@@ -744,7 +740,6 @@ export default function BreakSystem() {
               } catch(e) {}
             }
 
-            // Cek Overbreak
             if (log.break_start_time && log.break_end_time) {
               normalBreakCount += 1;
               const start = new Date(log.break_start_time);
@@ -782,7 +777,6 @@ export default function BreakSystem() {
               });
             }
 
-            // Cek Ghosting (di luar radius)
             if (log.is_outside_radius || (log.discipline_status && log.discipline_status.toLowerCase().includes('ghosting'))) {
               ghostingCount += 1;
               userInfractionHistory.push({
@@ -796,7 +790,6 @@ export default function BreakSystem() {
             }
           });
 
-          // 2. Periksa Laporan Pelanggaran SOC / Unprosedural Manual
           const personViolations = (violations || []).filter(v => {
             if (v.crew_id !== person.id) return false;
             if (!v.created_at) return true;
@@ -922,7 +915,7 @@ export default function BreakSystem() {
     }
   }, [selectedMonth, currentMonthYear]);
 
-  // Handle Form Submit Laporan Pelanggaran SOC / Unprosedural
+  // Form Submit Pelanggaran SOC / Unprosedural
   const handleSubmitOperationalViolation = async (e) => {
     e.preventDefault();
     if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
@@ -932,7 +925,6 @@ export default function BreakSystem() {
     try {
       const deduction = parseInt(reportPenaltyPoints) || 0;
 
-      // 1. Simpan ke operational_violations
       const { error: insErr } = await supabase.from('operational_violations').insert({
         crew_id: reportTargetCrewId,
         reported_by: user?.id,
@@ -945,7 +937,6 @@ export default function BreakSystem() {
 
       if (insErr) throw insErr;
 
-      // 2. Potong poin kru yang bersangkutan
       if (deduction > 0) {
         const { data: targetProf } = await supabase
           .from('user_profiles')
@@ -960,7 +951,7 @@ export default function BreakSystem() {
           .eq('id', reportTargetCrewId);
       }
 
-      alert("✓ Laporan pelanggaran operasional berhasil disimpan & poin kedisiplinan diperbarui!");
+      alert("✓ Laporan pelanggaran operasional berhasil disimpan!");
       setShowReportViolationModal(false);
       setReportNotes('');
       setReportTargetCrewId('');
@@ -997,8 +988,11 @@ export default function BreakSystem() {
   }, [user]);
 
   const fetchAllCrewLogs = useCallback(async (loadMore = false, pageNum = 0) => {
-    if (loadMore) setIsFetchingMoreLogs(true);
-    else setIsFetchingAllLogs(true);
+    if (loadMore) {
+      setIsFetchingMoreLogs(true);
+    } else {
+      setIsFetchingAllLogs(true);
+    }
 
     try {
       const pageToFetch = loadMore ? pageNum : 0;
@@ -1871,7 +1865,6 @@ export default function BreakSystem() {
   const currentUserPoints = profile?.total_points !== null && profile?.total_points !== undefined ? Number(profile.total_points) : 100;
   const activeBadge = getCrewBadge(currentUserPoints);
   
-  // Guard role: Jika bukan manager, otomatis hanya lihat list crew (Poin 1)
   const activeLeaderboardData = (isManager && leaderboardCategory === 'manager') ? managerLeaderboard : leaderboard;
   const activeInfractionRanking = (isManager && leaderboardCategory === 'manager') ? managerInfractionRankings : crewInfractionRankings;
   const activeLogData = (isManager && logCategory === 'manager') ? managerCrewLogs : allCrewLogs;
@@ -1886,9 +1879,19 @@ export default function BreakSystem() {
 
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
+      
+      {/* CSS Override Anti Double Header */}
+      <style>{`
+        header.sticky.top-0, 
+        div.min-h-screen > header,
+        body > div > header {
+          display: none !important;
+        }
+      `}</style>
+
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* HEADER APLIKASI */}
+        {/* ================= HEADER APLIKASI UTAMA (1 BARIS BERSIH) ================= */}
         <div className="sticky top-0 w-full bg-white px-5 py-3.5 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
           <div className="flex items-center gap-2.5">
             <img 
@@ -1902,7 +1905,7 @@ export default function BreakSystem() {
             />
             <div className="flex flex-col">
               <span className="font-sans font-black text-base tracking-tight text-slate-900 leading-none">
-                Diciplin<span className="text-indigo-600"></span>
+                Diciplin<span className="text-indigo-600">.com</span>
               </span>
               <span className="text-[8px] font-bold text-slate-400 tracking-wider uppercase mt-0.5">Crew Attendance System</span>
             </div>
@@ -2004,7 +2007,7 @@ export default function BreakSystem() {
 
                 {Object.keys(activeShiftStats.stationCounts).length === 0 ? (
                   <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl py-3 text-center text-[10px] font-semibold text-slate-400">
-                    Tidak ada crew yang sedang standby di station (Sedang Break / Selesai Shift).
+                    Tidak ada crew yang sedang standby di station.
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-0.5">
@@ -2059,54 +2062,87 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* PANEL MANAGER & OTORISASI IZIN */}
-            {isManager && (
-              <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
-                <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-                  <div className="p-1.5 bg-indigo-600 text-white rounded-lg"><FiShield className="text-xs" /></div>
-                  <div>
-                    <h3 className="text-xs font-black uppercase tracking-wider">Manager Control Panel</h3>
-                    <p className="text-[9px] text-slate-400">Otorisasi izin darurat & waterbreak kru.</p>
+            {/* ================= SEJAJAR: MANAGER CONTROL PANEL & PELAPORAN INDISIPLINER ================= */}
+            {(isManager || canReportViolation) && (
+              <div className="space-y-3">
+                {/* 1. MANAGER CONTROL PANEL (OTORISASI IZIN) */}
+                {isManager && (
+                  <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
+                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                      <div className="p-1.5 bg-indigo-600 text-white rounded-lg"><FiShield className="text-xs" /></div>
+                      <div>
+                        <h3 className="text-xs font-black uppercase tracking-wider">Manager Control Panel</h3>
+                        <p className="text-[9px] text-slate-400">Otorisasi izin darurat & waterbreak kru.</p>
+                      </div>
+                    </div>
+                    <form onSubmit={handleGrantIzin} className="space-y-2.5">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[9px] font-extrabold text-slate-400 uppercase">Pilih Anggota Crew</label>
+                          <select 
+                            value={selectedCrewId} 
+                            onChange={(e) => setSelectedCrewId(e.target.value)} 
+                            onClick={() => { if (allProfiles.length === 0) fetchAllProfilesList(); }}
+                            className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium"
+                          >
+                            <option value="" className="text-slate-900">
+                              {allProfiles.length === 0 ? 'Memuat Staff...' : '-- Pilih Staff --'}
+                            </option>
+                            {allProfiles.map(p => (
+                              <option key={p.id} value={p.id} className="text-slate-900">
+                                {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
+                          <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
+                            <option value="toilet" className="text-slate-900">Toilet (10M)</option>
+                            <option value="shalat" className="text-slate-900">Shalat (10M)</option>
+                            <option value="makan" className="text-slate-900">Makan (10M)</option>
+                            <option value="custom" className="text-slate-900">Custom Menit</option>
+                          </select>
+                        </div>
+                      </div>
+                      {selectedIzinType === 'custom' && (
+                        <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} placeholder="Masukkan menit khusus..." className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none" />
+                      )}
+                      <button type="submit" disabled={isSubmittingIzin} className="w-full bg-indigo-600 hover:bg-indigo-500 font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]">
+                        <FiPlusCircle className="text-xs"/> Berikan Izin & Sync Radar
+                      </button>
+                    </form>
                   </div>
-                </div>
-                <form onSubmit={handleGrantIzin} className="space-y-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-extrabold text-slate-400 uppercase">Pilih Anggota Crew</label>
-                      <select 
-                        value={selectedCrewId} 
-                        onChange={(e) => setSelectedCrewId(e.target.value)} 
-                        onClick={() => { if (allProfiles.length === 0) fetchAllProfilesList(); }}
-                        className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium"
-                      >
-                        <option value="" className="text-slate-900">
-                          {allProfiles.length === 0 ? 'Memuat Staff...' : '-- Pilih Staff --'}
-                        </option>
-                        {allProfiles.map(p => (
-                          <option key={p.id} value={p.id} className="text-slate-900">
-                            {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
-                          </option>
-                        ))}
-                      </select>
+                )}
+
+                {/* 2. PANEL PENCATATAN PELANGGARAN SOC / UNPROSEDURAL (SEJAJAR DI HOMEPAGE) */}
+                {canReportViolation && (
+                  <div className="bg-gradient-to-br from-slate-900 to-slate-950 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-orange-600 text-white rounded-lg"><FiFileText className="text-xs" /></div>
+                        <div>
+                          <h3 className="text-xs font-black uppercase tracking-wider">Input Tindakan Indisipliner</h3>
+                          <p className="text-[9px] text-slate-400">Catat pelanggaran SOC & unprosedural kerja.</p>
+                        </div>
+                      </div>
+                      <span className="text-[8px] bg-orange-500/20 text-orange-400 border border-orange-500/30 px-2 py-0.5 rounded-md font-bold uppercase">
+                        QC / Stocker / Mgr
+                      </span>
                     </div>
 
-                    <div className="flex flex-col gap-1">
-                      <label className="text-[9px] font-extrabold text-slate-400 uppercase">Jenis Alokasi Izin</label>
-                      <select value={selectedIzinType} onChange={(e) => setSelectedIzinType(e.target.value)} className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium">
-                        <option value="toilet" className="text-slate-900">Toilet (10M)</option>
-                        <option value="shalat" className="text-slate-900">Shalat (10M)</option>
-                        <option value="makan" className="text-slate-900">Makan (10M)</option>
-                        <option value="custom" className="text-slate-900">Custom Menit</option>
-                      </select>
-                    </div>
+                    <button
+                      onClick={() => {
+                        if (allProfiles.length === 0) fetchAllProfilesList();
+                        setShowReportViolationModal(true);
+                      }}
+                      className="w-full bg-orange-600 hover:bg-orange-500 text-white font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]"
+                    >
+                      <FiAlertTriangle className="text-xs" /> Buka Form Laporan Pelanggaran
+                    </button>
                   </div>
-                  {selectedIzinType === 'custom' && (
-                    <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} placeholder="Masukkan menit khusus..." className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none" />
-                  )}
-                  <button type="submit" disabled={isSubmittingIzin} className="w-full bg-indigo-600 hover:bg-indigo-500 font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]">
-                    <FiPlusCircle className="text-xs"/> Berikan Izin & Sync Radar
-                  </button>
-                </form>
+                )}
               </div>
             )}
 
@@ -2379,7 +2415,7 @@ export default function BreakSystem() {
               </button>
             </div>
 
-            {/* HANYA MUNCUL JIKA AKUN MANAGER (Poin 1) */}
+            {/* HANYA MUNCUL JIKA AKUN MANAGER */}
             {isManager && (
               <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
                 <button
@@ -2395,19 +2431,6 @@ export default function BreakSystem() {
                   Data Manager 🔒
                 </button>
               </div>
-            )}
-
-            {/* TOMBOL LAPORKAN TINDAKAN UNPROSEDURAL / SOC (Khusus Manager, QC, Stocker) */}
-            {canReportViolation && (
-              <button
-                onClick={() => {
-                  if (allProfiles.length === 0) fetchAllProfilesList();
-                  setShowReportViolationModal(true);
-                }}
-                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 uppercase tracking-wider shadow-sm transition-all active:scale-[0.98]"
-              >
-                <FiFileText className="text-rose-400 text-sm" /> Catat Pelanggaran SOC / Unprosedural
-              </button>
             )}
 
             {isFetchingLeaderboard ? (
@@ -2476,7 +2499,7 @@ export default function BreakSystem() {
                 </div>
               </div>
             ) : (
-              /* VIEW 2: INDISIPLINER DENGAN FILTER PILLS DI ATAS (Poin 1 & 2) */
+              /* VIEW 2: INDISIPLINER DENGAN FILTER PILLS DI ATAS */
               <div className="space-y-3.5">
                 
                 {/* FILTER PILLS KATEGORI INDISIPLINER */}
@@ -2509,7 +2532,7 @@ export default function BreakSystem() {
                     onClick={() => setSelectedInfractionCategory('soc')}
                     className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'soc' ? 'bg-orange-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>Lainnya</span>
+                    <span>SOC/Lainnya</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topSoc.length})</span>
                   </button>
                 </div>
@@ -2740,7 +2763,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL INPUT PELANGGARAN SOC / UNPROSEDURAL ================= */}
+        {/* ================= MODAL INPUT PELANGGARAN SOC / UNPROSEDURAL (POIN STATIS 5, 10, 15) ================= */}
         {showReportViolationModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4">
@@ -2794,16 +2817,18 @@ export default function BreakSystem() {
                     </select>
                   </div>
 
+                  {/* Pilihan Statis Poin (5, 10, 15) */}
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-600 uppercase">Pengurangan Poin</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
+                    <select
                       value={reportPenaltyPoints}
                       onChange={(e) => setReportPenaltyPoints(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 outline-none"
-                    />
+                    >
+                      <option value="5">-5 Poin (Ringan)</option>
+                      <option value="10">-10 Poin (Sedang)</option>
+                      <option value="15">-15 Poin (Berat)</option>
+                    </select>
                   </div>
                 </div>
 
