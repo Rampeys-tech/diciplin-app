@@ -42,7 +42,8 @@ import {
   FiCalendar,
   FiActivity,
   FiFileText,
-  FiFilter
+  FiFilter,
+  FiList
 } from 'react-icons/fi';
 
 // ================= KONFIGURASI GEOFENCE OUTLET =================
@@ -105,7 +106,6 @@ export default function BreakSystem() {
   const [hasCheckedIn, setHasCheckedIn] = useState(false);
   const [hasCheckedOut, setHasCheckedOut] = useState(false);
   const [checkInTime, setCheckInTime] = useState(null);
-  const [isEligibleForCheckOut, setIsEligibleForCheckOut] = useState(false);
   const [activeLogId, setActiveLogId] = useState(null);
   const [requiredWorkHours, setRequiredWorkHours] = useState(9); 
 
@@ -162,8 +162,6 @@ export default function BreakSystem() {
 
   const [activeSubTabLeaderboard, setActiveSubTabLeaderboard] = useState('ranking');
   const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late');
-  
-  // Filter Station Khusus Indisipliner
   const [selectedStationFilter, setSelectedStationFilter] = useState('ALL');
 
   const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
@@ -171,17 +169,22 @@ export default function BreakSystem() {
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
 
-  // Modal Input Pelanggaran SOC / Unprosedural
+  // Modal Input Pelanggaran SOC / Unprosedural (Dengan Upload Dokumentasi)
   const [showReportViolationModal, setShowReportViolationModal] = useState(false);
   const [reportTargetCrewId, setReportTargetCrewId] = useState('');
   const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
   const [reportNotes, setReportNotes] = useState('');
   const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5');
+  const [reportEvidenceImage, setReportEvidenceImage] = useState(null);
+  const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
-  // State Log Foto
+  // State Log Foto vs Rekap Presensi Harian (Sub-tab)
+  const [logSubTab, setLogSubTab] = useState('photo'); // 'photo' | 'summary'
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
+  const [attendanceSummaryList, setAttendanceSummaryList] = useState([]);
+  const [isFetchingSummary, setIsFetchingSummary] = useState(false);
   const [logCategory, setLogCategory] = useState('crew'); 
   const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
   const [isFetchingMoreLogs, setIsFetchingMoreLogs] = useState(false);
@@ -478,6 +481,17 @@ export default function BreakSystem() {
             if (!isNaN(parsedHour)) setSelectedShiftHour(parsedHour);
           } catch(e) {}
         }
+
+        let checkInHour = 0;
+        try {
+          const checkInHourStr = inTime ? inTime.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' }) : '0';
+          checkInHour = parseInt(checkInHourStr);
+        } catch (e) {
+          checkInHour = inTime ? inTime.getHours() : 0;
+        }
+
+        const isShift22 = (selectedShiftHour === 22 || checkInHour === 22);
+        setRequiredWorkHours(isShift22 ? 8 : 9);
         
         const breaking = (!!currentLog.break_start_time && !currentLog.break_end_time) || currentLog.discipline_status === 'Sedang Istirahat';
         
@@ -487,14 +501,6 @@ export default function BreakSystem() {
             setBreakStartTime(new Date(currentLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
           } else {
             setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
-          }
-          
-          let checkInHour = 0;
-          try {
-            const hourStr = currentLog.actual_in ? new Date(currentLog.actual_in).toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' }) : '0';
-            checkInHour = parseInt(hourStr);
-          } catch(e) {
-            checkInHour = currentLog.actual_in ? new Date(currentLog.actual_in).getHours() : 0;
           }
 
           const allowedBreakSec = (checkInHour === 22) ? 1800 : 3600; 
@@ -518,7 +524,7 @@ export default function BreakSystem() {
     } catch (err) {
       console.error("Gagal memuat status kehadiran:", err);
     }
-  }, [user, checkAndPerformMonthlyReset]);
+  }, [user, selectedShiftHour, checkAndPerformMonthlyReset]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -658,7 +664,7 @@ export default function BreakSystem() {
           .select('id, full_name, avatar, station_placement, role, total_points'),
         supabase
           .from('attendance_logs')
-          .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in, is_outside_radius, distance_meters'),
+          .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in, status_out, is_outside_radius, distance_meters'),
         supabase
           .from('operational_violations')
           .select('*')
@@ -792,6 +798,17 @@ export default function BreakSystem() {
                 note: 'Meninggalkan area tugas outlet tanpa izin resmi'
               });
             }
+
+            if (log.status_out && log.status_out.toLowerCase().includes('pulang cepat')) {
+              userInfractionHistory.push({
+                type: 'Pulang Cepat (Early Leave)',
+                badgeColor: 'bg-orange-100 text-orange-800 border-orange-200',
+                detail: `Checkout sebelum durasi shift selesai (-${log.penalty_points || 0} Pts)`,
+                date: formattedDate,
+                time: `${formattedTime} WITA`,
+                note: log.status_out
+              });
+            }
           });
 
           const personViolations = (violations || []).filter(v => {
@@ -806,10 +823,11 @@ export default function BreakSystem() {
             userInfractionHistory.push({
               type: v.violation_type || 'Pelanggaran SOC',
               badgeColor: 'bg-orange-100 text-orange-800 border-orange-200',
-              detail: `Poin (-${v.penalty_points || 0}) • Pelapor: ${v.reporter_name || 'QC/Stocker/Manager'}`,
+              detail: `Pengurangan (-${v.penalty_points || 0} Poin)`,
               date: vDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' }),
               time: `${vDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
-              note: v.notes
+              note: v.notes,
+              evidence_image_url: v.evidence_image_url || null // Dokumentasi foto bukti pelanggaran (Poin 4)
             });
           });
 
@@ -925,11 +943,44 @@ export default function BreakSystem() {
     }
   }, [selectedMonth, currentMonthYear]);
 
-  // Form Submit Pelanggaran SOC / Unprosedural
+  // Upload Dokumentasi Pendukung Pelanggaran (Poin 1)
+  const handleEvidenceImageChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsUploadingEvidence(true);
+      const compressed = await imageCompression(file, {
+        maxSizeMB: 0.1,
+        maxWidthOrHeight: 1024,
+        useWebWorker: true
+      });
+
+      const filePath = `evidence/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+      const { error: uploadError } = await supabase.storage
+        .from('attendance-proofs')
+        .upload(filePath, compressed, { contentType: 'image/jpeg', upsert: true });
+
+      if (uploadError) throw uploadError;
+
+      const { data: publicData } = supabase.storage
+        .from('attendance-proofs')
+        .getPublicUrl(filePath);
+
+      setReportEvidenceImage(publicData.publicUrl);
+    } catch (err) {
+      alert(`Gagal mengunggah foto bukti: ${err.message}`);
+    } finally {
+      setIsUploadingEvidence(false);
+    }
+  };
+
+  // Form Submit Pelanggaran SOC / Unprosedural (Wajib Bukti Foto)
   const handleSubmitOperationalViolation = async (e) => {
     e.preventDefault();
     if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
     if (!reportNotes.trim()) return alert("Tuliskan deskripsi/catatan pelanggaran.");
+    if (!reportEvidenceImage) return alert("⚠️ Wajib mengunggah foto dokumentasi pendukung sebelum mengirim laporan.");
 
     setIsSubmittingReport(true);
     try {
@@ -942,7 +993,8 @@ export default function BreakSystem() {
         reporter_role: profile?.station_placement || profile?.role || 'Quality Control',
         violation_type: reportViolationType,
         notes: reportNotes.trim(),
-        penalty_points: deduction
+        penalty_points: deduction,
+        evidence_image_url: reportEvidenceImage
       });
 
       if (insErr) throw insErr;
@@ -961,10 +1013,11 @@ export default function BreakSystem() {
           .eq('id', reportTargetCrewId);
       }
 
-      alert("✓ Laporan pelanggaran operasional berhasil disimpan!");
+      alert("✓ Laporan pelanggaran & foto bukti berhasil disimpan!");
       setShowReportViolationModal(false);
       setReportNotes('');
       setReportTargetCrewId('');
+      setReportEvidenceImage(null);
       fetchLeaderboard();
       fetchAttendanceStatus();
     } catch (err) {
@@ -996,6 +1049,68 @@ export default function BreakSystem() {
       console.error("Gagal memuat rekap log break:", e);
     }
   }, [user]);
+
+  // Fetch Rekap Presensi Masuk & Pulang Harian Tanpa Foto (Poin 2)
+  const fetchAttendanceSummaryList = useCallback(async () => {
+    setIsFetchingSummary(true);
+    try {
+      const [{ data: logs, error: lError }, { data: profiles, error: pError }] = await Promise.all([
+        supabase
+          .from('attendance_logs')
+          .select('id, user_id, created_at, actual_in, actual_out, status_in, status_out, discipline_status')
+          .not('actual_in', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(100),
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, station_placement')
+      ]);
+
+      if (!lError && !pError && logs && profiles) {
+        const pMap = {};
+        const stMap = {};
+        profiles.forEach(p => { 
+          pMap[p.id] = p.full_name; 
+          stMap[p.id] = p.station_placement || 'Staff Station';
+        });
+
+        const formatted = logs.map(l => {
+          const logDate = new Date(l.actual_in || l.created_at);
+          const dateStr = logDate.toLocaleDateString('id-ID', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric',
+            timeZone: 'Asia/Makassar'
+          });
+
+          const inTimeStr = l.actual_in 
+            ? new Date(l.actual_in).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA' 
+            : '--:--';
+
+          const outTimeStr = l.actual_out 
+            ? new Date(l.actual_out).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA' 
+            : 'Belum Pulang';
+
+          return {
+            id: l.id,
+            name: pMap[l.user_id] || 'Crew Member',
+            station: stMap[l.user_id] || 'Staff',
+            date: dateStr,
+            inTime: inTimeStr,
+            outTime: outTimeStr,
+            statusIn: l.status_in || 'Tepat Waktu',
+            statusOut: l.status_out || (l.actual_out ? 'Shift Selesai' : 'On-Duty')
+          };
+        });
+
+        setAttendanceSummaryList(formatted);
+      }
+    } catch (e) {
+      console.error("Gagal load rekap presensi:", e);
+    } finally {
+      setIsFetchingSummary(false);
+    }
+  }, []);
 
   const fetchAllCrewLogs = useCallback(async (loadMore = false, pageNum = 0) => {
     if (loadMore) {
@@ -1265,36 +1380,6 @@ export default function BreakSystem() {
   }, [liveBreaks.length, waterBreaks.length, updateDurationsLocally, updateWaterBreaksLocally]);
 
   useEffect(() => {
-    if (!checkInTime || hasCheckedOut) {
-      setIsEligibleForCheckOut(false);
-      return;
-    }
-
-    const checkEligibility = () => {
-      let checkInHour = 0;
-      try {
-        const checkInHourStr = checkInTime.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' });
-        checkInHour = parseInt(checkInHourStr);
-      } catch (e) {
-        checkInHour = new Date(checkInTime).getHours();
-      }
-
-      const isShift22 = (selectedShiftHour === 22 || checkInHour === 22);
-      const targetHours = isShift22 ? 8 : 9;
-      setRequiredWorkHours(targetHours);
-
-      const now = new Date();
-      const durationMs = now.getTime() - new Date(checkInTime).getTime();
-      const durationHours = durationMs / (1000 * 60 * 60);
-      setIsEligibleForCheckOut(durationHours >= targetHours);
-    };
-
-    checkEligibility();
-    const eligibilityTimer = setInterval(checkEligibility, 5000); 
-    return () => clearInterval(eligibilityTimer);
-  }, [checkInTime, hasCheckedOut, selectedShiftHour]);
-
-  useEffect(() => {
     let timer = null;
     if (isOnBreak) {
       timer = setInterval(async () => {
@@ -1358,7 +1443,9 @@ export default function BreakSystem() {
     } else if (activeTab === 'leaderboard') {
       fetchLeaderboard();
     } else if (activeTab === 'all-logs') {
-      if (!isLogsFetchedRef.current) {
+      if (logSubTab === 'summary') {
+        fetchAttendanceSummaryList();
+      } else if (!isLogsFetchedRef.current) {
         setLogsPage(0);
         setHasMoreLogs(true);
         fetchAllCrewLogs(false, 0);
@@ -1369,7 +1456,7 @@ export default function BreakSystem() {
       setEditPhone(profile.whatsapp_number || '');
       setEditAvatar(profile.avatar || '');
     }
-  }, [activeTab, profile, fetchBreakLogs, fetchLiveBreakData, fetchLeaderboard, fetchAllCrewLogs]);
+  }, [activeTab, logSubTab, profile, fetchBreakLogs, fetchLiveBreakData, fetchLeaderboard, fetchAllCrewLogs, fetchAttendanceSummaryList]);
 
   useEffect(() => {
     if (user?.id) {
@@ -1738,9 +1825,10 @@ export default function BreakSystem() {
           setBreakStartTime(null);
         }
       } else if (cameraMode === 'OUT') {
+        // Poin 3: Absen Pulang Tercatat & Deteksi Pulang Cepat
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
-          .select('id')
+          .select('id, actual_in, status_in')
           .eq('user_id', user.id)
           .is('actual_out', null)
           .order('created_at', { ascending: false })
@@ -1749,12 +1837,45 @@ export default function BreakSystem() {
 
         const targetLogId = latestActiveLog?.id || activeLogId;
 
-        if (targetLogId) {
+        if (targetLogId && latestActiveLog?.actual_in) {
+          const inDate = new Date(latestActiveLog.actual_in);
+          const workedHours = (now.getTime() - inDate.getTime()) / (1000 * 60 * 60);
+
+          let checkInHour = inDate.getHours();
+          const targetRequiredHours = (selectedShiftHour === 22 || checkInHour === 22) ? 8 : 9;
+
+          let statusOutText = 'Sesuai Jadwal';
+          let earlyPenalty = 0;
+          let earlyFinancialLoss = 0;
+
+          if (workedHours < targetRequiredHours) {
+            const missingMinutes = Math.floor((targetRequiredHours * 60) - (workedHours * 60));
+            statusOutText = `Pulang Cepat (${missingMinutes}m)`;
+            earlyPenalty = Math.min(30, Math.max(5, Math.floor(missingMinutes / 10) * 5)); // Pengurangan poin indisipliner
+            earlyFinancialLoss = missingMinutes * 1000;
+          }
+
           await supabase.from('attendance_logs').update({
             actual_out: timestampIso,
-            status_out: 'Sesuai Jadwal',
-            discipline_status: 'Shift Selesai'
+            status_out: statusOutText,
+            discipline_status: workedHours < targetRequiredHours ? 'Pulang Lebih Awal' : 'Shift Selesai',
+            penalty_points: earlyPenalty,
+            financial_loss_amount: earlyFinancialLoss
           }).eq('id', targetLogId);
+
+          if (earlyPenalty > 0) {
+            const { data: currentProf } = await supabase
+              .from('user_profiles')
+              .select('total_points')
+              .eq('id', user.id)
+              .maybeSingle();
+
+            const existingPts = currentProf?.total_points ?? 100;
+            await supabase
+              .from('user_profiles')
+              .update({ total_points: Math.max(0, Number(existingPts) - earlyPenalty) })
+              .eq('id', user.id);
+          }
         }
       }
 
@@ -1764,10 +1885,11 @@ export default function BreakSystem() {
       await fetchLiveBreakData();
       await fetchLeaderboard(); 
       await fetchActiveShiftStats(); 
+      if (activeTab === 'all-logs' && logSubTab === 'summary') await fetchAttendanceSummaryList();
       
       setIsCameraOpen(false);
       setCapturedImage(null);
-      alert("✓ Data Presensi & Poin Kedisiplinan Berhasil Diperbarui!");
+      alert("✓ Data Presensi Pulang & Kedisiplinan Berhasil Diperbarui!");
     } catch (err) {
       alert(`Gagal sinkronisasi data: ${err.message}`);
     } finally {
@@ -1887,7 +2009,6 @@ export default function BreakSystem() {
     .filter(c => c.isBebal)
     .sort((a, b) => a.points - b.points);
 
-  // Helper filter data indisipliner berdasarkan station
   const filterByStation = (list) => {
     if (selectedStationFilter === 'ALL') return list;
     return list.filter(item => {
@@ -1936,7 +2057,7 @@ export default function BreakSystem() {
           
           <button 
             onClick={async () => { await supabase.auth.signOut(); }} 
-            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95"
+            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
           >
             Keluar
           </button>
@@ -2069,7 +2190,7 @@ export default function BreakSystem() {
                 </div>
                 <button
                   onClick={() => handleStopWaterbreak(user?.id)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] px-3 py-1.5 rounded-xl uppercase tracking-wider flex items-center gap-1 active:scale-95 transition-all"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] px-3 py-1.5 rounded-xl uppercase tracking-wider flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
                 >
                   <FiCheck className="text-xs" /> Selesaikan
                 </button>
@@ -2132,7 +2253,7 @@ export default function BreakSystem() {
                       {selectedIzinType === 'custom' && (
                         <input type="number" value={customIzinMinutes} onChange={(e) => setCustomIzinMinutes(e.target.value)} placeholder="Masukkan menit khusus..." className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white outline-none" />
                       )}
-                      <button type="submit" disabled={isSubmittingIzin} className="w-full bg-indigo-600 hover:bg-indigo-500 font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]">
+                      <button type="submit" disabled={isSubmittingIzin} className="w-full bg-indigo-600 hover:bg-indigo-500 font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] cursor-pointer">
                         <FiPlusCircle className="text-xs"/> Berikan Izin & Sync Radar
                       </button>
                     </form>
@@ -2157,7 +2278,7 @@ export default function BreakSystem() {
                         if (allProfiles.length === 0) fetchAllProfilesList();
                         setShowReportViolationModal(true);
                       }}
-                      className="w-full bg-orange-600 hover:bg-orange-500 text-white font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]"
+                      className="w-full bg-orange-600 hover:bg-orange-500 text-white font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] cursor-pointer"
                     >
                       <FiAlertTriangle className="text-xs" /> Buka Form Laporan Pelanggaran
                     </button>
@@ -2166,7 +2287,7 @@ export default function BreakSystem() {
               </div>
             )}
 
-            {/* PRESENSI UTAMA CARD */}
+            {/* PRESENSI UTAMA CARD (POIN 3: ABSEN PULANG FLEKSIBEL & CATAT SELISIH JAM) */}
             <div className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-xs space-y-3">
               <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
                 <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
@@ -2192,21 +2313,23 @@ export default function BreakSystem() {
                 </button>
 
                 <button
-                  disabled={!hasCheckedIn || hasCheckedOut || !isEligibleForCheckOut || isVerifyingLocation}
+                  disabled={!hasCheckedIn || hasCheckedOut || isVerifyingLocation}
                   onClick={() => openCamera('OUT')}
-                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${hasCheckedOut ? 'bg-slate-100 border-slate-200 text-slate-400' : !hasCheckedIn ? 'bg-slate-50 border-slate-200 text-slate-300' : !isEligibleForCheckOut ? 'bg-rose-50/50 border-rose-100 text-rose-400' : 'bg-slate-50 border-slate-200 text-slate-800'}`}
+                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 cursor-pointer active:scale-[0.97] ${hasCheckedOut ? 'bg-slate-100 border-slate-200 text-slate-400' : 'bg-slate-50 hover:bg-rose-50 border-slate-200/80 text-slate-800 hover:text-rose-700 hover:border-rose-200'}`}
                 >
-                  <div className={`p-2 rounded-xl ${hasCheckedOut ? 'bg-slate-200 text-slate-400' : isEligibleForCheckOut ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-300'}`}>
+                  <div className={`p-2 rounded-xl ${hasCheckedOut ? 'bg-slate-200 text-slate-400' : 'bg-rose-50 text-rose-600'}`}>
                     <FiLogOut className="text-lg" />
                   </div>
-                  <span>Absen Pulang</span>
+                  <span>{hasCheckedOut ? 'Sudah Pulang ✓' : 'Absen Pulang'}</span>
                 </button>
               </div>
 
-              {hasCheckedIn && !hasCheckedOut && !isEligibleForCheckOut && (
-                <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-2.5 flex items-start gap-2">
-                  <FiAlertCircle className="text-amber-600 mt-0.5 flex-shrink-0 text-sm" />
-                  <p className="text-[10px] text-amber-900 font-bold leading-relaxed">Tombol checkout terkunci hingga Anda menyelesaikan total {requiredWorkHours} Jam Kerja.</p>
+              {hasCheckedIn && !hasCheckedOut && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-start gap-2">
+                  <FiClock className="text-slate-500 mt-0.5 flex-shrink-0 text-sm" />
+                  <p className="text-[10px] text-slate-600 font-semibold leading-relaxed">
+                    Target shift: {requiredWorkHours} Jam Kerja. Jam checkout Anda akan tercatat langsung ke dashboard supervisor.
+                  </p>
                 </div>
               )}
             </div>
@@ -2242,7 +2365,7 @@ export default function BreakSystem() {
                   <button 
                     disabled={isVerifyingLocation}
                     onClick={() => openCamera('END_BREAK')} 
-                    className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 rounded-xl text-xs tracking-wider shadow-md shadow-rose-600/20 transition-all active:scale-[0.98]"
+                    className="w-full bg-rose-600 hover:bg-rose-700 text-white font-black py-3 rounded-xl text-xs tracking-wider shadow-md shadow-rose-600/20 transition-all active:scale-[0.98] cursor-pointer"
                   >
                     Akhiri Waktu Break
                   </button>
@@ -2259,7 +2382,7 @@ export default function BreakSystem() {
                   <button
                     disabled={!hasCheckedIn || hasCheckedOut || isVerifyingLocation}
                     onClick={() => openCamera('START_BREAK')}
-                    className={`w-full py-3.5 px-4 rounded-xl font-black text-xs tracking-wider transition-all duration-200 ${hasCheckedIn && !hasCheckedOut ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-md active:scale-[0.98]' : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'}`}
+                    className={`w-full py-3.5 px-4 rounded-xl font-black text-xs tracking-wider transition-all duration-200 cursor-pointer ${hasCheckedIn && !hasCheckedOut ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-md active:scale-[0.98]' : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'}`}
                   >
                     Ambil Absen Istirahat (Mulai Timer)
                   </button>
@@ -2381,7 +2504,7 @@ export default function BreakSystem() {
                         {isManager && (
                           <button
                             onClick={() => handleStopWaterbreak(wb.id)}
-                            className="bg-slate-900 hover:bg-slate-800 text-white font-black text-[9px] px-2 py-1 rounded-lg uppercase transition-colors"
+                            className="bg-slate-900 hover:bg-slate-800 text-white font-black text-[9px] px-2 py-1 rounded-lg uppercase transition-colors cursor-pointer"
                           >
                             Selesai
                           </button>
@@ -2738,7 +2861,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL DETAIL INDISIPLINER ================= */}
+        {/* ================= MODAL DETAIL INDISIPLINER (POIN 4: TANPA PELAPOR, DENGAN FOTO BUKTI) ================= */}
         {showInfractionModal && selectedCrewInfractionDetail && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
@@ -2755,13 +2878,13 @@ export default function BreakSystem() {
                 </div>
                 <button 
                   onClick={() => setShowInfractionModal(false)}
-                  className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 transition-colors"
+                  className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 transition-colors cursor-pointer"
                 >
                   <FiX className="text-lg"/>
                 </button>
               </div>
 
-              <div className="p-4 flex-1 overflow-y-auto space-y-2.5">
+              <div className="p-4 flex-1 overflow-y-auto space-y-3">
                 {(!selectedCrewInfractionDetail.history && !selectedCrewInfractionDetail.infractions) || 
                  ((selectedCrewInfractionDetail.history || selectedCrewInfractionDetail.infractions).length === 0) ? (
                   <div className="py-8 text-center text-xs font-semibold text-slate-400">
@@ -2769,7 +2892,7 @@ export default function BreakSystem() {
                   </div>
                 ) : (
                   (selectedCrewInfractionDetail.history || selectedCrewInfractionDetail.infractions).map((inf, i) => (
-                    <div key={i} className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 space-y-1.5 shadow-2xs">
+                    <div key={i} className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 space-y-2 shadow-2xs">
                       <div className="flex items-center justify-between">
                         <span className={`text-[8px] font-black px-2 py-0.5 rounded-md border uppercase ${inf.badgeColor}`}>
                           {inf.type}
@@ -2784,6 +2907,18 @@ export default function BreakSystem() {
                           {inf.note}
                         </p>
                       )}
+
+                      {/* TAMPILAN FOTO DOKUMENTASI BUKTI KEJADIAN (POIN 4) */}
+                      {inf.evidence_image_url && (
+                        <div className="space-y-1 pt-1">
+                          <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Foto Bukti Dokumentasi:</span>
+                          <img 
+                            src={inf.evidence_image_url} 
+                            alt="Bukti Pelanggaran" 
+                            className="w-full aspect-[4/3] rounded-xl object-cover border border-slate-200 shadow-xs" 
+                          />
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -2792,7 +2927,7 @@ export default function BreakSystem() {
               <div className="p-3 bg-slate-50 border-t border-slate-100">
                 <button
                   onClick={() => setShowInfractionModal(false)}
-                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider"
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer"
                 >
                   Tutup Rincian
                 </button>
@@ -2802,10 +2937,10 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL INPUT PELANGGARAN SOC / UNPROSEDURAL ================= */}
+        {/* ================= MODAL INPUT PELANGGARAN SOC (POIN 1: WAJIB UPLOAD BUKTI FOTO) ================= */}
         {showReportViolationModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
                   <div className="p-1.5 bg-orange-50 text-orange-600 rounded-xl">
@@ -2815,10 +2950,10 @@ export default function BreakSystem() {
                     <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
                       Catat Pelanggaran Operasional
                     </h3>
-                    <p className="text-[9px] text-slate-400 font-medium">Input tindakan unprosedural / di luar SOC</p>
+                    <p className="text-[9px] text-slate-400 font-medium">Wajib lampirkan foto dokumentasi pendukung</p>
                   </div>
                 </div>
-                <button onClick={() => setShowReportViolationModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 transition-colors">
+                <button onClick={() => setShowReportViolationModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 transition-colors cursor-pointer">
                   <FiX className="text-lg"/>
                 </button>
               </div>
@@ -2873,7 +3008,7 @@ export default function BreakSystem() {
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-slate-600 uppercase">Rincian Kejadian / Catatan</label>
                   <textarea
-                    rows={3}
+                    rows={2}
                     value={reportNotes}
                     onChange={(e) => setReportNotes(e.target.value)}
                     placeholder="Contoh: Tidak memakai sarung tangan saat handling dimsum / mengabaikan resep..."
@@ -2882,10 +3017,38 @@ export default function BreakSystem() {
                   />
                 </div>
 
+                {/* UPLOAD FOTO BUKTI PENDUKUNG (POIN 1) */}
+                <div className="space-y-1.5 pt-1">
+                  <label className="text-[10px] font-black text-slate-700 uppercase flex items-center gap-1">
+                    <FiCamera className="text-orange-600" /> Foto Bukti Dokumentasi (Wajib)
+                  </label>
+                  
+                  {reportEvidenceImage ? (
+                    <div className="relative rounded-2xl overflow-hidden border border-slate-200">
+                      <img src={reportEvidenceImage} alt="Bukti" className="w-full h-32 object-cover" />
+                      <button 
+                        type="button" 
+                        onClick={() => setReportEvidenceImage(null)} 
+                        className="absolute top-2 right-2 bg-slate-900/80 text-white p-1.5 rounded-full hover:bg-slate-900 cursor-pointer"
+                      >
+                        <FiX className="text-xs" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="w-full border-2 border-dashed border-slate-300 hover:border-orange-500 bg-slate-50 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                      <FiUploadCloud className="text-xl text-slate-400" />
+                      <span className="text-[10px] font-bold text-slate-600">
+                        {isUploadingEvidence ? 'Mengunggah Foto...' : 'Pilih / Ambil Foto Bukti'}
+                      </span>
+                      <input type="file" accept="image/*" onChange={handleEvidenceImageChange} className="hidden" disabled={isUploadingEvidence} />
+                    </label>
+                  )}
+                </div>
+
                 <button
                   type="submit"
-                  disabled={isSubmittingReport}
-                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all active:scale-[0.98]"
+                  disabled={isSubmittingReport || isUploadingEvidence}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all active:scale-[0.98] cursor-pointer disabled:opacity-60"
                 >
                   {isSubmittingReport ? 'Menyimpan Laporan...' : 'Kirim & Simpan Pelanggaran'}
                 </button>
@@ -2894,102 +3057,175 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO ISTIRAHAT ================= */}
+        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN (POIN 2) ================= */}
         {activeTab === 'all-logs' && (
-          <div className="flex-1 px-4 py-4 space-y-3">
-            <div className="flex flex-col space-y-0.5">
-              <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
-                <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
-              </h2>
-              <p className="text-[10px] text-slate-400 font-medium">Foto diarsip otomatis maksimal 60 hari.</p>
+          <div className="flex-1 px-4 py-4 space-y-3.5">
+            
+            {/* SUB-TAB NAV: LOG FOTO VS REKAP PRESENSI HARIAN */}
+            <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
+              <button
+                onClick={() => setLogSubTab('photo')}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${logSubTab === 'photo' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                <FiImage className="text-sm" /> Log Foto Break
+              </button>
+              <button
+                onClick={() => setLogSubTab('summary')}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${logSubTab === 'summary' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                <FiList className="text-sm" /> Rekap Jam Presensi
+              </button>
             </div>
 
-            {isManager && (
-              <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
-                <button
-                  onClick={() => setLogCategory('crew')}
-                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${logCategory === 'crew' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
-                >
-                  Log Crew
-                </button>
-                <button
-                  onClick={() => setLogCategory('manager')}
-                  className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${logCategory === 'manager' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
-                >
-                  Log Manager 🔒
-                </button>
-              </div>
-            )}
+            {/* VIEW A: REKAP JAM PRESENSI HARIAN TANPA FOTO (POIN 2) */}
+            {logSubTab === 'summary' ? (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Rekap Presensi Harian Kru</h3>
+                    <p className="text-[9px] text-slate-400 font-medium">Daftar jam masuk & jam pulang per tanggal.</p>
+                  </div>
+                  <button 
+                    onClick={fetchAttendanceSummaryList} 
+                    className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer"
+                  >
+                    <FiRefreshCw className="text-xs" />
+                  </button>
+                </div>
 
-            {isFetchingAllLogs ? (
-              <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
-            ) : activeLogData.length === 0 ? (
-              <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
-                Belum ada aktivitas log break dalam 60 hari terakhir.
+                {isFetchingSummary ? (
+                  <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Memuat rekap jam masuk/pulang...</div>
+                ) : attendanceSummaryList.length === 0 ? (
+                  <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
+                    Belum ada riwayat presensi yang tersimpan.
+                  </div>
+                ) : (
+                  <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                    {attendanceSummaryList.map((item) => (
+                      <div key={item.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50/70 transition-colors">
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-bold text-slate-900 block">{item.name}</span>
+                          <span className="text-[9px] text-indigo-600 font-black uppercase">{item.station}</span>
+                          <span className="text-[9px] text-slate-400 font-mono block mt-0.5">{item.date}</span>
+                        </div>
+
+                        <div className="text-right space-y-1">
+                          <div className="flex items-center gap-1 text-[10px] font-mono justify-end">
+                            <span className="bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded-md border border-emerald-200">
+                              IN: {item.inTime}
+                            </span>
+                            <span className={`font-bold px-2 py-0.5 rounded-md border ${item.outTime === 'Belum Pulang' ? 'bg-slate-100 text-slate-500 border-slate-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                              OUT: {item.outTime}
+                            </span>
+                          </div>
+                          <span className={`text-[8px] font-black uppercase px-2 py-0.2 rounded inline-block ${item.statusIn.toLowerCase().includes('terlambat') || item.statusOut.toLowerCase().includes('pulang cepat') ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                            {item.statusIn.toLowerCase().includes('terlambat') ? 'Terlambat Masuk' : item.statusOut.toLowerCase().includes('pulang cepat') ? 'Pulang Cepat' : 'Jadwal Normal'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
+              /* VIEW B: LOG FOTO ISTIRAHAT */
               <div className="space-y-3">
-                {activeLogData.map((log) => (
-                  <div key={log.id} className="bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs space-y-2.5">
-                    <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-900">{log.crewName}</h4>
-                        <p className="text-[9px] text-slate-400 font-medium">{new Date(log.created_at).toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric', timeZone: 'Asia/Makassar'})}</p>
-                      </div>
-                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md uppercase border ${log.isOverBreak ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
-                        {log.formattedDuration}
-                      </span>
-                    </div>
+                <div className="flex flex-col space-y-0.5">
+                  <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                    <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
+                  </h2>
+                  <p className="text-[10px] text-slate-400 font-medium">Foto diarsip otomatis maksimal 60 hari.</p>
+                </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
-                          <span className="text-[8px] font-black font-mono text-indigo-600 bg-indigo-50 px-1 py-0.2 rounded border border-indigo-100">
-                            {log.formattedStartTime}
-                          </span>
-                        </div>
-                        {log.image_url ? (
-                          <img src={log.image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
-                        ) : (
-                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">Foto Telah Diarsip</div>
-                        )}
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
-                          <span className={`text-[8px] font-black font-mono px-1 py-0.2 rounded border ${log.formattedEndTime === 'In Progress' ? 'text-amber-600 bg-amber-50 border-amber-100' : 'text-emerald-700 bg-emerald-50 border-emerald-100'}`}>
-                            {log.formattedEndTime}
-                          </span>
-                        </div>
-                        {log.after_break_image_url ? (
-                          <img src={log.after_break_image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
-                        ) : (
-                          <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress / Diarsip</div>
-                        )}
-                      </div>
-                    </div>
+                {isManager && (
+                  <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
+                    <button
+                      onClick={() => setLogCategory('crew')}
+                      className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${logCategory === 'crew' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Log Crew
+                    </button>
+                    <button
+                      onClick={() => setLogCategory('manager')}
+                      className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${logCategory === 'manager' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Log Manager 🔒
+                    </button>
                   </div>
-                ))}
+                )}
 
-                {hasMoreLogs && (
-                  <button
-                    onClick={() => fetchAllCrewLogs(true, logsPage)}
-                    disabled={isFetchingMoreLogs}
-                    className="w-full bg-white hover:bg-slate-50 border border-slate-200/70 text-slate-600 font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-colors disabled:opacity-60"
-                  >
-                    {isFetchingMoreLogs ? (
-                      <span className="animate-pulse">Memuat...</span>
-                    ) : (
-                      <>
-                        <FiChevronDown className="text-sm" /> Muat Lebih Banyak
-                      </>
+                {isFetchingAllLogs ? (
+                  <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
+                ) : activeLogData.length === 0 ? (
+                  <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
+                    Belum ada aktivitas log break dalam 60 hari terakhir.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {activeLogData.map((log) => (
+                      <div key={log.id} className="bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs space-y-2.5">
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900">{log.crewName}</h4>
+                            <p className="text-[9px] text-slate-400 font-medium">{new Date(log.created_at).toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric', timeZone: 'Asia/Makassar'})}</p>
+                          </div>
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md uppercase border ${log.isOverBreak ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
+                            {log.formattedDuration}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
+                              <span className="text-[8px] font-black font-mono text-indigo-600 bg-indigo-50 px-1 py-0.2 rounded border border-indigo-100">
+                                {log.formattedStartTime}
+                              </span>
+                            </div>
+                            {log.image_url ? (
+                              <img src={log.image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
+                            ) : (
+                              <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">Foto Telah Diarsip</div>
+                            )}
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
+                              <span className={`text-[8px] font-black font-mono px-1 py-0.2 rounded border ${log.formattedEndTime === 'In Progress' ? 'text-amber-600 bg-amber-50 border-amber-100' : 'text-emerald-700 bg-emerald-50 border-emerald-100'}`}>
+                                {log.formattedEndTime}
+                              </span>
+                            </div>
+                            {log.after_break_image_url ? (
+                              <img src={log.after_break_image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
+                            ) : (
+                              <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress / Diarsip</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {hasMoreLogs && (
+                      <button
+                        onClick={() => fetchAllCrewLogs(true, logsPage)}
+                        disabled={isFetchingMoreLogs}
+                        className="w-full bg-white hover:bg-slate-50 border border-slate-200/70 text-slate-600 font-bold py-3 rounded-2xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-colors disabled:opacity-60 cursor-pointer"
+                      >
+                        {isFetchingMoreLogs ? (
+                          <span className="animate-pulse">Memuat...</span>
+                        ) : (
+                          <>
+                            <FiChevronDown className="text-sm" /> Muat Lebih Banyak
+                          </>
+                        )}
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )}
               </div>
             )}
+
           </div>
         )}
 
@@ -3038,7 +3274,7 @@ export default function BreakSystem() {
                 </div>
               </div>
 
-              <button type="submit" disabled={isUpdatingProfile} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-2xl text-xs tracking-wider shadow-md transition-all active:scale-[0.98]">
+              <button type="submit" disabled={isUpdatingProfile} className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3.5 rounded-2xl text-xs tracking-wider shadow-md transition-all active:scale-[0.98] cursor-pointer">
                 {isUpdatingProfile ? 'Menyimpan...' : 'Simpan Pembaruan Profil'}
               </button>
             </form>
@@ -3047,19 +3283,19 @@ export default function BreakSystem() {
 
         {/* FIXED BOTTOM NAV BAR */}
         <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-xl border-t border-slate-200/80 px-2 py-2 flex justify-between items-center z-40 shadow-[0_-4px_25px_rgba(0,0,0,0.05)]">
-          <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'absen' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+          <button onClick={() => setActiveTab('absen')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all cursor-pointer ${activeTab === 'absen' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiLayout className="text-lg" /> <span className="text-[9px] tracking-tight">Absen</span>
           </button>
-          <button onClick={() => setActiveTab('live-break')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'live-break' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+          <button onClick={() => setActiveTab('live-break')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all cursor-pointer ${activeTab === 'live-break' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiUsers className="text-lg" /> <span className="text-[9px] tracking-tight">Live</span>
           </button>
-          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'leaderboard' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all cursor-pointer ${activeTab === 'leaderboard' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiAward className="text-lg" /> <span className="text-[9px] tracking-tight">Poin</span>
           </button>
-          <button onClick={() => setActiveTab('all-logs')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'all-logs' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+          <button onClick={() => setActiveTab('all-logs')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all cursor-pointer ${activeTab === 'all-logs' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiRotateCcw className="text-lg" /> <span className="text-[9px] tracking-tight">Log</span>
           </button>
-          <button onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all ${activeTab === 'profile' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
+          <button onClick={() => setActiveTab('profile')} className={`flex-1 flex flex-col items-center gap-1 py-1 transition-all cursor-pointer ${activeTab === 'profile' ? 'text-indigo-600 font-black scale-105' : 'text-slate-400 font-bold hover:text-slate-700'}`}>
             <FiSettings className="text-lg" /> <span className="text-[9px] tracking-tight">Profil</span>
           </button>
         </div>
@@ -3083,7 +3319,7 @@ export default function BreakSystem() {
                     </p>
                   </div>
                 </div>
-                <button onClick={() => setShowShiftPicker(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 transition-colors">
+                <button onClick={() => setShowShiftPicker(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 transition-colors cursor-pointer">
                   <FiX className="text-lg"/>
                 </button>
               </div>
@@ -3107,7 +3343,7 @@ export default function BreakSystem() {
                           key={st}
                           type="button"
                           onClick={() => setSelectedStation(st)}
-                          className={`px-3 py-2 rounded-xl text-left font-bold text-[10px] transition-all flex items-center justify-between border ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/80'}`}
+                          className={`px-3 py-2 rounded-xl text-left font-bold text-[10px] transition-all flex items-center justify-between border cursor-pointer ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200/80'}`}
                         >
                           <span className="truncate pr-1">{st}</span>
                           {isSelected && <FiCheckSquare className="text-xs flex-shrink-0" />}
@@ -3138,7 +3374,7 @@ export default function BreakSystem() {
                         key={opt.hour}
                         type="button"
                         onClick={() => setSelectedShiftHour(opt.hour)}
-                        className={`p-2 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[10px] font-black ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200/80 hover:bg-indigo-50'}`}
+                        className={`p-2 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[10px] font-black cursor-pointer ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200/80 hover:bg-indigo-50'}`}
                       >
                         <FiClock className="text-xs"/>
                         <span>{opt.label}</span>
@@ -3152,14 +3388,14 @@ export default function BreakSystem() {
                 <button 
                   type="button" 
                   onClick={handleConfirmShiftAndOpenCamera} 
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5"
+                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <FiCamera className="text-sm" /> Lanjutkan Buka Kamera
                 </button>
                 <button 
                   type="button" 
                   onClick={() => setShowShiftPicker(false)} 
-                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl text-xs transition-colors"
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
                 >
                   Batal
                 </button>
@@ -3179,7 +3415,7 @@ export default function BreakSystem() {
                   VERIFIKASI WAJAH: {cameraMode} {cameraMode === 'IN' ? `(${isManager ? 'Manager' : selectedStation} - SHIFT ${selectedShiftHour.toString().padStart(2, '0')}:00)` : ''}
                 </h3>
               </div>
-              <button type="button" onClick={closeCamera} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors">
+              <button type="button" onClick={closeCamera} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors cursor-pointer">
                 <FiX className="h-5 w-5" />
               </button>
             </div>
@@ -3208,7 +3444,7 @@ export default function BreakSystem() {
                       <button 
                         type="button" 
                         onClick={handleCapture} 
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white p-5 rounded-full shadow-2xl border-4 border-white/80 active:scale-95 transition-transform flex items-center justify-center"
+                        className="bg-indigo-600 hover:bg-indigo-500 text-white p-5 rounded-full shadow-2xl border-4 border-white/80 active:scale-95 transition-transform flex items-center justify-center cursor-pointer"
                       >
                         <FiCamera className="text-2xl" />
                       </button>
@@ -3233,7 +3469,7 @@ export default function BreakSystem() {
                   <button 
                     type="button" 
                     onClick={() => { setCapturedImage(null); openCamera(cameraMode); }} 
-                    className="flex-1 bg-slate-800 text-slate-200 font-bold py-3.5 rounded-2xl text-xs border border-slate-700 hover:bg-slate-700 transition-colors flex items-center justify-center gap-1.5"
+                    className="flex-1 bg-slate-800 text-slate-200 font-bold py-3.5 rounded-2xl text-xs border border-slate-700 hover:bg-slate-700 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <FiRefreshCw /> Foto Ulang
                   </button>
@@ -3241,7 +3477,7 @@ export default function BreakSystem() {
                     type="button" 
                     disabled={isLoading} 
                     onClick={handleConfirmSubmission} 
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3.5 rounded-2xl text-xs shadow-lg shadow-indigo-600/30 transition-colors flex items-center justify-center gap-1.5"
+                    className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3.5 rounded-2xl text-xs shadow-lg shadow-indigo-600/30 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     {isLoading ? 'Memproses Data...' : 'Konfirmasi Absen'}
                   </button>
