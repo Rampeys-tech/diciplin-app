@@ -1,9 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { supabase } from '../api';
 import { useAuth } from '../context/AuthContext';
 import imageCompression from 'browser-image-compression';
+import StoreGpsConfig from '../components/StoreGpsConfig';
+import AreaDashboard from './AreaDashboard';
+import StoreKpiPortal from '../pages/StoreKpiPortal';
 import { 
   FiClock, 
   FiCamera, 
@@ -43,13 +46,15 @@ import {
   FiActivity,
   FiFileText,
   FiFilter,
-  FiList
+  FiList,
+  FiGlobe,
+  FiBarChart2
 } from 'react-icons/fi';
 
-// ================= KONFIGURASI GEOFENCE OUTLET =================
-const TARGET_LAT = -1.260041; 
-const TARGET_LNG = 116.863895; 
-const MAX_RADIUS_METERS = 50; 
+// ================= FALLBACK GEOFENCE (JIKA DATA OUTLET BELUM TERSEDIA) =================
+const DEFAULT_TARGET_LAT = -1.260041; 
+const DEFAULT_TARGET_LNG = 116.863895; 
+const DEFAULT_MAX_RADIUS = 50; 
 
 function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000; 
@@ -82,12 +87,39 @@ const CREW_STATION_OPTIONS = [
   'Dishwasher'
 ];
 
-const LOGS_PAGE_SIZE = 20;
-const LOGS_MAX_AGE_DAYS = 60;
+const LOGS_PAGE_SIZE = 15;
+const LOGS_MAX_AGE_DAYS = 45;
+
+// Komponen Avatar yang hemat bandwidth
+const UserAvatar = memo(({ src, name, size = "w-9 h-9", className = "" }) => {
+  const [error, setError] = useState(false);
+  const initials = (name || 'CR').substring(0, 2).toUpperCase();
+
+  if (!src || error) {
+    return (
+      <div className={`${size} rounded-xl bg-slate-200 text-slate-700 flex items-center justify-center font-bold text-xs shrink-0 select-none ${className}`}>
+        {initials}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={name || 'Avatar'}
+      loading="lazy"
+      decoding="async"
+      onError={() => setError(true)}
+      className={`${size} rounded-xl object-cover border border-slate-100 shadow-2xs shrink-0 ${className}`}
+    />
+  );
+});
+UserAvatar.displayName = 'UserAvatar';
 
 export default function BreakSystem() {
   const { user } = useAuth();
   const [profile, setProfile] = useState(null);
+  const [viewMode, setViewMode] = useState('single'); // 'single' | 'area' | 'store_kpi'
   const [activeTab, setActiveTab] = useState('absen');
   const [, setOfficeRules] = useState(null);
 
@@ -132,21 +164,31 @@ export default function BreakSystem() {
   const [hasNotifiedOverbreak, setHasNotifiedOverbreak] = useState(false);
   const announcedOverbreakCrew = useRef(new Set());
 
-  // Role Checker
-  const placementLower = (profile?.station_placement || '').toLowerCase();
+  // Role Checker Terstruktur
   const roleLower = (profile?.role || '').toLowerCase();
+  const placementLower = (profile?.station_placement || '').toLowerCase();
   const nameLower = (profile?.full_name || '').toLowerCase();
 
+  const isAreaManager = Boolean(roleLower === 'area_manager' || nameLower.includes('area manager'));
+  const isStoreManager = Boolean(roleLower === 'store_manager');
+  const isAssistantManager = Boolean(roleLower === 'ast_store_manager');
+  const isFloorLeader = Boolean(roleLower === 'floor_leader' || roleLower === 'floor_leader_orientation');
+
   const isManager = Boolean(
-    placementLower === 'manager' || 
-    placementLower === 'atasan' || 
-    placementLower === 'owner' || 
-    nameLower.includes('owner') || 
-    roleLower === 'manager'
+    isAreaManager ||
+    isStoreManager ||
+    isAssistantManager ||
+    isFloorLeader ||
+    placementLower.includes('manager') || 
+    placementLower.includes('atasan') || 
+    placementLower.includes('owner') || 
+    nameLower.includes('owner')
   );
 
   const canReportViolation = Boolean(
     isManager || 
+    roleLower === 'quality_control' ||
+    roleLower === 'stocker' ||
     placementLower.includes('quality control') || 
     placementLower.includes('qc') || 
     placementLower.includes('stocker')
@@ -169,7 +211,7 @@ export default function BreakSystem() {
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
 
-  // Modal Input Pelanggaran SOC / Unprosedural (Dengan Upload Dokumentasi)
+  // Modal Input Pelanggaran SOC / Unprosedural
   const [showReportViolationModal, setShowReportViolationModal] = useState(false);
   const [reportTargetCrewId, setReportTargetCrewId] = useState('');
   const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
@@ -179,8 +221,8 @@ export default function BreakSystem() {
   const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
-  // State Log Foto vs Rekap Presensi Harian (Sub-tab)
-  const [logSubTab, setLogSubTab] = useState('photo'); // 'photo' | 'summary'
+  // State Log Foto vs Rekap Presensi Harian
+  const [logSubTab, setLogSubTab] = useState('photo'); 
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
   const [attendanceSummaryList, setAttendanceSummaryList] = useState([]);
@@ -204,9 +246,11 @@ export default function BreakSystem() {
   const [customIzinMinutes, setCustomIzinMinutes] = useState('10');
   const [isSubmittingIzin, setIsSubmittingIzin] = useState(false);
 
+  // Edit Profil & Role 1x Lock State
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editAvatar, setEditAvatar] = useState('');
+  const [editRole, setEditRole] = useState('crew');
   const [, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
@@ -329,7 +373,7 @@ export default function BreakSystem() {
     try {
       const { data: profilesData, error } = await supabase
         .from('user_profiles')
-        .select('id, full_name, station_placement, role')
+        .select('id, full_name, station_placement, role, outlet_id')
         .order('full_name', { ascending: true });
 
       if (!error && profilesData) {
@@ -373,7 +417,7 @@ export default function BreakSystem() {
             const plLower = (p.station_placement || '').toLowerCase();
             const rLower = (p.role || '').toLowerCase();
 
-            const isMgr = nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower === 'manager';
+            const isMgr = nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower.includes('manager') || rLower.includes('leader');
 
             if (isMgr) managerCount += 1;
             else staffCount += 1;
@@ -661,7 +705,7 @@ export default function BreakSystem() {
       const [{ data: profiles, error: pError }, { data: logs }, { data: violations }] = await Promise.all([
         supabase
           .from('user_profiles')
-          .select('id, full_name, avatar, station_placement, role, total_points'),
+          .select('id, full_name, avatar, station_placement, role, total_points, outlet_id'),
         supabase
           .from('attendance_logs')
           .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in, status_out, is_outside_radius, distance_meters'),
@@ -690,7 +734,17 @@ export default function BreakSystem() {
         const nLower = (p.full_name || '').toLowerCase();
         const plLower = (p.station_placement || '').toLowerCase();
         const rLower = (p.role || '').toLowerCase();
-        return nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower === 'manager';
+        return (
+          rLower === 'area_manager' ||
+          rLower === 'store_manager' ||
+          rLower === 'ast_store_manager' ||
+          rLower === 'floor_leader' ||
+          rLower === 'floor_leader_orientation' ||
+          nLower.includes('owner') || 
+          plLower.includes('owner') || 
+          plLower.includes('manager') || 
+          plLower.includes('atasan')
+        );
       };
 
       const filteredCrewProfiles = profiles.filter(p => !isProfileManager(p));
@@ -827,7 +881,7 @@ export default function BreakSystem() {
               date: vDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' }),
               time: `${vDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
               note: v.notes,
-              evidence_image_url: v.evidence_image_url || null // Dokumentasi foto bukti pelanggaran (Poin 4)
+              evidence_image_url: v.evidence_image_url || null
             });
           });
 
@@ -943,23 +997,28 @@ export default function BreakSystem() {
     }
   }, [selectedMonth, currentMonthYear]);
 
-  // Upload Dokumentasi Pendukung Pelanggaran (Poin 1)
+  // Upload Bukti Foto (Dikompresi ketat)
   const handleEvidenceImageChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
       setIsUploadingEvidence(true);
-      const compressed = await imageCompression(file, {
-        maxSizeMB: 0.1,
-        maxWidthOrHeight: 1024,
-        useWebWorker: true
+      const compressed = await imageCompression(file, { 
+        maxSizeMB: 0.04, 
+        maxWidthOrHeight: 640, 
+        useWebWorker: true, 
+        fileType: 'image/jpeg' 
       });
 
       const filePath = `evidence/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
       const { error: uploadError } = await supabase.storage
         .from('attendance-proofs')
-        .upload(filePath, compressed, { contentType: 'image/jpeg', upsert: true });
+        .upload(filePath, compressed, { 
+          contentType: 'image/jpeg', 
+          cacheControl: '31536000', 
+          upsert: true 
+        });
 
       if (uploadError) throw uploadError;
 
@@ -975,7 +1034,6 @@ export default function BreakSystem() {
     }
   };
 
-  // Form Submit Pelanggaran SOC / Unprosedural (Wajib Bukti Foto)
   const handleSubmitOperationalViolation = async (e) => {
     e.preventDefault();
     if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
@@ -994,7 +1052,8 @@ export default function BreakSystem() {
         violation_type: reportViolationType,
         notes: reportNotes.trim(),
         penalty_points: deduction,
-        evidence_image_url: reportEvidenceImage
+        evidence_image_url: reportEvidenceImage,
+        outlet_id: profile?.outlet_id || null
       });
 
       if (insErr) throw insErr;
@@ -1050,7 +1109,6 @@ export default function BreakSystem() {
     }
   }, [user]);
 
-  // Fetch Rekap Presensi Masuk & Pulang Harian Tanpa Foto (Poin 2)
   const fetchAttendanceSummaryList = useCallback(async () => {
     setIsFetchingSummary(true);
     try {
@@ -1060,7 +1118,7 @@ export default function BreakSystem() {
           .select('id, user_id, created_at, actual_in, actual_out, status_in, status_out, discipline_status')
           .not('actual_in', 'is', null)
           .order('created_at', { ascending: false })
-          .limit(100),
+          .limit(80),
         supabase
           .from('user_profiles')
           .select('id, full_name, station_placement')
@@ -1150,7 +1208,17 @@ export default function BreakSystem() {
           const plLower = (p.station_placement || '').toLowerCase();
           const rLower = (p.role || '').toLowerCase();
           
-          isManagerMap[p.id] = nLower.includes('owner') || plLower.includes('owner') || plLower.includes('manager') || plLower.includes('atasan') || rLower === 'manager';
+          isManagerMap[p.id] = (
+            rLower === 'area_manager' ||
+            rLower === 'store_manager' ||
+            rLower === 'ast_store_manager' ||
+            rLower === 'floor_leader' ||
+            rLower === 'floor_leader_orientation' ||
+            nLower.includes('owner') || 
+            plLower.includes('owner') || 
+            plLower.includes('manager') || 
+            plLower.includes('atasan')
+          );
         });
 
         const cleanImageUrl = (rawUrl) => {
@@ -1455,6 +1523,7 @@ export default function BreakSystem() {
       setEditName(profile.full_name || '');
       setEditPhone(profile.whatsapp_number || '');
       setEditAvatar(profile.avatar || '');
+      setEditRole(profile.role || 'crew');
     }
   }, [activeTab, logSubTab, profile, fetchBreakLogs, fetchLiveBreakData, fetchLeaderboard, fetchAllCrewLogs, fetchAttendanceSummaryList]);
 
@@ -1494,6 +1563,7 @@ export default function BreakSystem() {
     openCamera('IN');
   };
 
+  // ================= OPEN CAMERA DENGAN BYPASS AM & GEOFENCE DINAMIS =================
   const openCamera = async (mode) => {
     if (mode === 'START_BREAK') {
       const todayStart = new Date();
@@ -1511,6 +1581,37 @@ export default function BreakSystem() {
       }
     }
 
+    // ==========================================
+    // REVISI KRUSIAL: BYPASS AREA MANAGER (AM)
+    // ==========================================
+    if (isAreaManager) {
+      setIsVerifyingLocation(false);
+      setCameraMode(mode);
+      setCapturedImage(null);
+      setIsCameraOpen(true);
+      setHumanDetectionStatus("LOADING_ENGINE");
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 720 } }
+        });
+        localStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current.play();
+            setTimeout(() => runLiveHumanDetection(), 500); 
+          };
+        }
+      } catch (err) {
+        alert("Gagal memuat kamera perangkat. Silakan periksa izin browser.");
+        setIsCameraOpen(false);
+        setHumanDetectionStatus("NOT_DETECTED");
+      }
+      return;
+    }
+
+    // Validasi Geofence untuk Kru, Manager Store & Staff
     if (!navigator.geolocation) {
       alert("❌ Browser Anda tidak mendukung sensor lokasi (Geolocation API).");
       return;
@@ -1524,40 +1625,34 @@ export default function BreakSystem() {
         const userLng = position.coords.longitude;
         setUserLocation({ lat: userLat, lng: userLng });
 
-        let targetLat = TARGET_LAT;
-        let targetLng = TARGET_LNG;
-        let allowedRadius = MAX_RADIUS_METERS;
+        let targetLat = DEFAULT_TARGET_LAT;
+        let targetLng = DEFAULT_TARGET_LNG;
+        let allowedRadius = DEFAULT_MAX_RADIUS;
+        let outletName = 'Outlet';
 
         try {
-          if (user?.id) {
-            const { data: prof } = await supabase
-              .from('user_profiles')
-              .select('company_id')
-              .eq('id', user.id)
+          if (profile?.outlet_id) {
+            const { data: outletData } = await supabase
+              .from('outlets')
+              .select('latitude, longitude, radius_meter, name')
+              .eq('id', profile.outlet_id)
               .maybeSingle();
 
-            if (prof?.company_id) {
-              const { data: rulesData } = await supabase
-                .from('companies') 
-                .select('latitude, longitude, radius_meter')
-                .eq('id', prof.company_id)
-                .maybeSingle();
-              
-              if (rulesData) {
-                if (rulesData.latitude) targetLat = parseFloat(rulesData.latitude);
-                if (rulesData.longitude) targetLng = parseFloat(rulesData.longitude);
-                if (rulesData.radius_meter) allowedRadius = parseFloat(rulesData.radius_meter);
-              }
+            if (outletData && outletData.latitude && outletData.longitude) {
+              targetLat = parseFloat(outletData.latitude);
+              targetLng = parseFloat(outletData.longitude);
+              allowedRadius = parseFloat(outletData.radius_meter) || DEFAULT_MAX_RADIUS;
+              outletName = outletData.name;
             }
           }
         } catch (dbError) {
-          console.log("Fallback geofence:", dbError);
+          console.log("Fallback geofence dinamis:", dbError);
         }
 
         const distance = getDistanceFromLatLonInMeters(userLat, userLng, targetLat, targetLng);
 
         if (distance > allowedRadius) {
-          alert(`❌ AKSES DITOLAK: Anda terdeteksi berada ${Math.round(distance)} meter di luar area outlet harian. Fitur presensi dikunci.`);
+          alert(`❌ AKSES DITOLAK: Anda terdeteksi berada ${Math.round(distance)} meter di luar radius geofence ${outletName} (${allowedRadius}m). Presensi dikunci.`);
           setIsVerifyingLocation(false);
           return;
         }
@@ -1570,7 +1665,7 @@ export default function BreakSystem() {
         
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+            video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 720 } }
           });
           localStreamRef.current = stream;
           if (videoRef.current) {
@@ -1599,15 +1694,15 @@ export default function BreakSystem() {
 
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 720;
-    canvas.height = video.videoHeight || 1280;
+    canvas.width = 480;
+    canvas.height = 640;
     const ctx = canvas.getContext('2d');
     
     ctx.translate(canvas.width, 0); 
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
 
     setCapturedImage(dataUrl);
@@ -1636,10 +1731,10 @@ export default function BreakSystem() {
         const blob = await res.blob();
         
         const compressed = await imageCompression(blob, { 
-          maxSizeMB: 0.05, 
-          maxWidthOrHeight: 720, 
-          useWebWorker: true,
-          fileType: 'image/jpeg'
+          maxSizeMB: 0.03, 
+          maxWidthOrHeight: 480, 
+          useWebWorker: true, 
+          fileType: 'image/jpeg' 
         });
         
         const filePath = `logs/${user.id}-${Date.now()}.jpg`;
@@ -1663,10 +1758,11 @@ export default function BreakSystem() {
 
       if (cameraMode === 'IN') {
         const fallbackCompanyId = profile?.company_id || user?.user_metadata?.company_id || null;
+        const currentOutletId = profile?.outlet_id || null;
         const scheduledTime = new Date();
         scheduledTime.setHours(selectedShiftHour, 0, 0, 0);
 
-        const actualStationPlacement = isManager ? 'Manager' : selectedStation;
+        const actualStationPlacement = isManager ? (profile?.role ? profile.role.toUpperCase() : 'Manager') : selectedStation;
 
         let statusInText = `Shift ${selectedShiftHour.toString().padStart(2, '0')}:00 (Tepat Waktu) - ${actualStationPlacement}`;
         let lateMinutes = 0;
@@ -1690,6 +1786,7 @@ export default function BreakSystem() {
           .insert({ 
             user_id: user.id, 
             company_id: fallbackCompanyId, 
+            outlet_id: currentOutletId,
             actual_in: timestampIso, 
             status_in: statusInText, 
             discipline_status: lateMinutes > 0 ? 'Terlambat Masuk' : 'Bekerja',
@@ -1784,7 +1881,7 @@ export default function BreakSystem() {
             const overMins = elapsedMins - allowedMins;
             penaltyPoints = overMins; 
             pointChange = -overMins; 
-            financialLoss = overMins * 1000;             
+            financialLoss = overMins * 1000;              
             finalStatus = 'Overbreak';
           } else {
             penaltyPoints = 0;
@@ -1825,7 +1922,6 @@ export default function BreakSystem() {
           setBreakStartTime(null);
         }
       } else if (cameraMode === 'OUT') {
-        // Poin 3: Absen Pulang Tercatat & Deteksi Pulang Cepat
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
           .select('id, actual_in, status_in')
@@ -1851,7 +1947,7 @@ export default function BreakSystem() {
           if (workedHours < targetRequiredHours) {
             const missingMinutes = Math.floor((targetRequiredHours * 60) - (workedHours * 60));
             statusOutText = `Pulang Cepat (${missingMinutes}m)`;
-            earlyPenalty = Math.min(30, Math.max(5, Math.floor(missingMinutes / 10) * 5)); // Pengurangan poin indisipliner
+            earlyPenalty = Math.min(30, Math.max(5, Math.floor(missingMinutes / 10) * 5));
             earlyFinancialLoss = missingMinutes * 1000;
           }
 
@@ -1930,7 +2026,12 @@ export default function BreakSystem() {
     
     try {
       setIsUpdatingProfile(true);
-      const compressed = await imageCompression(file, { maxSizeMB: 0.05, maxWidthOrHeight: 400 });
+      const compressed = await imageCompression(file, { 
+        maxSizeMB: 0.02, 
+        maxWidthOrHeight: 180, 
+        fileType: 'image/jpeg', 
+        useWebWorker: true 
+      });
       const filePath = `avatars/${user.id}-${Date.now()}.jpg`;
 
       const { error: uploadError } = await supabase.storage
@@ -1943,11 +2044,11 @@ export default function BreakSystem() {
 
       if (uploadError) throw uploadError;
 
-      const { data: publicUrlData } = supabase.storage
+      const { data: publicData } = supabase.storage
         .from('attendance-proofs')
         .getPublicUrl(filePath);
 
-      const publicUrl = publicUrlData?.publicUrl;
+      const publicUrl = publicData?.publicUrl;
 
       if (publicUrl) {
         setEditAvatar(publicUrl);
@@ -1960,19 +2061,27 @@ export default function BreakSystem() {
     }
   };
 
+  // ================= UPDATE PROFIL DENGAN PENGUNCIAN JABATAN 1X =================
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
     if (!user?.id) return;
     setIsUpdatingProfile(true);
 
     try {
+      const updatePayload = {
+        full_name: editName,
+        whatsapp_number: editPhone,
+        avatar: editAvatar
+      };
+
+      if (!profile?.role_locked && profile?.role !== 'area_manager') {
+        updatePayload.role = editRole;
+        updatePayload.role_locked = true;
+      }
+
       const { error: profileError } = await supabase
         .from('user_profiles')
-        .update({
-          full_name: editName,
-          whatsapp_number: editPhone,
-          avatar: editAvatar
-        })
+        .update(updatePayload)
         .eq('id', user.id);
 
       if (profileError) throw profileError;
@@ -2022,6 +2131,57 @@ export default function BreakSystem() {
   const currentFilteredGhosting = filterByStation(activeInfractionRanking.topGhosting);
   const currentFilteredSoc = filterByStation(activeInfractionRanking.topSoc);
 
+  // ================= JIKA MODE AREA AKTIF, TAMPILKAN EXECUTIVE DASHBOARD =================
+  if (viewMode === 'area') {
+    return (
+      <div className="min-h-screen w-full bg-[#F8FAFC]">
+        <div className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 py-3 flex items-center justify-between shadow-2xs">
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 bg-indigo-50 text-indigo-600 rounded-xl"><FiGlobe className="text-base" /></span>
+            <div>
+              <p className="text-xs font-black text-slate-900 leading-none">Monitoring Multi-Resto Kaltim</p>
+              <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Area Manager Executive Control</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setViewMode('single')}
+            className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 shadow-xs"
+          >
+            <FiX className="text-sm" /> <span>Tutup Area</span>
+          </button>
+        </div>
+
+        <AreaDashboard />
+      </div>
+    );
+  }
+
+  // ================= JIKA MODE KPI STORE AKTIF (PORTAL SM) =================
+  if (viewMode === 'store_kpi') {
+    return (
+      <div className="min-h-screen w-full bg-[#F8FAFC]">
+        <div className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 py-3 flex items-center justify-between shadow-2xs">
+          <div className="flex items-center gap-2">
+            <span className="p-1.5 bg-indigo-50 text-indigo-600 rounded-xl"><FiBarChart2 className="text-base" /></span>
+            <div>
+              <p className="text-xs font-black text-slate-900 leading-none">Portal KPI & Closing Resto</p>
+              <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Store Management & Task Center</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setViewMode('single')}
+            className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all active:scale-95 cursor-pointer flex items-center gap-1.5 shadow-xs"
+          >
+            <FiX className="text-sm" /> <span>Kembali ke Presensi</span>
+          </button>
+        </div>
+
+        <StoreKpiPortal />
+      </div>
+    );
+  }
+
+  // ================= MODE UTAMA REGULER (ABSENSI & LEADERBOARD RESTO) =================
   return (
     <div className="min-h-screen w-full bg-[#F8FAFC] flex justify-center font-sans antialiased text-slate-800">
       
@@ -2035,9 +2195,9 @@ export default function BreakSystem() {
 
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* ================= HEADER APLIKASI UTAMA (1 BARIS BERSIH) ================= */}
-        <div className="sticky top-0 w-full bg-white px-5 py-3.5 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
-          <div className="flex items-center gap-2.5">
+        {/* ================= HEADER APLIKASI UTAMA ================= */}
+        <div className="sticky top-0 w-full bg-white px-4 py-3 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
+          <div className="flex items-center gap-2">
             <img 
               src="/Diciplin-logo.png" 
               onError={(e) => { 
@@ -2045,22 +2205,48 @@ export default function BreakSystem() {
                 e.currentTarget.src = "/logo.png";
               }} 
               alt="Diciplin Logo" 
-              className="h-8 w-auto object-contain" 
+              className="h-7 w-auto object-contain" 
             />
             <div className="flex flex-col">
-              <span className="font-sans font-black text-base tracking-tight text-slate-900 leading-none">
+              <span className="font-sans font-black text-sm tracking-tight text-slate-900 leading-none">
                 Diciplin<span className="text-indigo-600">.com</span>
               </span>
-              <span className="text-[8px] font-bold text-slate-400 tracking-wider uppercase mt-0.5">Crew Attendance System</span>
+              <span className="text-[7.5px] font-bold text-slate-400 tracking-wider uppercase mt-0.5">Crew Attendance</span>
             </div>
           </div>
           
-          <button 
-            onClick={async () => { await supabase.auth.signOut(); }} 
-            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
-          >
-            Keluar
-          </button>
+          <div className="flex items-center gap-1.5">
+            {/* Tombol Khusus Area Manager */}
+            {isAreaManager && (
+              <button
+                onClick={() => setViewMode('area')}
+                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
+                title="Buka Dashboard Monitoring Area Kaltim"
+              >
+                <FiGlobe className="text-xs" />
+                <span>Area Kaltim</span>
+              </button>
+            )}
+
+            {/* Tombol Khusus Store Manager */}
+            {isStoreManager && (
+              <button
+                onClick={() => setViewMode('store_kpi')}
+                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
+                title="Buka Portal KPI & Task Departemen"
+              >
+                <FiBarChart2 className="text-xs" />
+                <span>Portal KPI</span>
+              </button>
+            )}
+
+            <button 
+              onClick={async () => { await supabase.auth.signOut(); }} 
+              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
+            >
+              Keluar
+            </button>
+          </div>
         </div>
 
         {/* ================= TAB 1: ABSENSI UTAMA ================= */}
@@ -2072,7 +2258,11 @@ export default function BreakSystem() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-3">
                   <div className="relative">
-                    <img src={profile?.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} alt="Avatar" className="h-12 w-12 rounded-xl object-cover border border-slate-100 shadow-2xs" />
+                    <UserAvatar 
+                      src={profile?.avatar} 
+                      name={profile?.full_name} 
+                      size="h-12 w-12"
+                    />
                     <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
                   </div>
                   <div>
@@ -2082,7 +2272,9 @@ export default function BreakSystem() {
                 </div>
                 
                 <div className="flex flex-col items-end gap-1">
-                  <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 text-[9px] font-black rounded-full tracking-wider uppercase border border-indigo-100">{profile?.station_placement || 'Staff Crew'}</span>
+                  <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 text-[9px] font-black rounded-full tracking-wider uppercase border border-indigo-100">
+                    {profile?.role ? profile.role.replace(/_/g, ' ').toUpperCase() : (profile?.station_placement || 'Staff Crew')}
+                  </span>
                   <span className={`text-[8px] px-2 py-0.5 rounded-md font-black border uppercase ${activeBadge.color}`}>{activeBadge.name}</span>
                 </div>
               </div>
@@ -2206,10 +2398,9 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* ================= SEJAJAR: MANAGER CONTROL PANEL & PELAPORAN INDISIPLINER ================= */}
+            {/* MANAGER CONTROL PANEL & PELAPORAN INDISIPLINER */}
             {(isManager || canReportViolation) && (
               <div className="space-y-3">
-                {/* 1. MANAGER CONTROL PANEL (OTORISASI IZIN) */}
                 {isManager && (
                   <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
                     <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
@@ -2260,7 +2451,6 @@ export default function BreakSystem() {
                   </div>
                 )}
 
-                {/* 2. PANEL PENCATATAN PELANGGARAN SOC / UNPROSEDURAL */}
                 {canReportViolation && (
                   <div className="bg-gradient-to-br from-slate-900 to-slate-950 text-white rounded-2xl p-4 shadow-md space-y-3 border border-slate-800">
                     <div className="flex items-center gap-2 border-b border-slate-800 pb-2.5">
@@ -2287,7 +2477,7 @@ export default function BreakSystem() {
               </div>
             )}
 
-            {/* PRESENSI UTAMA CARD (POIN 3: ABSEN PULANG FLEKSIBEL & CATAT SELISIH JAM) */}
+            {/* PRESENSI UTAMA CARD */}
             <div className="bg-white border border-slate-200/70 rounded-2xl p-4 shadow-xs space-y-3">
               <div className="flex justify-between items-center border-b border-slate-100 pb-2.5">
                 <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
@@ -2597,7 +2787,7 @@ export default function BreakSystem() {
                         >
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
-                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-slate-100 shadow-xs" alt="Avatar" />
+                            <UserAvatar src={person.avatar} name={person.name} />
                             <div>
                               <span className="text-xs font-bold text-slate-900 block">{person.name}</span>
                               <span className="text-[9px] text-indigo-600 font-black uppercase tracking-wider block">{person.role}</span>
@@ -2627,7 +2817,7 @@ export default function BreakSystem() {
                         >
                           <div className="flex items-center space-x-3">
                             <span className="font-mono text-xs font-bold text-rose-500 w-4">{index + 1}.</span>
-                            <img src={person.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-xs" alt="Avatar" />
+                            <UserAvatar src={person.avatar} name={person.name} />
                             <div>
                               <span className="text-xs font-bold text-rose-950 block">{person.name}</span>
                               <span className="text-[9px] text-rose-600 font-black uppercase tracking-wider block">{person.role}</span>
@@ -2642,10 +2832,10 @@ export default function BreakSystem() {
                 </div>
               </div>
             ) : (
-              /* VIEW 2: INDISIPLINER DENGAN FILTER TABS & FILTER STATION */
+              /* VIEW 2: INDISIPLINER */
               <div className="space-y-3.5">
                 
-                {/* FILTER PILLS KATEGORI INDISIPLINER */}
+                {/* FILTER PILLS KATEGORI */}
                 <div className="grid grid-cols-4 gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
                   <button
                     onClick={() => setSelectedInfractionCategory('late')}
@@ -2723,7 +2913,7 @@ export default function BreakSystem() {
                           >
                             <div className="flex items-center space-x-3">
                               <span className="font-mono text-xs font-black text-amber-600 w-4">{idx + 1}.</span>
-                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-amber-100 shadow-2xs" alt="Avatar" />
+                              <UserAvatar src={c.avatar} name={c.name} />
                               <div>
                                 <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
                                 <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
@@ -2762,7 +2952,7 @@ export default function BreakSystem() {
                           >
                             <div className="flex items-center space-x-3">
                               <span className="font-mono text-xs font-black text-rose-600 w-4">{idx + 1}.</span>
-                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-rose-100 shadow-2xs" alt="Avatar" />
+                              <UserAvatar src={c.avatar} name={c.name} />
                               <div>
                                 <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
                                 <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
@@ -2801,7 +2991,7 @@ export default function BreakSystem() {
                           >
                             <div className="flex items-center space-x-3">
                               <span className="font-mono text-xs font-black text-red-600 w-4">{idx + 1}.</span>
-                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-red-100 shadow-2xs" alt="Avatar" />
+                              <UserAvatar src={c.avatar} name={c.name} />
                               <div>
                                 <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
                                 <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
@@ -2840,7 +3030,7 @@ export default function BreakSystem() {
                           >
                             <div className="flex items-center space-x-3">
                               <span className="font-mono text-xs font-black text-orange-600 w-4">{idx + 1}.</span>
-                              <img src={c.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} loading="lazy" className="w-9 h-9 rounded-xl object-cover border border-orange-100 shadow-2xs" alt="Avatar" />
+                              <UserAvatar src={c.avatar} name={c.name} />
                               <div>
                                 <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
                                 <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
@@ -2861,7 +3051,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL DETAIL INDISIPLINER (POIN 4: TANPA PELAPOR, DENGAN FOTO BUKTI) ================= */}
+        {/* ================= MODAL DETAIL INDISIPLINER ================= */}
         {showInfractionModal && selectedCrewInfractionDetail && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
@@ -2908,13 +3098,14 @@ export default function BreakSystem() {
                         </p>
                       )}
 
-                      {/* TAMPILAN FOTO DOKUMENTASI BUKTI KEJADIAN (POIN 4) */}
                       {inf.evidence_image_url && (
                         <div className="space-y-1 pt-1">
                           <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Foto Bukti Dokumentasi:</span>
                           <img 
                             src={inf.evidence_image_url} 
                             alt="Bukti Pelanggaran" 
+                            loading="lazy"
+                            decoding="async"
                             className="w-full aspect-[4/3] rounded-xl object-cover border border-slate-200 shadow-xs" 
                           />
                         </div>
@@ -2937,7 +3128,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL INPUT PELANGGARAN SOC (POIN 1: WAJIB UPLOAD BUKTI FOTO) ================= */}
+        {/* ================= MODAL INPUT PELANGGARAN SOC ================= */}
         {showReportViolationModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
@@ -3017,7 +3208,6 @@ export default function BreakSystem() {
                   />
                 </div>
 
-                {/* UPLOAD FOTO BUKTI PENDUKUNG (POIN 1) */}
                 <div className="space-y-1.5 pt-1">
                   <label className="text-[10px] font-black text-slate-700 uppercase flex items-center gap-1">
                     <FiCamera className="text-orange-600" /> Foto Bukti Dokumentasi (Wajib)
@@ -3025,7 +3215,7 @@ export default function BreakSystem() {
                   
                   {reportEvidenceImage ? (
                     <div className="relative rounded-2xl overflow-hidden border border-slate-200">
-                      <img src={reportEvidenceImage} alt="Bukti" className="w-full h-32 object-cover" />
+                      <img src={reportEvidenceImage} alt="Bukti" loading="lazy" decoding="async" className="w-full h-32 object-cover" />
                       <button 
                         type="button" 
                         onClick={() => setReportEvidenceImage(null)} 
@@ -3057,11 +3247,10 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN (POIN 2) ================= */}
+        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3.5">
             
-            {/* SUB-TAB NAV: LOG FOTO VS REKAP PRESENSI HARIAN */}
             <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
               <button
                 onClick={() => setLogSubTab('photo')}
@@ -3077,7 +3266,6 @@ export default function BreakSystem() {
               </button>
             </div>
 
-            {/* VIEW A: REKAP JAM PRESENSI HARIAN TANPA FOTO (POIN 2) */}
             {logSubTab === 'summary' ? (
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
@@ -3128,13 +3316,12 @@ export default function BreakSystem() {
                 )}
               </div>
             ) : (
-              /* VIEW B: LOG FOTO ISTIRAHAT */
               <div className="space-y-3">
                 <div className="flex flex-col space-y-0.5">
                   <h2 className="text-sm font-black text-slate-900 tracking-tight flex items-center gap-1.5">
                     <FiImage className="text-indigo-600 text-lg" /> Log Foto Istirahat
                   </h2>
-                  <p className="text-[10px] text-slate-400 font-medium">Foto diarsip otomatis maksimal 60 hari.</p>
+                  <p className="text-[10px] text-slate-400 font-medium">Foto diarsip otomatis maksimal 45 hari.</p>
                 </div>
 
                 {isManager && (
@@ -3158,7 +3345,7 @@ export default function BreakSystem() {
                   <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghubungkan cloud storage...</div>
                 ) : activeLogData.length === 0 ? (
                   <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
-                    Belum ada aktivitas log break dalam 60 hari terakhir.
+                    Belum ada aktivitas log break dalam 45 hari terakhir.
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -3183,7 +3370,13 @@ export default function BreakSystem() {
                               </span>
                             </div>
                             {log.image_url ? (
-                              <img src={log.image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Mulai" />
+                              <img 
+                                src={log.image_url} 
+                                loading="lazy" 
+                                decoding="async"
+                                className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" 
+                                alt="Mulai" 
+                              />
                             ) : (
                               <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">Foto Telah Diarsip</div>
                             )}
@@ -3197,7 +3390,13 @@ export default function BreakSystem() {
                               </span>
                             </div>
                             {log.after_break_image_url ? (
-                              <img src={log.after_break_image_url} loading="lazy" className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" alt="Selesai" />
+                              <img 
+                                src={log.after_break_image_url} 
+                                loading="lazy" 
+                                decoding="async"
+                                className="w-full aspect-[3/4] rounded-xl object-cover border border-slate-100 shadow-xs" 
+                                alt="Selesai" 
+                              />
                             ) : (
                               <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress / Diarsip</div>
                             )}
@@ -3239,10 +3438,21 @@ export default function BreakSystem() {
               <p className="text-[10px] text-slate-400 font-medium">Kelola informasi pribadi staff.</p>
             </div>
 
+            {/* KONFIGURASI GPS (HANYA UNTUK STORE MANAGER) */}
+            <StoreGpsConfig 
+              profile={profile} 
+              onOutletUpdated={() => fetchAttendanceStatus()} 
+            />
+
             <form onSubmit={handleUpdateProfile} className="space-y-3">
               <div className="bg-white border border-slate-200/70 rounded-2xl p-4 flex flex-col items-center justify-center space-y-2 shadow-xs relative">
                 <div className="relative">
-                  <img src={editAvatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100"} className="w-16 h-16 rounded-2xl object-cover border-2 border-slate-100 shadow-xs" alt="Avatar" />
+                  <UserAvatar 
+                    src={editAvatar} 
+                    name={editName} 
+                    size="w-16 h-16" 
+                    className="border-2"
+                  />
                   <label className="absolute -bottom-1 -right-1 bg-indigo-600 text-white p-1.5 rounded-lg cursor-pointer hover:bg-indigo-700 transition-colors shadow-xs">
                     <FiUploadCloud className="text-xs" />
                     <input type="file" accept="image/*" onChange={handleAvatarUpload} className="hidden" />
@@ -3266,6 +3476,57 @@ export default function BreakSystem() {
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><FiPhone/> No. WhatsApp Aktif</label>
                   <input type="text" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="w-full text-xs font-semibold px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:outline-none focus:border-indigo-500 transition-colors" />
+                </div>
+
+                {/* PILIHAN JABATAN 1X PENGUNCIAN MANDIRI */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                      <FiBriefcase /> Jabatan / Posisi Kerja
+                    </label>
+                    {profile?.role_locked && (
+                      <span className="flex items-center gap-1 text-[8px] font-bold text-slate-400">
+                        <FiLock className="text-[9px]" /> Terkunci (Hubungi AM untuk ubah)
+                      </span>
+                    )}
+                  </div>
+                  
+                  <select
+                    value={editRole}
+                    disabled={Boolean(profile?.role_locked || profile?.role === 'area_manager')}
+                    onChange={(e) => setEditRole(e.target.value)}
+                    className={`w-full text-xs font-semibold px-3 py-2.5 rounded-xl border transition-colors ${
+                      profile?.role_locked || profile?.role === 'area_manager'
+                        ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
+                        : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-indigo-500 cursor-pointer'
+                    }`}
+                  >
+                    {profile?.role === 'area_manager' ? (
+                      <option value="area_manager">Area Manager (AM) 👑</option>
+                    ) : (
+                      <>
+                        <optgroup label="Store Management">
+                          <option value="store_manager">Store Manager (SM)</option>
+                          <option value="ast_store_manager">Assistant Store Manager (ASM)</option>
+                          <option value="floor_leader">Floor Leader (FL)</option>
+                          <option value="floor_leader_orientation">Floor Leader Orientation (FLO)</option>
+                        </optgroup>
+                        <optgroup label="Specialist & Support">
+                          <option value="quality_control">Quality Control (QC)</option>
+                          <option value="stocker">Stocker</option>
+                          <option value="cel">Crew Enthusiast Leader (CEL)</option>
+                        </optgroup>
+                        <optgroup label="Staff Lapangan">
+                          <option value="crew">Crew Reguler</option>
+                        </optgroup>
+                      </>
+                    )}
+                  </select>
+                  {!profile?.role_locked && profile?.role !== 'area_manager' && (
+                    <p className="text-[9px] text-amber-600 font-semibold mt-1">
+                      ⚠️ Perhatian: Pilihan jabatan ini hanya bisa disimpan 1x dan akan terkunci permanen.
+                    </p>
+                  )}
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 space-y-1">
@@ -3357,7 +3618,9 @@ export default function BreakSystem() {
                   <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-black"><FiBriefcase/></div>
                   <div>
                     <p className="text-[9px] font-black text-slate-400 uppercase">Role / Posisi Anda</p>
-                    <p className="text-xs font-black text-slate-900">Manager</p>
+                    <p className="text-xs font-black text-slate-900">
+                      {profile?.role ? profile.role.replace(/_/g, ' ').toUpperCase() : 'Manager'}
+                    </p>
                   </div>
                 </div>
               )}
@@ -3412,7 +3675,7 @@ export default function BreakSystem() {
               <div className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-ping"></span>
                 <h3 className="font-black text-xs tracking-widest uppercase text-slate-200">
-                  VERIFIKASI WAJAH: {cameraMode} {cameraMode === 'IN' ? `(${isManager ? 'Manager' : selectedStation} - SHIFT ${selectedShiftHour.toString().padStart(2, '0')}:00)` : ''}
+                  VERIFIKASI WAJAH: {cameraMode} {cameraMode === 'IN' ? `(${isManager ? 'Manager Duty' : selectedStation} - SHIFT ${selectedShiftHour.toString().padStart(2, '0')}:00)` : ''}
                 </h3>
               </div>
               <button type="button" onClick={closeCamera} className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-full transition-colors cursor-pointer">
