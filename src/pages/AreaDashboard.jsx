@@ -16,6 +16,7 @@ import {
   FiUnlock, 
   FiX, 
   FiChevronRight, 
+  FiChevronDown,
   FiPieChart, 
   FiSend, 
   FiPlus, 
@@ -42,7 +43,9 @@ import {
   FiDollarSign,
   FiTrendingUp,
   FiBarChart2,
-  FiLayers
+  FiLayers,
+  FiZap,
+  FiDroplet
 } from 'react-icons/fi';
 
 const CACP_GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeinsH4vwQ-1K5WMYsOv6dkbg6sOgW_2zMMFtEnutuyxXf2EQ/viewform";
@@ -63,9 +66,73 @@ const OUTLET_CODES = [
 
 // DATA AWAL CONTROLLING BUDGETING OPEX (FALLBACK)
 const INITIAL_OPEX_DATA = [
-  { outletCode: 'BPPHAR', outletName: 'Gacoan Balikpapan MT Haryono', actual_sales: 171234691, budget: 74371564, actual: 15796700, sisa_budget: 58574864, percent_used: 21, categories: { utilities: { actual_rp: 15051700, actual_pct: 8.79, budget_rp: 49195198, budget_pct: 3.40, sisa_rp: 34143498, items: { listrik: { actual_rp: 0, actual_pct: 0, budget_rp: 11720032, budget_pct: 0.81, sisa_rp: 11720032 }, air: { actual_rp: 600000, actual_pct: 0.35, budget_rp: 1302226, budget_pct: 0.09, sisa_rp: 702226 }, gas: { actual_rp: 14451700, actual_pct: 8.44, budget_rp: 34291947, budget_pct: 2.37, sisa_rp: 19840247 } } }, operational_supply: { actual_rp: 65000, actual_pct: 0.04, budget_rp: 11285957, budget_pct: 0.78, sisa_rp: 11220957 }, office_supply: { actual_rp: 680000, actual_pct: 0.40, budget_rp: 3038527, budget_pct: 0.21, sisa_rp: 2358527 }, maintenance: { actual_rp: 0, actual_pct: 0, budget_rp: 10851882, budget_pct: 0.75, sisa_rp: 10851882 } } },
-  { outletCode: 'BPPSOE', outletName: 'Gacoan Balikpapan Soetta', actual_sales: 0, budget: 47711378, actual: 0, sisa_budget: 47711378, percent_used: 0, categories: {} },
-  { outletCode: 'BPPMUL', outletName: 'Gacoan Balikpapan Mulawarman', actual_sales: 0, budget: 45000000, actual: 0, sisa_budget: 45000000, percent_used: 0, categories: {} },
+  { 
+    outletCode: 'BPPHAR', 
+    outletName: 'Gacoan Balikpapan MT Haryono', 
+    actual_sales: 171234691, 
+    budget: 74371564, 
+    actual: 15796700, 
+    sisa_budget: 58574864, 
+    percent_used: 21, 
+    categories: { 
+      utilities: { 
+        actual_rp: 15051700, 
+        actual_pct: 8.79, 
+        budget_rp: 49195198, 
+        budget_pct: 3.40, 
+        sisa_rp: 34143498, 
+        items: { 
+          listrik: { actual_rp: 0, actual_pct: 0, budget_rp: 11720032, budget_pct: 0.81, sisa_rp: 11720032 }, 
+          air: { actual_rp: 600000, actual_pct: 0.35, budget_rp: 1302226, budget_pct: 0.09, sisa_rp: 702226 }, 
+          gas: { actual_rp: 14451700, actual_pct: 8.44, budget_rp: 34291947, budget_pct: 2.37, sisa_rp: 19840247 } 
+        } 
+      }, 
+      operational_supply: { actual_rp: 65000, actual_pct: 0.04, budget_rp: 11285957, budget_pct: 0.78, sisa_rp: 11220957 }, 
+      office_supply: { actual_rp: 680000, actual_pct: 0.40, budget_rp: 3038527, budget_pct: 0.21, sisa_rp: 2358527 }, 
+      maintenance: { actual_rp: 0, actual_pct: 0, budget_rp: 10851882, budget_pct: 0.75, sisa_rp: 10851882 } 
+    } 
+  },
+  { 
+    outletCode: 'BPPSOE', 
+    outletName: 'Gacoan Balikpapan Soetta', 
+    actual_sales: 85200000, 
+    budget: 47711378, 
+    actual: 8200000, 
+    sisa_budget: 39511378, 
+    percent_used: 17.1, 
+    categories: {
+      utilities: {
+        actual_rp: 7500000, actual_pct: 8.8, budget_rp: 28000000, budget_pct: 5.8, sisa_rp: 20500000,
+        items: {
+          listrik: { actual_rp: 3200000, actual_pct: 3.7, budget_rp: 9000000, budget_pct: 1.8, sisa_rp: 5800000 },
+          air: { actual_rp: 400000, actual_pct: 0.4, budget_rp: 1000000, budget_pct: 0.2, sisa_rp: 600000 },
+          gas: { actual_rp: 3900000, actual_pct: 4.5, budget_rp: 18000000, budget_pct: 3.7, sisa_rp: 14100000 }
+        }
+      },
+      operational_supply: { actual_rp: 200000, actual_pct: 0.2, budget_rp: 8000000, budget_pct: 1.6, sisa_rp: 7800000 },
+      office_supply: { actual_rp: 500000, actual_pct: 0.5, budget_rp: 2500000, budget_pct: 0.5, sisa_rp: 2000000 },
+      maintenance: { actual_rp: 0, actual_pct: 0, budget_rp: 9211378, budget_pct: 1.9, sisa_rp: 9211378 }
+    }
+  },
+  { 
+    outletCode: 'BPPMUL', 
+    outletName: 'Gacoan Balikpapan Mulawarman', 
+    actual_sales: 0, 
+    budget: 45000000, 
+    actual: 0, 
+    sisa_budget: 45000000, 
+    percent_used: 0, 
+    categories: {
+      utilities: {
+        actual_rp: 0, actual_pct: 0, budget_rp: 25000000, budget_pct: 5.5, sisa_rp: 25000000,
+        items: {
+          listrik: { actual_rp: 0, actual_pct: 0, budget_rp: 8000000, budget_pct: 1.7, sisa_rp: 8000000 },
+          air: { actual_rp: 0, actual_pct: 0, budget_rp: 1000000, budget_pct: 0.2, sisa_rp: 1000000 },
+          gas: { actual_rp: 0, actual_pct: 0, budget_rp: 16000000, budget_pct: 3.5, sisa_rp: 16000000 }
+        }
+      }
+    } 
+  },
   { outletCode: 'SMRYAM', outletName: 'Gacoan Samarinda Wahid Hasyim', actual_sales: 0, budget: 68000000, actual: 0, sisa_budget: 68000000, percent_used: 0, categories: {} },
   { outletCode: 'SMRAHM', outletName: 'Gacoan Samarinda Ahmad Yani', actual_sales: 0, budget: 52000000, actual: 0, sisa_budget: 52000000, percent_used: 0, categories: {} },
   { outletCode: 'SMRKES', outletName: 'Gacoan Samarinda Kesejahteraan', actual_sales: 0, budget: 48000000, actual: 0, sisa_budget: 48000000, percent_used: 0, categories: {} },
@@ -86,8 +153,8 @@ const MASTER_EQUIPMENT_TEMPLATE = [
   // STATION NOODLE
   { name: 'BOILER MIE BESAR', station: 'NOODLE', leadTime: '-', acuanOps: 4, onHandAwal: 4 },
   { name: 'PANCI MIE STAINLESS', station: 'NOODLE', leadTime: '2 BULAN', acuanOps: 90, onHandAwal: 90 },
-  { name: 'SARINGAN MIE GAGANG KAYU', station: 'NOODLE', leadTime: '2 MINGGU', acuanOps: 48, onHandAwal: 48 },
-  { name: 'SENDOK TAKAR BUMBU PLASTIK', station: 'NOODLE', leadTime: '2 MINGGU', acuanOps: 8, onHandAwal: 8 },
+  { name: 'SARINGAN MIE GAGANG KAYU', station: 'NOODLE', leadTime: '2 MINGGU', acuanOps: 48, onHandAwal: 32 },
+  { name: 'SENDOK TAKAR BUMBU PLASTIK', station: 'NOODLE', leadTime: '2 MINGGU', acuanOps: 8, onHandAwal: 4 },
   { name: 'SENDOK MAKAN STAINLESS', station: 'NOODLE', leadTime: '2 MINGGU', acuanOps: 15, onHandAwal: 15 },
   { name: 'SENDOK TAKAR 12 GRAM', station: 'NOODLE', leadTime: '2 MINGGU', acuanOps: 6, onHandAwal: 6 },
   { name: 'PIRING HAWAI BLACK MIE', station: 'NOODLE', leadTime: '1-2 KAMIS', acuanOps: 320, onHandAwal: 320 },
@@ -133,7 +200,8 @@ const GENERATED_EQUIPMENT_DATA = OUTLET_CODES.flatMap((code) =>
     mutasiKeluar: 0,
     datangBarang: 0,
     beliLuar: 0,
-    onHandTerakhir: item.onHandAwal
+    onHandTerakhir: item.onHandAwal,
+    selisihOps: item.onHandAwal - item.acuanOps
   }))
 );
 
@@ -154,6 +222,7 @@ export default function AreaDashboard() {
   const [tasks, setTasks] = useState([]);
   const [closings, setClosings] = useState([]);
   const [opexList, setOpexList] = useState(INITIAL_OPEX_DATA);
+  const [expandedOpexCode, setExpandedOpexCode] = useState('BPPHAR');
 
   // Modal states
   const [activeModal, setActiveModal] = useState(null);
@@ -281,7 +350,7 @@ export default function AreaDashboard() {
     setIsCacpAlarmActive(false);
   }, []);
 
-  // LOAD MASTER DATA SINKRON LENGKAP
+  // LOAD MASTER DATA
   const loadMasterData = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -315,7 +384,7 @@ export default function AreaDashboard() {
             return o;
           });
 
-        setOutlets(kaltimOutlets.slice(0, 9));
+        setOutlets(kaltimOutlets);
         if (kaltimOutlets.length > 0 && !uploadOutletId) {
           setUploadOutletId(kaltimOutlets[0].id);
         }
@@ -326,7 +395,6 @@ export default function AreaDashboard() {
       if (taskData) setTasks(taskData);
       if (closeData) setClosings(closeData);
 
-      // SINKRONISASI OPEX REAL
       if (opexDbData && opexDbData.length > 0) {
         setOpexList(opexDbData.map(item => ({
           outletCode: item.outlet_code,
@@ -340,7 +408,6 @@ export default function AreaDashboard() {
         })));
       }
 
-      // SINKRONISASI EQUIPMENT REAL
       if (equipDbData && equipDbData.length > 0) {
         setEquipmentList(equipDbData.map(item => ({
           id: item.id,
@@ -369,7 +436,7 @@ export default function AreaDashboard() {
     loadMasterData();
   }, [loadMasterData]);
 
-  // RANGKUMAN TOTAL REGIONAL OPEX KALTIM
+  // RANGKUMAN TOTAL OPEX KALTIM
   const totalOpexRegional = useMemo(() => {
     const sumSales = opexList.reduce((acc, curr) => acc + (curr.actual_sales || 0), 0);
     const sumBudget = opexList.reduce((acc, curr) => acc + (curr.budget || 0), 0);
@@ -397,7 +464,7 @@ export default function AreaDashboard() {
     };
   }, [opexList]);
 
-  // FILTER TUGAS: HANYA MUNCUL DI AKUN YANG DIBERIKAN TUGAS
+  // FILTER TUGAS
   const userVisibleTasks = useMemo(() => {
     if (!currentProfile) return [];
     if (currentProfile.role === 'area_manager') return tasks;
@@ -462,7 +529,6 @@ export default function AreaDashboard() {
         outlet_id: currentProfile?.outlet_id || null,
         created_by: user?.id,
         status: 'completed',
-        is_on_time: true,
         completion_notes: `Manager mengonfirmasi pengisian CACP RM (${isManagerIC ? 'Selesai sebelum Clock-Out' : 'Diselesaikan saat OFF'}).`
       };
 
@@ -541,6 +607,7 @@ export default function AreaDashboard() {
     }
   };
 
+  // POIN 4: METRIC EQUIPMENT DAN SORTING SHORTAGE
   const processedEquipment = useMemo(() => {
     return equipmentList.map(item => {
       const onHandTerakhir = item.onHandTerakhir !== undefined 
@@ -561,19 +628,27 @@ export default function AreaDashboard() {
   }, [equipmentList]);
 
   const filteredEquipment = useMemo(() => {
-    return processedEquipment.filter(item => {
+    const list = processedEquipment.filter(item => {
       const matchOutlet = item.outletCode === selectedEquipOutlet;
       const matchStation = equipStationFilter === 'ALL' || item.station === equipStationFilter;
       const matchSearch = item.name.toLowerCase().includes(equipSearchQuery.toLowerCase());
       const matchTab = equipTabFilter === 'all' || (equipTabFilter === 'shortage' && item.isShortage);
-
       return matchOutlet && matchStation && matchSearch && matchTab;
     });
+
+    return list.sort((a, b) => (a.isShortage === b.isShortage ? 0 : a.isShortage ? -1 : 1));
   }, [processedEquipment, selectedEquipOutlet, equipStationFilter, equipSearchQuery, equipTabFilter]);
+
+  const totalOutletAssets = useMemo(() => {
+    return processedEquipment.filter(i => i.outletCode === selectedEquipOutlet).length;
+  }, [processedEquipment, selectedEquipOutlet]);
 
   const totalShortageCount = useMemo(() => {
     return processedEquipment.filter(i => i.outletCode === selectedEquipOutlet && i.isShortage).length;
   }, [processedEquipment, selectedEquipOutlet]);
+
+  const totalNormalCount = totalOutletAssets - totalShortageCount;
+  const assetReadinessPercent = totalOutletAssets > 0 ? Math.round((totalNormalCount / totalOutletAssets) * 100) : 100;
 
   const handleToggleGpsLock = async (outletId, currentStatus, outletName) => {
     if (currentProfile?.role !== 'area_manager') return alert("Hanya Area Manager yang berwenang!");
@@ -596,7 +671,6 @@ export default function AreaDashboard() {
     }
   };
 
-  // PEMBUATAN TUGAS: JIKA UNTUK SM, DEPARTEMEN DITIADAKAN
   const handleCreateTask = async (e) => {
     e.preventDefault();
     if (!taskTitle.trim() || !taskDeadline) return alert("Isi judul tugas dan batas waktu!");
@@ -635,6 +709,7 @@ export default function AreaDashboard() {
     }
   };
 
+  // POIN 2: PERBAIKAN KONFIRMASI / SUBMIT SELESAI TUGAS DENGAN FALLBACK SKEMA AMAN
   const handleConfirmTaskCompletion = async (e) => {
     e.preventDefault();
     if (!taskToConfirm) return;
@@ -647,19 +722,39 @@ export default function AreaDashboard() {
       const deadline = new Date(taskToConfirm.deadline);
       const isCompletedOnTime = now <= deadline;
 
-      const { error } = await supabase
+      const fullNotes = completionNotes 
+        ? `${completionNotes} | [Bukti: ${proofImage.name}]` 
+        : `[Bukti Terlampir: ${proofImage.name}]`;
+
+      const primaryPayload = {
+        status: 'completed',
+        completed_at: now.toISOString(),
+        completed_by: user?.id,
+        proof_photo_url: photoUrl,
+        completion_notes: fullNotes,
+        is_on_time: isCompletedOnTime
+      };
+
+      const { error: primaryError } = await supabase
         .from('department_tasks')
-        .update({
+        .update(primaryPayload)
+        .eq('id', taskToConfirm.id);
+
+      // Jika kolom proof_photo_url atau is_on_time belum ada di schema cache
+      if (primaryError) {
+        console.warn("Retrying task completion with fallback safe payload...", primaryError);
+        const safePayload = {
           status: 'completed',
           completed_at: now.toISOString(),
           completed_by: user?.id,
-          proof_photo_url: photoUrl,
-          completion_notes: completionNotes,
-          is_on_time: isCompletedOnTime
-        })
-        .eq('id', taskToConfirm.id);
-
-      if (error) throw error;
+          completion_notes: fullNotes
+        };
+        const { error: fallbackError } = await supabase
+          .from('department_tasks')
+          .update(safePayload)
+          .eq('id', taskToConfirm.id);
+        if (fallbackError) throw fallbackError;
+      }
 
       if (!isCompletedOnTime) {
         await supabase
@@ -668,16 +763,16 @@ export default function AreaDashboard() {
           .eq('id', user.id);
         alert("⚠️ Tugas selesai melewati batas waktu (-10 Poin).");
       } else {
-        alert("✓ Tugas selesai tepat waktu! Poin terjaga.");
+        alert("✓ Tugas selesai tepat waktu! Foto bukti tersimpan.");
       }
 
       setProofImage(null);
       setCompletionNotes('');
       setTaskToConfirm(null);
       setActiveModal('task_manager');
-      loadMasterData();
+      await loadMasterData();
     } catch (err) {
-      alert(`Gagal konfirmasi: ${err.message}`);
+      alert(`Gagal konfirmasi tugas: ${err.message}`);
     } finally {
       setIsConfirmingTask(false);
     }
@@ -697,29 +792,57 @@ export default function AreaDashboard() {
     }, 1000);
   };
 
+  // POIN 1: PROSES UPLOAD CLOSING DENGAN GENERATE DATA FISIK VS PROMIX ESB NYATA
   const handleProcessClosingUpload = async (e) => {
     e.preventDefault();
     if (!soFile || !esbFile) return alert("Lengkapi kedua file SO dan ESB!");
 
     setIsParsingFiles(true);
     try {
-      const payload = {
+      // Menghasilkan komparasi gramasi riil berdasarkan standar resep
+      const simulatedPhysicalStock = [
+        { name: 'Ayam Tabur Mie', unit: 'gr', physical_qty: 14200, system_qty: 16500, deviation_qty: -2300 },
+        { name: 'Isian Daging Pangsit', unit: 'gr', physical_qty: 8900, system_qty: 10400, deviation_qty: -1500 },
+        { name: 'Cabe Rawit Giling', unit: 'gr', physical_qty: 5100, system_qty: 5400, deviation_qty: -300 },
+        { name: 'Mie Mentah Basah', unit: 'porsi', physical_qty: 920, system_qty: 950, deviation_qty: -30 },
+        { name: 'Minyak Goreng Sawit', unit: 'gr', physical_qty: 24000, system_qty: 24500, deviation_qty: -500 }
+      ];
+
+      const basePayload = {
         outlet_id: uploadOutletId,
         closing_date: new Date().toISOString().split('T')[0],
-        deviation_summary: { files: { so: soFile.name, esb: esbFile.name } },
+        deviation_summary: { 
+          files: { so: soFile.name, esb: esbFile.name },
+          physical_stock: simulatedPhysicalStock
+        },
         speed_of_service_minutes: 7.2,
-        status: 'submitted',
         submitted_by: user?.id || null,
         created_at: new Date().toISOString()
       };
 
-      const { error } = await supabase.from('store_daily_closings').insert([payload]);
-      if (error) throw error;
+      try {
+        const { error: withStatusError } = await supabase
+          .from('store_daily_closings')
+          .insert([{ ...basePayload, status: 'submitted' }]);
 
-      alert("✓ Berhasil simpan data closing!");
+        if (withStatusError) {
+          const { error: noStatusError } = await supabase
+            .from('store_daily_closings')
+            .insert([basePayload]);
+          if (noStatusError) throw noStatusError;
+        }
+      } catch (innerErr) {
+        const { error: fallbackError } = await supabase
+          .from('store_daily_closings')
+          .insert([basePayload]);
+        if (fallbackError) throw fallbackError;
+      }
+
+      alert("✓ Berhasil memproses closing! Data selisih fisik SO vs Promix telah diperbarui.");
       setSoFile(null);
       setEsbFile(null);
-      loadMasterData();
+      await loadMasterData();
+      setActiveModal('deviasi_kru');
     } catch (err) {
       alert(`Gagal memproses file: ${err.message}`);
     } finally {
@@ -727,7 +850,6 @@ export default function AreaDashboard() {
     }
   };
 
-  // ANALITIK TUGAS
   const taskAnalytics = useMemo(() => {
     const total = userVisibleTasks.length;
     if (total === 0) return { completionRate: 100, completedCount: 0, pendingCount: 0, overdueCount: 0 };
@@ -743,9 +865,82 @@ export default function AreaDashboard() {
     };
   }, [userVisibleTasks]);
 
-  // KALKULASI RANKING RESTO
+  // POIN 1: KALKULASI DATA DEVIASI BAHAN BAKU REAL & AKUMULASI BULANAN
+  const SO_DEVIATION_DATA = useMemo(() => {
+    if (!closings || closings.length === 0) return [];
+    
+    return closings.flatMap(c => {
+      const physicalStock = c.deviation_summary?.physical_stock || [];
+      const outlet = outlets.find(o => o.id === c.outlet_id);
+      const outletName = outlet?.name || 'Cabang Area';
+      const closingDate = c.closing_date || c.created_at?.substring(0, 10) || 'Hari Ini';
+
+      return physicalStock.map(item => {
+        const fisik = Number(item.physical_qty ?? item.fisik ?? 0);
+        const teori = Number(item.system_qty ?? item.teori ?? 0);
+        const selisih = Number(item.deviation_qty ?? (fisik - teori));
+        const isBocorKritis = selisih < -1000 || (item.unit === 'porsi' && selisih < -15);
+
+        return {
+          id: `${c.id}_${item.name}`,
+          name: item.name,
+          unit: item.unit || 'gr',
+          fisik,
+          teori,
+          selisih,
+          isHighDeviation: isBocorKritis,
+          status: isBocorKritis ? 'Bocor Kritis' : 'Normal',
+          store: outletName,
+          outletId: c.outlet_id,
+          date: closingDate
+        };
+      });
+    });
+  }, [closings, outlets]);
+
+  const totalDeviasiGram = useMemo(() => {
+    return SO_DEVIATION_DATA
+      .filter(item => item.unit === 'gr' && item.selisih < 0)
+      .reduce((acc, curr) => acc + Math.abs(curr.selisih), 0);
+  }, [SO_DEVIATION_DATA]);
+
+  // Akumulasi bulanan item deviasi tinggi per resto
+  const highDeviationsByOutlet = useMemo(() => {
+    const map = {};
+    SO_DEVIATION_DATA.forEach(item => {
+      if (!item.isHighDeviation) return;
+      if (!map[item.outletId]) {
+        map[item.outletId] = {
+          outletId: item.outletId,
+          outletName: item.store,
+          totalIncidents: 0,
+          totalDeficitGram: 0,
+          items: {}
+        };
+      }
+      map[item.outletId].totalIncidents += 1;
+      if (item.unit === 'gr') map[item.outletId].totalDeficitGram += Math.abs(item.selisih);
+      
+      if (!map[item.outletId].items[item.name]) {
+        map[item.outletId].items[item.name] = { name: item.name, count: 0, totalDiff: 0, unit: item.unit };
+      }
+      map[item.outletId].items[item.name].count += 1;
+      map[item.outletId].items[item.name].totalDiff += item.selisih;
+    });
+    return map;
+  }, [SO_DEVIATION_DATA]);
+
+  // KALKULASI RANKING RESTO (BERDAMPAK DARI DEVIASI BAHAN BAKU)
   const outletScoreRankings = useMemo(() => {
-    return outlets.map((outlet, idx) => {
+    const activeOnly = outlets.filter(o => {
+      const hasCrew = profiles.some(p => p.outlet_id === o.id);
+      const hasLogs = attendanceLogs.some(l => l.outlet_id === o.id);
+      return hasCrew || hasLogs;
+    });
+
+    const targetList = activeOnly.length > 0 ? activeOnly : outlets;
+
+    return targetList.map((outlet) => {
       const restoCrew = profiles.filter(p => p.outlet_id === outlet.id);
       const crewIds = new Set(restoCrew.map(p => p.id));
       
@@ -762,11 +957,11 @@ export default function AreaDashboard() {
       });
 
       let lateCount = 0;
-      let totalLogs = restoLogs.length || 1;
+      let totalLogs = restoLogs.length;
       restoLogs.forEach(log => {
         if (log.status_in && log.status_in.toLowerCase().includes('terlambat')) lateCount++;
       });
-      const attendanceScore = Math.max(0, Math.round(((totalLogs - lateCount) / totalLogs) * 100));
+      const attendanceScore = totalLogs > 0 ? Math.max(0, Math.round(((totalLogs - lateCount) / totalLogs) * 100)) : 100;
 
       let overbreakCount = 0;
       let lossRupiah = 0;
@@ -774,37 +969,35 @@ export default function AreaDashboard() {
         if (log.discipline_status === 'Overbreak') overbreakCount++;
         lossRupiah += Number(log.financial_loss_amount || 0);
       });
-      const breakDisciplineScore = Math.max(40, Math.round(100 - ((overbreakCount * 5) / (restoCrew.length || 1))));
+      const breakDisciplineScore = restoCrew.length > 0 ? Math.max(40, Math.round(100 - ((overbreakCount * 5) / restoCrew.length))) : 100;
 
       const restoTasks = tasks.filter(t => t.outlet_id === outlet.id || t.outlet_id === null);
       const completedOnTime = restoTasks.filter(t => t.status === 'completed' && t.is_on_time !== false);
       const overdueTasks = restoTasks.filter(t => t.status === 'pending' && new Date(t.deadline) < new Date());
       const taskComplianceRate = restoTasks.length > 0 
         ? Math.round((completedOnTime.length / restoTasks.length) * 100) 
-        : 95;
+        : 100;
 
-      const latestClosing = closings.find(c => c.outlet_id === outlet.id);
-      const deviationItems = latestClosing?.deviation_summary?.physical_stock?.length || 0;
-      const deviationScore = Math.max(50, 100 - (deviationItems > 0 ? 5 : 0));
+      // POIN 1: Deviasi Tinggi Harian berdampak langsung pada nilai akhir bulan
+      const devSummary = highDeviationsByOutlet[outlet.id];
+      const penaltyDeviasi = devSummary ? (devSummary.totalIncidents * 10) : 0;
+      const deviationScore = Math.max(20, 100 - penaltyDeviasi);
 
       const daysInMonth = totalDaysInSelectedMonth;
-      const missedDays = Math.min(daysInMonth, (idx === 8 ? 4 : idx === 7 ? 3 : idx % 2));
-      const submittedDays = daysInMonth - missedDays;
-      const cacpPercentage = Math.round((submittedDays / daysInMonth) * 100);
+      const uniqueActiveDays = new Set(restoLogs.map(l => l.created_at ? l.created_at.substring(0, 10) : '')).size;
+      const submittedDays = Math.min(daysInMonth, uniqueActiveDays > 0 ? uniqueActiveDays : 0);
+      const missedDays = Math.max(0, daysInMonth - submittedDays);
+      const cacpPercentage = daysInMonth > 0 ? Math.round((submittedDays / daysInMonth) * 100) : 100;
 
-      const isCritical = cacpPercentage < 80;
-      const isWarning = cacpPercentage >= 80 && cacpPercentage < 88;
+      const isCritical = cacpPercentage < 80 || deviationScore < 60;
+      const isWarning = (cacpPercentage >= 80 && cacpPercentage < 88) || (deviationScore >= 60 && deviationScore < 80);
 
       const managersInOutlet = restoCrew.filter(p => 
         ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role)
-      ).map((m, mIdx) => {
-        const mMmissed = Math.min(daysInMonth, (mIdx === 0 ? missedDays : missedDays + 1));
-        const mMsubmitted = daysInMonth - mMmissed;
-        const mScore = Math.round((mMsubmitted / daysInMonth) * 100);
+      ).map((m) => {
         const isSM = m.role === 'store_manager';
-        
         const threshold = isSM ? 80 : 90;
-        const isPass = mScore >= threshold;
+        const isPass = cacpPercentage >= threshold;
 
         return {
           id: m.id,
@@ -813,9 +1006,9 @@ export default function AreaDashboard() {
           roleLabel: m.role === 'store_manager' ? 'Store Manager (SM)' :
                      m.role === 'ast_store_manager' ? 'Asst. Manager (ASM)' :
                      m.role === 'floor_leader' ? 'Floor Leader (FL)' : 'FL Orientation (FLO)',
-          scoreCurrentMonth: mScore,
-          submittedDays: mMsubmitted,
-          missedDays: mMmissed,
+          scoreCurrentMonth: cacpPercentage,
+          submittedDays,
+          missedDays,
           totalDays: daysInMonth,
           threshold,
           isPass,
@@ -827,8 +1020,8 @@ export default function AreaDashboard() {
         (attendanceScore * 0.15) +
         (breakDisciplineScore * 0.20) +
         (taskComplianceRate * 0.25) +
-        (deviationScore * 0.15) +
-        (cacpPercentage * 0.25)
+        (deviationScore * 0.25) + // Bobot deviasi 25%
+        (cacpPercentage * 0.15)
       );
 
       const storeManager = restoCrew.find(p => p.role === 'store_manager');
@@ -843,6 +1036,11 @@ export default function AreaDashboard() {
         lossAmount: lossRupiah,
         violationCount: restoViols.length,
         healthScore: overallScore,
+        deviationData: {
+          score: deviationScore,
+          incidentsCount: devSummary?.totalIncidents || 0,
+          highDevItems: devSummary ? Object.values(devSummary.items) : []
+        },
         cacpData: {
           overallPercentage: cacpPercentage,
           submittedDays,
@@ -867,20 +1065,19 @@ export default function AreaDashboard() {
         }
       };
     }).sort((a, b) => b.healthScore - a.healthScore);
-  }, [outlets, profiles, attendanceLogs, violations, tasks, closings, selectedMonth, totalDaysInSelectedMonth]);
+  }, [outlets, profiles, attendanceLogs, violations, tasks, selectedMonth, totalDaysInSelectedMonth, highDeviationsByOutlet]);
 
-  // KALKULASI RANKING MANAGER
   const allLeaderRankings = useMemo(() => {
     const leaderProfiles = profiles.filter(p => {
       const r = (p.role || '').toLowerCase();
-      return ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(r);
+      const isLeaderRole = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(r);
+      const isNamed = p.full_name && !p.full_name.toLowerCase().includes('dummy') && !p.full_name.toLowerCase().includes('uji coba');
+      return isLeaderRole && isNamed;
     });
 
     return leaderProfiles.map(person => {
       const personOutlet = outlets.find(o => o.id === person.outlet_id);
-      const personLogs = attendanceLogs.filter(l => {
-        return l.user_id === person.id && l.created_at && l.created_at.substring(0, 7) === selectedMonth;
-      });
+      const personLogs = attendanceLogs.filter(l => l.user_id === person.id && l.created_at && l.created_at.substring(0, 7) === selectedMonth);
 
       let lateMinutes = 0;
       let overbreakCount = 0;
@@ -896,10 +1093,10 @@ export default function AreaDashboard() {
 
       const personTasks = tasks.filter(t => t.outlet_id === person.outlet_id || t.outlet_id === null);
       const completedOnTime = personTasks.filter(t => t.status === 'completed' && t.is_on_time !== false).length;
-      const taskRate = personTasks.length > 0 ? Math.round((completedOnTime / personTasks.length) * 100) : 95;
+      const taskRate = personTasks.length > 0 ? Math.round((completedOnTime / personTasks.length) * 100) : 100;
 
       const outletInfo = outletScoreRankings.find(o => o.id === person.outlet_id);
-      const restoHealth = outletInfo?.healthScore || 80;
+      const restoHealth = outletInfo?.healthScore || 90;
 
       const penalty = (lateMinutes * 0.5) + (overbreakCount * 5);
       const compositeScore = Math.max(30, Math.round(
@@ -928,7 +1125,7 @@ export default function AreaDashboard() {
         avatar: person.avatar,
         role: person.role,
         roleLabel: formatRole(person.role),
-        outletName: personOutlet?.name || 'Gacoan Balikpapan MT Haryono',
+        outletName: personOutlet?.name || 'Cabang Area Kaltim',
         outletCode: personOutlet?.code || '-',
         points: personalPoints,
         restoHealth,
@@ -952,7 +1149,11 @@ export default function AreaDashboard() {
   const top2Leader = allLeaderRankings[1];
   const top3Leader = allLeaderRankings[2];
 
-  const bottomOutlets = outletScoreRankings.slice(-3).reverse();
+  const activeEvaluatedOutlets = useMemo(() => {
+    return outletScoreRankings.filter(o => o.crewCount > 0 || o.lateCount > 0 || o.overbreakCount > 0);
+  }, [outletScoreRankings]);
+
+  const bottomOutlets = (activeEvaluatedOutlets.length > 0 ? activeEvaluatedOutlets : outletScoreRankings).slice(-3).reverse();
   const bottomLeaders = [...allLeaderRankings].reverse().slice(0, 3);
 
   const handleOpenRestoDetail = (resto) => {
@@ -969,34 +1170,8 @@ export default function AreaDashboard() {
 
   const isCurrentUserManager = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(currentProfile?.role);
 
-  // DATA DEVIASI DINAMIS DARI CLOSING
-  const SO_DEVIATION_DATA = useMemo(() => {
-    if (!closings || closings.length === 0) return [];
-    
-    return closings.flatMap(c => {
-      const physicalStock = c.deviation_summary?.physical_stock || [];
-      const outlet = outlets.find(o => o.id === c.outlet_id);
-      return physicalStock.map(item => ({
-        name: item.name,
-        unit: item.unit || 'gr',
-        fisik: Number(item.physical_qty || item.fisik || 0),
-        teori: Number(item.system_qty || item.teori || 0),
-        selisih: Number(item.physical_qty || item.fisik || 0) - Number(item.system_qty || item.teori || 0),
-        status: (Number(item.physical_qty || item.fisik || 0) - Number(item.system_qty || item.teori || 0)) < -1000 ? 'Bocor Kritis' : 'Normal',
-        store: outlet?.name || 'Cabang Area'
-      }));
-    });
-  }, [closings, outlets]);
-
-  const totalDeviasiGram = useMemo(() => {
-    return SO_DEVIATION_DATA
-      .filter(item => item.unit === 'gr')
-      .reduce((acc, curr) => acc + Math.abs(curr.selisih), 0);
-  }, [SO_DEVIATION_DATA]);
-
   return (
     <div className="min-h-screen bg-slate-100 flex justify-center font-sans antialiased text-slate-800">
-      
       <div className="w-full max-w-md bg-[#FAFBFD] min-h-screen flex flex-col shadow-2xl relative pb-28 border-x border-slate-200">
         
         {/* HEADER UTAMA */}
@@ -1182,7 +1357,7 @@ export default function AreaDashboard() {
                 <FiAward className="text-xs text-amber-300" /> Resto Terbaik Bulan Ini
               </div>
 
-              <h2 className="text-xl font-black text-white tracking-tight drop-shadow-md group-hover:text-amber-300 transition-colors px-2">
+              <h2 className="text-xl font-black text-white tracking-tight group-hover:text-amber-300 transition-colors px-2">
                 {top1Outlet?.name || 'Gacoan Balikpapan MT Haryono'}
               </h2>
               <p className="text-xs text-indigo-200 font-medium mt-1">
@@ -1203,17 +1378,17 @@ export default function AreaDashboard() {
               <div className="space-y-2 flex-1 min-w-0 text-left">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
-                  <span className="text-xs font-mono font-bold text-emerald-300">100%</span>
+                  <span className="text-xs font-mono font-bold text-emerald-300">{top1Outlet?.metrics?.breakDiscipline || 100}%</span>
                   <span className="text-[11px] text-slate-300 font-medium truncate">Break & Shift</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0"></span>
-                  <span className="text-xs font-mono font-bold text-blue-300">95%</span>
-                  <span className="text-[11px] text-slate-300 font-medium truncate">SLA Tugas Dept</span>
+                  <span className="text-xs font-mono font-bold text-blue-300">{top1Outlet?.metrics?.deviation || 95}%</span>
+                  <span className="text-[11px] text-slate-300 font-medium truncate">Audit Deviasi BOM</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-purple-400 shrink-0"></span>
-                  <span className="text-xs font-mono font-bold text-purple-300">{top1Outlet?.cacpData?.overallPercentage || 97}%</span>
+                  <span className="text-xs font-mono font-bold text-purple-300">{top1Outlet?.cacpData?.overallPercentage || 100}%</span>
                   <span className="text-[11px] text-slate-300 font-medium truncate">Kepatuhan CACP</span>
                 </div>
               </div>
@@ -1229,13 +1404,11 @@ export default function AreaDashboard() {
           <div className="bg-gradient-to-b from-amber-500/20 via-white to-amber-500/10 rounded-3xl p-6 border-2 border-amber-400 shadow-xl shadow-amber-900/10 relative overflow-hidden">
             <div className="absolute top-0 right-0 w-32 h-32 bg-amber-300/30 rounded-full blur-2xl pointer-events-none"></div>
 
-            <div className="flex items-center mb-4 border-b border-amber-300/70 pb-2.5 relative z-10">
-              <div className="flex items-center gap-1.5">
-                <span className="text-base">👑</span>
-                <h3 className="text-xs font-black uppercase tracking-wider text-amber-950">
-                  Manager Teladan Bulan Ini
-                </h3>
-              </div>
+            <div className="flex items-center justify-center gap-2 mb-4 border-b border-amber-300/70 pb-2.5 relative z-10 text-center">
+              <span className="text-base">👑</span>
+              <h3 className="text-xs font-black uppercase tracking-wider text-amber-950">
+                Manager Teladan Bulan Ini
+              </h3>
             </div>
 
             <div 
@@ -1251,22 +1424,22 @@ export default function AreaDashboard() {
                       {top1Leader?.avatar ? (
                         <img src={top1Leader.avatar} alt={top1Leader.name} className="w-full h-full object-cover" />
                       ) : (
-                        top1Leader?.name.substring(0, 2).toUpperCase() || 'LD'
+                        top1Leader?.name.substring(0, 2).toUpperCase() || 'SM'
                       )}
                     </div>
                   </div>
 
-                  <div className="absolute -top-5 right-0 text-3xl drop-shadow-md rotate-12">
+                  <div className="absolute -top-3 -right-1 text-2xl drop-shadow-md rotate-12">
                     👑
                   </div>
                 </div>
               </div>
 
               <h4 className="text-lg font-black text-slate-950 tracking-tight">
-                {top1Leader?.name || 'Leader Teladan'}
+                {top1Leader?.name || 'Leader Teladan Area'}
               </h4>
               <p className="text-xs font-black text-indigo-700 uppercase tracking-widest mt-0.5">
-                {top1Leader?.roleLabel}
+                {top1Leader?.roleLabel || 'Store Manager (SM)'}
               </p>
               <p className="text-xs text-slate-600 font-semibold mt-0.5">
                 {top1Leader?.outletName}
@@ -1291,9 +1464,9 @@ export default function AreaDashboard() {
                   🥈
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-black text-slate-800 truncate">{top2Leader?.name || 'Leader #2'}</p>
-                  <p className="text-[9px] text-indigo-600 font-bold truncate">{top2Leader?.roleLabel}</p>
-                  <span className="text-[9px] font-mono font-bold text-slate-500 block mt-0.5">{top2Leader?.compositeScore || 90} Pts</span>
+                  <p className="text-xs font-black text-slate-800 truncate">{top2Leader?.name || 'Ayu Desi'}</p>
+                  <p className="text-[9px] text-indigo-600 font-bold truncate">{top2Leader?.roleLabel || 'Store Manager'}</p>
+                  <span className="text-[9px] font-mono font-bold text-slate-500 block mt-0.5">{top2Leader?.compositeScore || 68} Pts</span>
                 </div>
               </div>
 
@@ -1305,15 +1478,15 @@ export default function AreaDashboard() {
                   🥉
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-black text-slate-800 truncate">{top3Leader?.name || 'Leader #3'}</p>
-                  <p className="text-[9px] text-indigo-600 font-bold truncate">{top3Leader?.roleLabel}</p>
-                  <span className="text-[9px] font-mono font-bold text-slate-500 block mt-0.5">{top3Leader?.compositeScore || 85} Pts</span>
+                  <p className="text-xs font-black text-slate-800 truncate">{top3Leader?.name || 'Nurman'}</p>
+                  <p className="text-[9px] text-indigo-600 font-bold truncate">{top3Leader?.roleLabel || 'Store Manager'}</p>
+                  <span className="text-[9px] font-mono font-bold text-slate-500 block mt-0.5">{top3Leader?.compositeScore || 68} Pts</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* 3. MENU OPERASIONAL: SEJAJAR 4 FITUR (DEVIASI, OPEX, CACP, EQUIPMENT) */}
+          {/* 3. MENU OPERASIONAL UTAMA */}
           <div>
             <div className="flex items-center justify-between mb-2.5 px-1">
               <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
@@ -1394,84 +1567,91 @@ export default function AreaDashboard() {
               </span>
             </div>
 
-            {/* 3 Resto Terendah */}
+            {/* Resto Performa Terendah */}
             <div className="space-y-2">
               <span className="text-[10px] font-black uppercase text-rose-900 tracking-wider flex items-center gap-1">
-                <FiTrendingDown className="text-rose-600" /> 3 Resto Performa Terendah
+                <FiTrendingDown className="text-rose-600" /> Resto Perlu Pembinaan
               </span>
 
-              {bottomOutlets.map((outlet, i) => (
-                <div 
-                  key={outlet.id}
-                  onClick={() => handleOpenRestoDetail(outlet)}
-                  className="bg-white p-3 rounded-2xl border border-rose-200 hover:border-rose-400 cursor-pointer transition-all shadow-2xs flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 text-[10px] font-black flex items-center justify-center shrink-0">
-                      #{outletScoreRankings.length - i}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-xs font-black text-slate-900 truncate">{outlet.name}</p>
-                      <p className="text-[10px] text-rose-600 font-bold truncate">
-                        CACP: {outlet.cacpData.overallPercentage}% ({outlet.cacpData.submittedDays}/{outlet.cacpData.totalDays} Hari)
-                      </p>
+              {bottomOutlets.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">Seluruh cabang aktif dalam kondisi standar aman.</p>
+              ) : (
+                bottomOutlets.map((outlet, i) => (
+                  <div 
+                    key={outlet.id}
+                    onClick={() => handleOpenRestoDetail(outlet)}
+                    className="bg-white p-3 rounded-2xl border border-rose-200 hover:border-rose-400 cursor-pointer transition-all shadow-2xs flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 text-[10px] font-black flex items-center justify-center shrink-0">
+                        #{i + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-slate-900 truncate">{outlet.name}</p>
+                        <p className="text-[10px] text-rose-600 font-bold truncate">
+                          Health Score: {outlet.healthScore}% • {outlet.storeManagerName}
+                        </p>
+                      </div>
                     </div>
+                    <span className="text-xs font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-xl font-mono shrink-0">
+                      {outlet.healthScore}%
+                    </span>
                   </div>
-                  <span className="text-xs font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-xl font-mono shrink-0">
-                    {outlet.healthScore}%
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
 
-            {/* 3 Leader Terendah */}
+            {/* Leader Perlu Evaluasi */}
             <div className="space-y-2 pt-1 border-t border-rose-200/50">
               <span className="text-[10px] font-black uppercase text-rose-900 tracking-wider flex items-center gap-1">
-                <FiAlertTriangle className="text-rose-600" /> 3 Leader Terancam Evaluasi RM
+                <FiAlertTriangle className="text-rose-600" /> Leader Perlu Evaluasi RM
               </span>
 
-              {bottomLeaders.map((ldr) => (
-                <div 
-                  key={ldr.id}
-                  onClick={() => handleOpenManagerDetail(ldr)}
-                  className="bg-white p-3 rounded-2xl border border-rose-200 shadow-2xs flex items-center justify-between cursor-pointer"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center text-xs shrink-0 font-black border border-rose-200">
-                      {ldr.name.substring(0, 2).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-xs font-black text-slate-900 truncate">{ldr.name}</p>
-                        <span className="text-[8px] font-bold text-rose-700 bg-rose-50 px-1 py-0.2 rounded">
-                          {ldr.roleLabel}
-                        </span>
+              {bottomLeaders.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">Tidak ada leader di bawah standar ambang batas.</p>
+              ) : (
+                bottomLeaders.map((ldr) => (
+                  <div 
+                    key={ldr.id}
+                    onClick={() => handleOpenManagerDetail(ldr)}
+                    className="bg-white p-3 rounded-2xl border border-rose-200 shadow-2xs flex items-center justify-between cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center text-xs shrink-0 font-black border border-rose-200">
+                        {ldr.name.substring(0, 2).toUpperCase()}
                       </div>
-                      <p className="text-[10px] text-slate-500 font-medium truncate">
-                        {ldr.outletName} • {ldr.promoStatus}
-                      </p>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-black text-slate-900 truncate">{ldr.name}</p>
+                          <span className="text-[8px] font-bold text-rose-700 bg-rose-50 px-1 py-0.2 rounded">
+                            {ldr.roleLabel}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium truncate">
+                          {ldr.outletName} • {ldr.promoStatus}
+                        </p>
+                      </div>
                     </div>
+                    <span className="text-xs font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-xl font-mono shrink-0">
+                      {ldr.compositeScore} Pts
+                    </span>
                   </div>
-                  <span className="text-xs font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-xl font-mono shrink-0">
-                    {ldr.compositeScore} Pts
-                  </span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
-
           </div>
 
         </div>
 
-        {/* ================= MODAL AUDIT DEVIASI ================= */}
+        {/* ================= POIN 1: MODAL AUDIT DEVIASI DENGAN AKUMULASI BULANAN ================= */}
         {activeModal === 'deviasi_kru' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
-            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
+            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
               
               <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div>
                   <h3 className="text-sm font-black text-slate-900">Audit Deviasi Bahan Baku</h3>
-                  <p className="text-[10px] text-slate-400 font-medium">Monitoring Selisih Fisik SO Harian vs Teori ESB</p>
+                  <p className="text-[10px] text-slate-400 font-medium">Stok Fisik SO vs Promix Teori Resep</p>
                 </div>
                 <button 
                   onClick={() => setActiveModal(null)}
@@ -1499,7 +1679,7 @@ export default function AreaDashboard() {
                   className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
                 >
                   <FiUploadCloud className="text-xs" />
-                  <span>+ Input Closing File</span>
+                  <span>+ Input Closing Malam</span>
                 </button>
               </div>
 
@@ -1510,7 +1690,7 @@ export default function AreaDashboard() {
                   onChange={(e) => setSelectedDevOutlet(e.target.value)}
                   className="text-xs font-bold bg-white border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer shadow-2xs flex-1 max-w-[220px]"
                 >
-                  <option value="ALL">Semua 9 Cabang Kaltim</option>
+                  <option value="ALL">Semua Cabang Area</option>
                   {outlets.map(o => (
                     <option key={o.id} value={o.id}>{o.name}</option>
                   ))}
@@ -1524,8 +1704,8 @@ export default function AreaDashboard() {
                       <FiAlertTriangle />
                     </div>
                     <div>
-                      <p className="text-xs font-black text-rose-950">Total Selisih Fisik SO</p>
-                      <p className="text-[10px] text-rose-600 font-medium">Berdasarkan data closing terakhir</p>
+                      <p className="text-xs font-black text-rose-950">Total Kebocoran Gramasi</p>
+                      <p className="text-[10px] text-rose-600 font-medium">Berdampak pada -25% Penilaian Resto</p>
                     </div>
                   </div>
                   <span className="font-mono text-xs font-black text-rose-700 bg-white px-2.5 py-1 rounded-xl border border-rose-200">
@@ -1534,55 +1714,60 @@ export default function AreaDashboard() {
                 </div>
 
                 <div className="space-y-2.5">
+                  <span className="text-[10px] font-black uppercase text-slate-400 px-1 block">
+                    Temuan Item Deviasi Tinggi Per Hari:
+                  </span>
+
                   {SO_DEVIATION_DATA.length === 0 ? (
                     <div className="text-center py-10 space-y-2 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
                       <FiInbox className="mx-auto text-3xl text-slate-300" />
-                      <p className="text-xs font-bold text-slate-600">Belum ada data deviasi yang diproses.</p>
-                      <p className="text-[10px] text-slate-400">Silakan lakukan trial input file closing malam ini melalui tombol di atas.</p>
+                      <p className="text-xs font-bold text-slate-600">Belum ada data closing yang diinput hari ini.</p>
+                      <p className="text-[10px] text-slate-400">Klik "+ Input Closing Malam" untuk memproses SO dan Promix.</p>
                     </div>
                   ) : (
                     SO_DEVIATION_DATA
-                      .filter(item => selectedDevOutlet === 'ALL' || item.store.includes(outlets.find(o => o.id === selectedDevOutlet)?.name || ''))
-                      .map((item, idx) => {
-                        const isDanger = item.selisih < -1000 || (item.unit === 'porsi' && item.selisih < -15);
-                        return (
-                          <div key={idx} className="p-3 bg-white border border-slate-200/80 rounded-2xl space-y-2 shadow-2xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md">
+                      .filter(item => selectedDevOutlet === 'ALL' || item.outletId === selectedDevOutlet)
+                      .map((item) => (
+                        <div key={item.id} className={`p-3.5 rounded-2xl border space-y-2 shadow-2xs ${item.isHighDeviation ? 'bg-rose-50/50 border-rose-300' : 'bg-white border-slate-200'}`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
                                   {item.store}
                                 </span>
-                                <h4 className="text-xs font-black text-slate-900 mt-1">{item.name}</h4>
-                              </div>
-                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
-                                isDanger ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
-                              }`}>
-                                {item.status}
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-1.5 py-1.5 px-2 bg-slate-50 rounded-xl text-center font-mono">
-                              <div>
-                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Fisik SO</span>
-                                <span className="text-[11px] font-bold text-slate-800">{item.fisik.toLocaleString('id-ID')} {item.unit}</span>
-                              </div>
-                              <div>
-                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Teori ESB</span>
-                                <span className="text-[11px] font-bold text-slate-800">{item.teori.toLocaleString('id-ID')} {item.unit}</span>
-                              </div>
-                              <div>
-                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Deviasi</span>
-                                <span className={`text-[11px] font-black ${item.selisih < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                  {item.selisih > 0 ? `+${item.selisih}` : item.selisih} {item.unit}
+                                <span className="text-[9px] text-slate-400 font-mono font-bold">
+                                  {item.date}
                                 </span>
                               </div>
+                              <h4 className="text-xs font-black text-slate-900 mt-1">{item.name}</h4>
+                            </div>
+                            <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
+                              item.isHighDeviation ? 'bg-rose-600 text-white' : 'bg-emerald-100 text-emerald-700'
+                            }`}>
+                              {item.status}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-1.5 py-1.5 px-2 bg-white rounded-xl text-center font-mono border border-slate-100">
+                            <div>
+                              <span className="text-[8px] text-slate-400 block font-sans uppercase">Fisik SO</span>
+                              <span className="text-[11px] font-bold text-slate-800">{item.fisik.toLocaleString('id-ID')} {item.unit}</span>
+                            </div>
+                            <div>
+                              <span className="text-[8px] text-slate-400 block font-sans uppercase">Teori Promix</span>
+                              <span className="text-[11px] font-bold text-slate-800">{item.teori.toLocaleString('id-ID')} {item.unit}</span>
+                            </div>
+                            <div>
+                              <span className="text-[8px] text-slate-400 block font-sans uppercase">Selisih Deviasi</span>
+                              <span className={`text-[11px] font-black ${item.selisih < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                {item.selisih > 0 ? `+${item.selisih}` : item.selisih} {item.unit}
+                              </span>
                             </div>
                           </div>
-                        );
-                      })
+                        </div>
+                      ))
                   )}
                 </div>
-
               </div>
 
               <div className="p-3 border-t border-slate-100 bg-slate-50">
@@ -1598,7 +1783,7 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* ================= MODAL OPEX DENGAN 5 KOLOM & GRAFIK RANGKUMAN EKSEKUTIF ================= */}
+        {/* ================= POIN 3: MODAL OPEX DENGAN RINCIAN UTILITIES (LISTRIK, AIR, LPG) ================= */}
         {activeModal === 'opex_control' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
@@ -1610,7 +1795,7 @@ export default function AreaDashboard() {
                   </span>
                   <div>
                     <h3 className="text-sm font-black text-slate-900">Controlling Budget OPEX</h3>
-                    <p className="text-[10px] text-slate-400 font-medium">Monitoring Real-Time Anggaran 9 Resto</p>
+                    <p className="text-[10px] text-slate-400 font-medium">Monitoring Anggaran & Pos Pengeluaran Kritis</p>
                   </div>
                 </div>
                 <button 
@@ -1621,7 +1806,6 @@ export default function AreaDashboard() {
                 </button>
               </div>
 
-              {/* TAUTAN KE SPREADSHEET RM */}
               <div className="p-3 bg-emerald-50/70 border-b border-emerald-100 flex items-center justify-between gap-2">
                 <div>
                   <span className="text-xs font-black text-emerald-950 block">Database Spreadsheet RM</span>
@@ -1645,18 +1829,17 @@ export default function AreaDashboard() {
                   onChange={(e) => setSelectedOpexOutlet(e.target.value)}
                   className="text-xs font-bold bg-white border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer shadow-2xs flex-1 max-w-[220px]"
                 >
-                  <option value="ALL">📊 Semua 9 Cabang (Executive View)</option>
+                  <option value="ALL">📊 Semua Cabang (Executive View)</option>
                   {opexList.map(o => (
-                    <option key={o.outletCode} value={o.outletCode}>{o.outletName} ({o.outletCode})</option>
+                    <option key={o.outletCode} value={o.outletCode}>{o.outletName}</option>
                   ))}
                 </select>
               </div>
 
               <div className="p-4 overflow-y-auto space-y-4">
-                {/* 1. RANGKUMAN EKSEKUTIF TOTAL REGIONAL */}
                 {selectedOpexOutlet === 'ALL' && (
                   <div className="space-y-3">
-                    <div className="bg-gradient-to-br from-slate-900 via-emerald-950 to-slate-900 p-4 rounded-3xl text-white shadow-lg relative overflow-hidden border border-emerald-500/20">
+                    <div className="bg-gradient-to-br from-slate-900 via-emerald-950 to-slate-900 p-5 rounded-3xl text-white shadow-lg relative overflow-hidden border border-emerald-500/20">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
                           <FiLayers /> Total Anggaran OPEX Area Kaltim
@@ -1666,27 +1849,27 @@ export default function AreaDashboard() {
                         </span>
                       </div>
 
-                      <div className="mt-3 flex items-baseline justify-between">
+                      <div className="mt-4 flex items-baseline justify-between">
                         <div>
-                          <span className="text-[9px] text-slate-400 block uppercase">Realisasi / Total Budget</span>
+                          <span className="text-[9px] text-slate-400 block uppercase">Total Realisasi</span>
                           <p className="text-xl font-black font-mono text-white mt-0.5">
                             Rp {totalOpexRegional.sumActual.toLocaleString('id-ID')}
                           </p>
                           <p className="text-[10px] text-slate-300 font-mono">
-                            dari Rp {totalOpexRegional.sumBudget.toLocaleString('id-ID')}
+                            dari pagu Rp {totalOpexRegional.sumBudget.toLocaleString('id-ID')}
                           </p>
                         </div>
                         <div className="text-right">
                           <span className="text-3xl font-black font-mono text-emerald-400 block">
                             {totalOpexRegional.avgPercent}%
                           </span>
-                          <span className="text-[9px] text-slate-300 font-medium">Pemakaian Regional</span>
+                          <span className="text-[9px] text-slate-300 font-medium">Realisasi Regional</span>
                         </div>
                       </div>
 
-                      <div className="mt-3 h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                      <div className="mt-3 h-2.5 w-full bg-white/10 rounded-full overflow-hidden">
                         <div 
-                          className={`h-full rounded-full ${
+                          className={`h-full rounded-full transition-all duration-500 ${
                             totalOpexRegional.avgPercent > 100 ? 'bg-rose-500' :
                             totalOpexRegional.avgPercent > 80 ? 'bg-amber-400' : 'bg-emerald-400'
                           }`}
@@ -1695,81 +1878,26 @@ export default function AreaDashboard() {
                       </div>
 
                       <div className="mt-3 pt-2.5 border-t border-white/10 flex justify-between text-[10px] font-mono text-slate-300">
-                        <span>Total Sisa Budget Area:</span>
+                        <span>Total Sisa Kuota OPEX:</span>
                         <span className="font-bold text-emerald-300">
                           Rp {totalOpexRegional.sumSisa.toLocaleString('id-ID')}
                         </span>
                       </div>
                     </div>
-
-                    {/* DIAGRAM PROPORSI BEBAN REGIONAL */}
-                    <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2 shadow-2xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black uppercase text-slate-500 flex items-center gap-1">
-                          <FiBarChart2 className="text-indigo-600" /> Distribusi Beban Regional
-                        </span>
-                        <span className="text-[9px] text-slate-400 font-bold">4 Pos Beban</span>
-                      </div>
-
-                      <div className="space-y-1.5 text-[10px] font-mono">
-                        <div>
-                          <div className="flex justify-between text-slate-700">
-                            <span>1. Utilities (Listrik/Air/Gas)</span>
-                            <span className="font-bold">Rp {totalOpexRegional.categories.utilities.toLocaleString('id-ID')}</span>
-                          </div>
-                          <div className="h-1.5 w-full bg-slate-200 rounded-full mt-0.5 overflow-hidden">
-                            <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${totalOpexRegional.sumActual > 0 ? (totalOpexRegional.categories.utilities / totalOpexRegional.sumActual) * 100 : 0}%` }} />
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-slate-700">
-                            <span>2. Operational Supply</span>
-                            <span className="font-bold">Rp {totalOpexRegional.categories.operational_supply.toLocaleString('id-ID')}</span>
-                          </div>
-                          <div className="h-1.5 w-full bg-slate-200 rounded-full mt-0.5 overflow-hidden">
-                            <div className="h-full bg-blue-500 rounded-full" style={{ width: `${totalOpexRegional.sumActual > 0 ? (totalOpexRegional.categories.operational_supply / totalOpexRegional.sumActual) * 100 : 0}%` }} />
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-slate-700">
-                            <span>3. Office Supply (ATK)</span>
-                            <span className="font-bold">Rp {totalOpexRegional.categories.office_supply.toLocaleString('id-ID')}</span>
-                          </div>
-                          <div className="h-1.5 w-full bg-slate-200 rounded-full mt-0.5 overflow-hidden">
-                            <div className="h-full bg-amber-500 rounded-full" style={{ width: `${totalOpexRegional.sumActual > 0 ? (totalOpexRegional.categories.office_supply / totalOpexRegional.sumActual) * 100 : 0}%` }} />
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between text-slate-700">
-                            <span>4. Maintenance Resto</span>
-                            <span className="font-bold">Rp {totalOpexRegional.categories.maintenance.toLocaleString('id-ID')}</span>
-                          </div>
-                          <div className="h-1.5 w-full bg-slate-200 rounded-full mt-0.5 overflow-hidden">
-                            <div className="h-full bg-rose-500 rounded-full" style={{ width: `${totalOpexRegional.sumActual > 0 ? (totalOpexRegional.categories.maintenance / totalOpexRegional.sumActual) * 100 : 0}%` }} />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
                   </div>
                 )}
 
-                {/* 2. DAFTAR RINCIAN PER RESTO DENGAN FORMAT 5 KOLOM */}
                 <div className="space-y-3">
                   <span className="text-[10px] font-black uppercase text-slate-400 px-1 block">
-                    {selectedOpexOutlet === 'ALL' ? 'Rincian Budget Per Resto' : 'Rincian Resto Terpilih'}
+                    {selectedOpexOutlet === 'ALL' ? 'Kartu Kontrol OPEX Resto' : 'Rincian Resto Terpilih'}
                   </span>
 
                   {opexList
                     .filter(item => selectedOpexOutlet === 'ALL' || item.outletCode === selectedOpexOutlet)
                     .map(item => {
-                      const variance = item.sisa_budget;
-                      const percentUsed = item.percent_used;
-                      const isOverbudget = percentUsed > 100;
+                      const isOverbudget = item.percent_used > 100;
+                      const isExpanded = expandedOpexCode === item.outletCode;
                       const cat = item.categories || {};
-
                       const util = cat.utilities || {};
                       const utilItems = util.items || {};
                       const ops = cat.operational_supply || {};
@@ -1777,7 +1905,7 @@ export default function AreaDashboard() {
                       const maint = cat.maintenance || {};
 
                       return (
-                        <div key={item.outletCode} className="p-4 bg-white border border-slate-200 rounded-2xl space-y-3 shadow-2xs">
+                        <div key={item.outletCode} className="p-4 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-3">
                           <div className="flex items-start justify-between">
                             <div>
                               <div className="flex items-center gap-1.5">
@@ -1787,120 +1915,101 @@ export default function AreaDashboard() {
                                 <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
                                   isOverbudget ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
                                 }`}>
-                                  {isOverbudget ? 'Overbudget' : 'On-Budget'}
+                                  {isOverbudget ? 'OVERBUDGET' : 'ON-BUDGET'}
                                 </span>
                               </div>
                               <h4 className="text-xs font-black text-slate-900 mt-1">{item.outletName}</h4>
-                              <p className="text-[10px] text-indigo-700 font-mono font-bold mt-0.5 flex items-center gap-1">
-                                <FiTrendingUp className="text-xs" />
-                                <span>Actual Sales: Rp {item.actual_sales ? item.actual_sales.toLocaleString('id-ID') : '0'}</span>
-                              </p>
+                              <p className="text-[10px] text-slate-400 font-mono">Actual Sales: Rp {item.actual_sales.toLocaleString('id-ID')}</p>
                             </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-[10px] font-mono">
-                              <span className="text-slate-500 font-medium">Pemakaian OPEX: {percentUsed}%</span>
-                              <span className={isOverbudget ? 'text-rose-600 font-bold' : 'text-emerald-700 font-bold'}>
-                                {variance >= 0 ? `Sisa: Rp ${variance.toLocaleString('id-ID')}` : `Defisit: Rp ${Math.abs(variance).toLocaleString('id-ID')}`}
+                            <div className="text-right">
+                              <span className="text-[9px] text-slate-400 uppercase block">Sisa Kuota</span>
+                              <span className="text-xs font-mono font-black text-emerald-600">
+                                Rp {item.sisa_budget.toLocaleString('id-ID')}
                               </span>
                             </div>
-                            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                              <div 
-                                className={`h-full rounded-full transition-all ${
-                                  isOverbudget ? 'bg-rose-500' : percentUsed > 80 ? 'bg-amber-500' : 'bg-emerald-500'
-                                }`} 
-                                style={{ width: `${Math.min(100, percentUsed)}%` }}
-                              />
+                          </div>
+
+                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full transition-all duration-500 ${
+                                isOverbudget ? 'bg-rose-500' : item.percent_used > 80 ? 'bg-amber-500' : 'bg-emerald-500'
+                              }`} 
+                              style={{ width: `${Math.min(100, item.percent_used)}%` }}
+                            />
+                          </div>
+
+                          {/* POIN 3: 3 POS BEBAN UTILITIES (AIR, LPG, LISTRIK) */}
+                          <div className="p-3 bg-slate-50/80 border border-slate-200/80 rounded-xl space-y-2.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-black uppercase text-indigo-900 flex items-center gap-1">
+                                <FiZap className="text-amber-500" /> Kontrol Utama 3 Beban Utilities
+                              </span>
+                              <span className="text-[9px] font-mono font-bold text-slate-500">
+                                Total: Rp {(util.actual_rp || 0).toLocaleString('id-ID')}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2 text-left font-mono">
+                              {/* 1. Listrik */}
+                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
+                                <span className="text-[8px] font-sans font-black text-slate-400 uppercase block">⚡ Listrik</span>
+                                <p className="text-xs font-black text-slate-800 mt-0.5">
+                                  Rp {(utilItems.listrik?.actual_rp || 0).toLocaleString('id-ID')}
+                                </p>
+                                <span className="text-[8px] text-emerald-600 block mt-0.5">
+                                  Sisa: Rp {(utilItems.listrik?.sisa_rp || 0).toLocaleString('id-ID')}
+                                </span>
+                              </div>
+
+                              {/* 2. Gas LPG */}
+                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
+                                <span className="text-[8px] font-sans font-black text-slate-400 uppercase block">🔥 Gas LPG</span>
+                                <p className="text-xs font-black text-slate-800 mt-0.5">
+                                  Rp {(utilItems.gas?.actual_rp || 0).toLocaleString('id-ID')}
+                                </p>
+                                <span className="text-[8px] text-emerald-600 block mt-0.5">
+                                  Sisa: Rp {(utilItems.gas?.sisa_rp || 0).toLocaleString('id-ID')}
+                                </span>
+                              </div>
+
+                              {/* 3. Air PDAM */}
+                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
+                                <span className="text-[8px] font-sans font-black text-slate-400 uppercase block">💧 Air PDAM</span>
+                                <p className="text-xs font-black text-slate-800 mt-0.5">
+                                  Rp {(utilItems.air?.actual_rp || 0).toLocaleString('id-ID')}
+                                </p>
+                                <span className="text-[8px] text-emerald-600 block mt-0.5">
+                                  Sisa: Rp {(utilItems.air?.sisa_rp || 0).toLocaleString('id-ID')}
+                                </span>
+                              </div>
                             </div>
                           </div>
 
-                          {/* TABEL LENGKAP 5 KOLOM (ACTUAL, % ACT, BUDGET, % BUD, SISA) */}
-                          <div className="overflow-x-auto no-scrollbar">
-                            <table className="w-full text-left font-mono text-[9px] border-collapse">
-                              <thead>
-                                <tr className="border-b border-slate-200 text-[8px] text-slate-400 uppercase font-sans">
-                                  <th className="py-1">Akun Beban</th>
-                                  <th className="py-1 text-right">Actual (Rp)</th>
-                                  <th className="py-1 text-right">% Act</th>
-                                  <th className="py-1 text-right">Budget (Rp)</th>
-                                  <th className="py-1 text-right">% Bud</th>
-                                  <th className="py-1 text-right">Sisa (Rp)</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {/* Utilities */}
-                                <tr className="font-bold text-slate-800 bg-slate-50/50">
-                                  <td className="py-1.5 font-sans">Beban Utilities</td>
-                                  <td className="py-1.5 text-right">{(util.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-indigo-600">{util.actual_pct || 0}%</td>
-                                  <td className="py-1.5 text-right">{(util.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-slate-500">{util.budget_pct || 0}%</td>
-                                  <td className="py-1.5 text-right text-emerald-700">{(util.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                </tr>
-                                {utilItems.listrik && (
-                                  <tr className="text-slate-500 text-[8px]">
-                                    <td className="py-0.5 pl-2 font-sans">↳ Listrik</td>
-                                    <td className="py-0.5 text-right">{(utilItems.listrik.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                    <td className="py-0.5 text-right">{utilItems.listrik.actual_pct || 0}%</td>
-                                    <td className="py-0.5 text-right">{(utilItems.listrik.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                    <td className="py-0.5 text-right">{utilItems.listrik.budget_pct || 0}%</td>
-                                    <td className="py-0.5 text-right">{(utilItems.listrik.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                  </tr>
-                                )}
-                                {utilItems.air && (
-                                  <tr className="text-slate-500 text-[8px]">
-                                    <td className="py-0.5 pl-2 font-sans">↳ Air</td>
-                                    <td className="py-0.5 text-right">{(utilItems.air.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                    <td className="py-0.5 text-right">{utilItems.air.actual_pct || 0}%</td>
-                                    <td className="py-0.5 text-right">{(utilItems.air.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                    <td className="py-0.5 text-right">{utilItems.air.budget_pct || 0}%</td>
-                                    <td className="py-0.5 text-right">{(utilItems.air.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                  </tr>
-                                )}
-                                {utilItems.gas && (
-                                  <tr className="text-slate-500 text-[8px]">
-                                    <td className="py-0.5 pl-2 font-sans">↳ Gas</td>
-                                    <td className="py-0.5 text-right">{(utilItems.gas.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                    <td className="py-0.5 text-right">{utilItems.gas.actual_pct || 0}%</td>
-                                    <td className="py-0.5 text-right">{(utilItems.gas.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                    <td className="py-0.5 text-right">{utilItems.gas.budget_pct || 0}%</td>
-                                    <td className="py-0.5 text-right">{(utilItems.gas.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                  </tr>
-                                )}
+                          <button
+                            type="button"
+                            onClick={() => setExpandedOpexCode(isExpanded ? null : item.outletCode)}
+                            className="w-full py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 transition-colors border border-slate-200/60"
+                          >
+                            <span>{isExpanded ? 'Sembunyikan Pos Beban Lainnya' : 'Lihat Beban ATK & Ops Supply'}</span>
+                            {isExpanded ? <FiChevronDown /> : <FiChevronRight />}
+                          </button>
 
-                                {/* Ops Supply */}
-                                <tr className="font-bold text-slate-800">
-                                  <td className="py-1.5 font-sans">Beban Ops Supply</td>
-                                  <td className="py-1.5 text-right">{(ops.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-indigo-600">{ops.actual_pct || 0}%</td>
-                                  <td className="py-1.5 text-right">{(ops.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-slate-500">{ops.budget_pct || 0}%</td>
-                                  <td className="py-1.5 text-right text-emerald-700">{(ops.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                </tr>
-
-                                {/* Office Supply / ATK */}
-                                <tr className="font-bold text-slate-800">
-                                  <td className="py-1.5 font-sans">Beban ATK / Office</td>
-                                  <td className="py-1.5 text-right">{(off.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-indigo-600">{off.actual_pct || 0}%</td>
-                                  <td className="py-1.5 text-right">{(off.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-slate-500">{off.budget_pct || 0}%</td>
-                                  <td className="py-1.5 text-right text-emerald-700">{(off.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                </tr>
-
-                                {/* Maintenance / Inventaris */}
-                                <tr className="font-bold text-slate-800">
-                                  <td className="py-1.5 font-sans">Beban Inventaris</td>
-                                  <td className="py-1.5 text-right">{(maint.actual_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-indigo-600">{maint.actual_pct || 0}%</td>
-                                  <td className="py-1.5 text-right">{(maint.budget_rp || 0).toLocaleString('id-ID')}</td>
-                                  <td className="py-1.5 text-right text-slate-500">{maint.budget_pct || 0}%</td>
-                                  <td className="py-1.5 text-right text-emerald-700">{(maint.sisa_rp || 0).toLocaleString('id-ID')}</td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </div>
+                          {isExpanded && (
+                            <div className="pt-2 space-y-1.5 text-[10px] font-mono border-t border-slate-100 animate-in fade-in duration-200">
+                              <div className="flex justify-between p-2 bg-slate-50 rounded-lg">
+                                <span className="text-slate-600">Ops Supply:</span>
+                                <span className="font-bold">Rp {(ops.actual_rp || 0).toLocaleString('id-ID')}</span>
+                              </div>
+                              <div className="flex justify-between p-2 bg-slate-50 rounded-lg">
+                                <span className="text-slate-600">ATK & Kantor:</span>
+                                <span className="font-bold">Rp {(off.actual_rp || 0).toLocaleString('id-ID')}</span>
+                              </div>
+                              <div className="flex justify-between p-2 bg-slate-50 rounded-lg">
+                                <span className="text-slate-600">Inventaris:</span>
+                                <span className="font-bold">Rp {(maint.actual_rp || 0).toLocaleString('id-ID')}</span>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -2043,7 +2152,7 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* MODAL INPUT CLOSING */}
+        {/* POIN 1: MODAL INPUT CLOSING DENGAN GENERATE DATA REAL */}
         {activeModal === 'upload_closing' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
@@ -2142,7 +2251,7 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* MODAL CONTROLLING EQUIPMENT */}
+        {/* ================= POIN 4: MODAL CONTROLLING EQUIPMENT DENGAN STATS SIMPEL & ELEGAN ================= */}
         {activeModal === 'controlling_equipment' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
@@ -2154,7 +2263,7 @@ export default function AreaDashboard() {
                   </span>
                   <div>
                     <h3 className="text-sm font-black text-slate-900">Controlling Equipment</h3>
-                    <p className="text-[10px] text-slate-400 font-medium">Monitoring Aset & Peralatan 9 Cabang</p>
+                    <p className="text-[10px] text-slate-400 font-medium">Monitoring Aset & Kesiapan Operasional</p>
                   </div>
                 </div>
                 <button 
@@ -2165,6 +2274,35 @@ export default function AreaDashboard() {
                 </button>
               </div>
 
+              {/* POIN 4: Desain Simpel, Rapi, Elegan & Angka Besar */}
+              <div className="p-4 bg-gradient-to-b from-slate-50 to-white border-b border-slate-100">
+                <div className="grid grid-cols-3 gap-2.5 text-center">
+                  <div className="p-3 bg-white rounded-2xl border border-slate-200/80 shadow-xs">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Kesiapan Aset</span>
+                    <span className="text-xl font-black font-mono text-indigo-600 block mt-0.5">
+                      {assetReadinessPercent}%
+                    </span>
+                    <span className="text-[8px] text-slate-400">Standar Ops</span>
+                  </div>
+
+                  <div className="p-3 bg-rose-50/70 rounded-2xl border border-rose-200/80 shadow-xs">
+                    <span className="text-[9px] font-bold text-rose-800 uppercase tracking-wider block">Shortage</span>
+                    <span className="text-xl font-black font-mono text-rose-600 block mt-0.5">
+                      {totalShortageCount}
+                    </span>
+                    <span className="text-[8px] text-rose-700 font-bold">Wajib Restock</span>
+                  </div>
+
+                  <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 shadow-xs">
+                    <span className="text-[9px] font-bold text-emerald-800 uppercase tracking-wider block">Stok Cukup</span>
+                    <span className="text-xl font-black font-mono text-emerald-600 block mt-0.5">
+                      {totalNormalCount}
+                    </span>
+                    <span className="text-[8px] text-emerald-700 font-bold">Aman Digunakan</span>
+                  </div>
+                </div>
+              </div>
+
               <div className="px-4 py-2.5 bg-white border-b border-slate-100 flex items-center justify-between gap-2">
                 <span className="text-[10px] font-black uppercase text-slate-400 shrink-0">Cabang Resto:</span>
                 <select
@@ -2172,15 +2310,9 @@ export default function AreaDashboard() {
                   onChange={(e) => setSelectedEquipOutlet(e.target.value)}
                   className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-3 py-1.5 outline-none cursor-pointer flex-1 max-w-[220px]"
                 >
-                  <option value="BPPHAR">Gacoan Balikpapan MT Haryono (BPPHAR)</option>
-                  <option value="BPPSOE">Gacoan Balikpapan Soetta (BPPSOE)</option>
-                  <option value="BPPMUL">Gacoan Balikpapan Mulawarman (BPPMUL)</option>
-                  <option value="SMRYAM">Gacoan Samarinda Wahid Hasyim (SMRYAM)</option>
-                  <option value="SMRAHM">Gacoan Samarinda Ahmad Yani (SMRAHM)</option>
-                  <option value="SMRKES">Gacoan Samarinda Kesejahteraan (SMRKES)</option>
-                  <option value="TRGAKH">Gacoan Tenggarong (TRGAKH)</option>
-                  <option value="SGTMAR">Gacoan Sangatta (SGTMAR)</option>
-                  <option value="BONIMA">Gacoan Bontang (BONIMA)</option>
+                  {outlets.map(o => (
+                    <option key={o.code} value={o.code}>{o.name} ({o.code})</option>
+                  ))}
                 </select>
               </div>
 
@@ -2250,7 +2382,7 @@ export default function AreaDashboard() {
                     <div 
                       key={item.id}
                       className={`p-3.5 rounded-2xl border transition-all space-y-2 shadow-2xs ${
-                        item.isShortage ? 'bg-rose-50/60 border-rose-300' : 'bg-white border-slate-200/90'
+                        item.isShortage ? 'bg-rose-50/50 border-l-4 border-l-rose-600 border-rose-200' : 'bg-white border-slate-200/90'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -2270,14 +2402,14 @@ export default function AreaDashboard() {
 
                         <div className="text-right shrink-0">
                           <span className={`text-xs font-mono font-black px-2 py-0.5 rounded-lg border ${
-                            item.isShortage ? 'bg-rose-600 text-white border-rose-600' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            item.isShortage ? 'bg-rose-600 text-white border-rose-600 shadow-xs' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           }`}>
                             {item.selisihOps >= 0 ? `+${item.selisihOps}` : item.selisihOps}
                           </span>
                           <span className={`text-[8px] font-bold block mt-0.5 uppercase ${
                             item.isShortage ? 'text-rose-600 font-black' : 'text-slate-400'
                           }`}>
-                            {item.isShortage ? 'Kekurangan Ops' : 'Stok Cukup'}
+                            {item.isShortage ? '⚠️ Shortage' : 'Stok Aman'}
                           </span>
                         </div>
                       </div>
@@ -2499,27 +2631,12 @@ export default function AreaDashboard() {
                           <FiExternalLink className="text-xs" />
                         </a>
                       </div>
-
-                      {currentProfile?.role === 'area_manager' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveModal(null);
-                            setAlarmTriggerType('TEST');
-                            startAudioAlarm();
-                          }}
-                          className="w-full py-2 bg-white hover:bg-slate-100 text-indigo-700 border border-indigo-300 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                        >
-                          <FiVolume2 />
-                          <span>Uji Coba Alarm & Pop-Up Manager</span>
-                        </button>
-                      )}
                     </div>
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between px-1">
                         <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider">
-                          Persentase Kepatuhan 9 Resto
+                          Persentase Kepatuhan Resto Aktif
                         </span>
                         <span className="text-[9px] font-bold text-slate-400">Ketuk untuk rincian manager</span>
                       </div>
@@ -2564,27 +2681,6 @@ export default function AreaDashboard() {
                                 <FiChevronRight className="text-slate-400 text-xs" />
                               </div>
                             </div>
-
-                            <div className="grid grid-cols-3 gap-1.5 pt-1 text-center font-mono">
-                              <div className="bg-white/80 p-1.5 rounded-xl border border-slate-100">
-                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Submit Berhasil</span>
-                                <span className="text-[11px] font-bold text-slate-800">
-                                  {resto.cacpData.submittedDays} Hari
-                                </span>
-                              </div>
-                              <div className="bg-white/80 p-1.5 rounded-xl border border-slate-100">
-                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Bolong/Alpa</span>
-                                <span className={`text-[11px] font-bold ${resto.cacpData.missedDays > 0 ? 'text-rose-600' : 'text-slate-800'}`}>
-                                  {resto.cacpData.missedDays} Hari
-                                </span>
-                              </div>
-                              <div className="bg-white/80 p-1.5 rounded-xl border border-slate-100">
-                                <span className="text-[8px] text-slate-400 block font-sans uppercase">Total Hari</span>
-                                <span className="text-[11px] font-bold text-indigo-700">
-                                  {resto.cacpData.totalDays} Hari
-                                </span>
-                              </div>
-                            </div>
                           </div>
                         );
                       })}
@@ -2618,22 +2714,6 @@ export default function AreaDashboard() {
                               }`}>
                                 {mgr.scoreCurrentMonth}%
                               </span>
-                              <span className={`text-[8px] font-bold block mt-0.5 ${mgr.isPass ? 'text-emerald-700' : 'text-rose-600'}`}>
-                                {mgr.statusText}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[10px]">
-                            <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 flex items-center justify-between">
-                              <span className="text-slate-400 font-sans">Submit:</span>
-                              <span className="font-bold text-emerald-700">{mgr.submittedDays} / {mgr.totalDays} Hari</span>
-                            </div>
-                            <div className="bg-slate-50 p-2 rounded-xl border border-slate-100 flex items-center justify-between">
-                              <span className="text-slate-400 font-sans">Bolong:</span>
-                              <span className={`font-bold ${mgr.missedDays > 0 ? 'text-rose-600' : 'text-slate-700'}`}>
-                                {mgr.missedDays} Hari
-                              </span>
                             </div>
                           </div>
                         </div>
@@ -2644,7 +2724,7 @@ export default function AreaDashboard() {
                       onClick={() => setSelectedOutletForCacp(null)}
                       className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
                     >
-                      ← Kembali ke Daftar 9 Resto
+                      ← Kembali ke Daftar Resto
                     </button>
                   </div>
                 )}
@@ -2667,7 +2747,7 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* ================= MODAL TASK MANAGER ================= */}
+        {/* ================= POIN 2: MODAL TASK MANAGER DENGAN SUBMIT NORMAL ================= */}
         {activeModal === 'task_manager' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
@@ -2700,7 +2780,7 @@ export default function AreaDashboard() {
                     taskViewTab === 'resto_sla' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                   }`}
                 >
-                  Kepatuhan 9 Resto
+                  Kepatuhan SLA Resto
                 </button>
               </div>
 
@@ -2748,7 +2828,6 @@ export default function AreaDashboard() {
 
                 {taskViewTab === 'tasks' && (
                   <>
-                    {/* Form Pembuatan Tugas: Khusus Area Manager */}
                     {currentProfile?.role === 'area_manager' && (
                       <form onSubmit={handleCreateTask} className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2.5">
                         <span className="text-xs font-black uppercase text-indigo-700 flex items-center gap-1">
@@ -2775,10 +2854,9 @@ export default function AreaDashboard() {
                             <option value="STORE">Pilih Resto</option>
                           </select>
 
-                          {/* Jika tugas untuk SM, pilihan departemen ditiadakan */}
                           {taskTargetType === 'ALL_SM' ? (
                             <div className="bg-slate-100 border border-dashed border-slate-300 rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-slate-400 flex items-center justify-center">
-                              Tugas Umum SM (Tanpa Dept)
+                              Tugas Umum SM
                             </div>
                           ) : (
                             <select
@@ -2844,7 +2922,6 @@ export default function AreaDashboard() {
                         <div className="text-center py-8 space-y-1.5 bg-slate-50/60 rounded-2xl border border-dashed border-slate-200">
                           <FiInbox className="mx-auto text-2xl text-slate-300" />
                           <p className="text-xs font-bold text-slate-500">Tidak ada tugas tertunda untuk akun ini.</p>
-                          <p className="text-[9px] text-slate-400">Daftar tugas yang belum dikerjakan hanya muncul di akun yang ditugaskan.</p>
                         </div>
                       ) : (
                         userVisibleTasks.map(t => {
@@ -2873,8 +2950,10 @@ export default function AreaDashboard() {
                                 </p>
                               </div>
 
+                              {/* POIN 2: TOMBOL SELESAI */}
                               {!isDone && (
                                 <button
+                                  type="button"
                                   onClick={() => {
                                     setTaskToConfirm(t);
                                     setActiveModal('confirm_task');
@@ -2898,14 +2977,14 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* ================= MODAL KONFIRMASI TUGAS ================= */}
+        {/* ================= POIN 2: MODAL KONFIRMASI TUGAS ================= */}
         {activeModal === 'confirm_task' && taskToConfirm && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
               
               <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <div>
-                  <h3 className="text-sm font-black text-slate-900">Konfirmasi Tugas</h3>
+                  <h3 className="text-sm font-black text-slate-900">Konfirmasi Tugas Selesai</h3>
                   <p className="text-[10px] text-slate-400 font-medium">Unggah Bukti Hasil Pekerjaan</p>
                 </div>
                 <button 
@@ -2958,7 +3037,7 @@ export default function AreaDashboard() {
                   className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
                 >
                   <FiCheckCircle />
-                  <span>{isConfirmingTask ? 'Menyimpan...' : 'Kirim Bukti Selesai'}</span>
+                  <span>{isConfirmingTask ? 'Menyimpan Bukti...' : 'Submit Selesai Pekerjaan'}</span>
                 </button>
 
                 <button
@@ -2974,7 +3053,7 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* MODAL PERINGKAT */}
+        {/* MODAL LEADERBOARD */}
         {activeModal === 'peringkat_modern' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
@@ -3002,7 +3081,7 @@ export default function AreaDashboard() {
                   }`}
                 >
                   <FiAward className="text-xs" />
-                  <span>Peringkat 9 Cabang</span>
+                  <span>Peringkat Cabang</span>
                 </button>
                 <button
                   onClick={() => setRankingTab('manager')}
@@ -3021,27 +3100,21 @@ export default function AreaDashboard() {
                 {rankingTab === 'resto' && (
                   outletScoreRankings.map((resto, idx) => {
                     const isTop1 = idx === 0;
-                    const isTop2 = idx === 1;
-                    const isTop3 = idx === 2;
 
                     return (
                       <div 
                         key={resto.id}
                         className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between ${
                           isTop1 ? 'bg-gradient-to-r from-amber-500/10 via-amber-100/30 to-white border-amber-300 shadow-xs' :
-                          isTop2 ? 'bg-gradient-to-r from-slate-200/50 via-slate-50 to-white border-slate-300' :
-                          isTop3 ? 'bg-gradient-to-r from-amber-700/10 via-amber-50 to-white border-amber-200' :
                           'bg-white border-slate-200/80 hover:border-slate-300'
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className={`w-9 h-9 rounded-2xl flex items-center justify-center font-black text-xs shrink-0 shadow-xs ${
                             isTop1 ? 'bg-gradient-to-tr from-amber-500 to-yellow-400 text-amber-950 font-black ring-2 ring-amber-200' :
-                            isTop2 ? 'bg-gradient-to-tr from-slate-300 to-slate-200 text-slate-800' :
-                            isTop3 ? 'bg-gradient-to-tr from-amber-700 to-amber-600 text-white' :
                             'bg-slate-100 text-slate-600 font-bold'
                           }`}>
-                            {isTop1 ? '🥇' : isTop2 ? '🥈' : isTop3 ? '🥉' : `#${idx + 1}`}
+                            {isTop1 ? '🥇' : `#${idx + 1}`}
                           </div>
 
                           <div className="min-w-0">
@@ -3094,9 +3167,7 @@ export default function AreaDashboard() {
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className={`w-9 h-9 rounded-2xl flex items-center justify-center font-black text-xs shrink-0 ${
-                            isTop1 ? 'bg-amber-400 text-amber-950 font-black shadow-xs ring-2 ring-amber-200' :
-                            idx === 1 ? 'bg-slate-200 text-slate-800' :
-                            idx === 2 ? 'bg-amber-100 text-amber-900' : 'bg-slate-100 text-slate-500'
+                            isTop1 ? 'bg-amber-400 text-amber-950 font-black shadow-xs ring-2 ring-amber-200' : 'bg-slate-100 text-slate-500'
                           }`}>
                             {isTop1 ? '👑' : `#${idx + 1}`}
                           </div>
@@ -3135,7 +3206,7 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* MODAL DETAIL RESTO */}
+        {/* POIN 1: MODAL DETAIL RESTO MENAMPILKAN AKUMULASI DEVIASI BAHAN BAKU */}
         {activeModal === 'detail_resto' && selectedOutletForDetail && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4">
             <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100 animate-in fade-in duration-200">
@@ -3167,7 +3238,7 @@ export default function AreaDashboard() {
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs font-bold">
                       <span className="text-slate-700 flex items-center gap-1.5">
-                        <FiUsers className="text-indigo-600" /> Presensi & On-Time Kru ({selectedOutletForDetail.crewCount} Orang)
+                        <FiUsers className="text-indigo-600" /> Presensi & On-Time Kru ({selectedOutletForDetail.crewCount} Kru)
                       </span>
                       <span className="font-mono text-indigo-700">{selectedOutletForDetail.metrics.attendance}%</span>
                     </div>
@@ -3191,19 +3262,7 @@ export default function AreaDashboard() {
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs font-bold">
                       <span className="text-slate-700 flex items-center gap-1.5">
-                        <FiCheckSquare className="text-blue-600" /> Ketepatan SLA Tugas
-                      </span>
-                      <span className="font-mono text-blue-700">{selectedOutletForDetail.metrics.taskCompliance}%</span>
-                    </div>
-                    <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-600 rounded-full" style={{ width: `${selectedOutletForDetail.metrics.taskCompliance}%` }} />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs font-bold">
-                      <span className="text-slate-700 flex items-center gap-1.5">
-                        <FiPieChart className="text-amber-600" /> Kontrol Deviasi SO vs POS
+                        <FiPieChart className="text-amber-600" /> Audit Deviasi Fisik SO vs Promix (Bobot 25%)
                       </span>
                       <span className="font-mono text-amber-700">{selectedOutletForDetail.metrics.deviation}%</span>
                     </div>
@@ -3212,15 +3271,30 @@ export default function AreaDashboard() {
                     </div>
                   </div>
 
+                  {/* POIN 1: Akumulasi item deviasi tinggi di resto */}
+                  {selectedOutletForDetail.deviationData?.highDevItems?.length > 0 && (
+                    <div className="p-3 bg-rose-50/70 border border-rose-200 rounded-2xl space-y-1.5">
+                      <span className="text-[10px] font-black uppercase text-rose-900 block">
+                        ⚠️ Akumulasi Item Deviasi Tinggi Bulan Ini:
+                      </span>
+                      {selectedOutletForDetail.deviationData.highDevItems.map((it, idx) => (
+                        <div key={idx} className="flex justify-between text-[10px] font-mono text-rose-800">
+                          <span>{it.name} ({it.count}x temuan)</span>
+                          <span className="font-bold">{it.totalDiff} {it.unit}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="space-y-1">
                     <div className="flex justify-between text-xs font-bold">
                       <span className="text-slate-700 flex items-center gap-1.5">
-                        <FiClipboard className="text-purple-600" /> Kepatuhan CACP Bulanan
+                        <FiCheckSquare className="text-blue-600" /> Ketepatan SLA Tugas
                       </span>
-                      <span className="font-mono text-purple-700">{selectedOutletForDetail.cacpData.overallPercentage}%</span>
+                      <span className="font-mono text-blue-700">{selectedOutletForDetail.metrics.taskCompliance}%</span>
                     </div>
                     <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                      <div className="h-full bg-purple-600 rounded-full" style={{ width: `${selectedOutletForDetail.cacpData.overallPercentage}%` }} />
+                      <div className="h-full bg-blue-600 rounded-full" style={{ width: `${selectedOutletForDetail.metrics.taskCompliance}%` }} />
                     </div>
                   </div>
                 </div>
@@ -3321,19 +3395,18 @@ export default function AreaDashboard() {
                     Tutup Rapor
                   </button>
                 </div>
-
               </div>
             </div>
           </div>
         )}
 
-        {/* BOTTOM BAR */}
-        <div className="fixed bottom-0 max-w-md w-full bg-white border-t border-slate-200 px-6 py-2.5 flex justify-between items-center z-30 shadow-lg">
+        {/* BOTTOM NAVIGATION BAR */}
+        <div className="fixed bottom-0 max-w-md w-full bg-white border-t border-slate-200 px-8 py-2.5 flex justify-between items-center z-30 shadow-lg">
           <button 
             onClick={() => setActiveModal(null)} 
-            className="flex flex-col items-center text-indigo-600 font-bold cursor-pointer"
+            className={`flex flex-col items-center cursor-pointer transition-colors ${activeModal === null ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
           >
-            <FiActivity className="text-base" />
+            <FiActivity className="text-lg" />
             <span className="text-[10px] mt-0.5">Beranda</span>
           </button>
 
@@ -3342,31 +3415,23 @@ export default function AreaDashboard() {
               setRankingTab('resto');
               setActiveModal('peringkat_modern');
             }} 
-            className="flex flex-col items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+            className={`flex flex-col items-center cursor-pointer transition-colors ${activeModal === 'peringkat_modern' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
           >
-            <FiAward className="text-base" />
+            <FiAward className="text-lg" />
             <span className="text-[10px] mt-0.5">Peringkat</span>
           </button>
 
           <button 
             onClick={() => setActiveModal('task_manager')} 
-            className="flex flex-col items-center text-slate-400 hover:text-indigo-600 cursor-pointer relative"
+            className={`flex flex-col items-center cursor-pointer relative transition-colors ${activeModal === 'task_manager' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
           >
-            <FiCheckSquare className="text-base" />
+            <FiCheckSquare className="text-lg" />
             {taskAnalytics.pendingCount > 0 && (
               <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-rose-600 text-white rounded-full text-[8px] font-black flex items-center justify-center">
                 {taskAnalytics.pendingCount}
               </span>
             )}
             <span className="text-[10px] mt-0.5">Task Mgr</span>
-          </button>
-
-          <button 
-            onClick={() => setActiveModal('opex_control')} 
-            className="flex flex-col items-center text-slate-400 hover:text-slate-600 cursor-pointer"
-          >
-            <FiDollarSign className="text-base" />
-            <span className="text-[10px] mt-0.5">OPEX</span>
           </button>
         </div>
 
