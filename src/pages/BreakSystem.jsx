@@ -90,7 +90,6 @@ const CREW_STATION_OPTIONS = [
 const LOGS_PAGE_SIZE = 15;
 const LOGS_MAX_AGE_DAYS = 45;
 
-// Komponen Avatar yang hemat bandwidth
 const UserAvatar = memo(({ src, name, size = "w-9 h-9", className = "" }) => {
   const [error, setError] = useState(false);
   const initials = (name || 'CR').substring(0, 2).toUpperCase();
@@ -178,6 +177,7 @@ export default function BreakSystem() {
   const isAssistantManager = Boolean(roleLower === 'ast_store_manager');
   const isFloorLeader = Boolean(roleLower === 'floor_leader' || roleLower === 'floor_leader_orientation');
 
+  // isManager mencakup semua level supervisor/manager di atas kru
   const isManager = Boolean(
     isAreaManager ||
     isStoreManager ||
@@ -225,7 +225,7 @@ export default function BreakSystem() {
   const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
-  // State Log Foto vs Rekap Presensi
+  // State Rekap & Log
   const [logSubTab, setLogSubTab] = useState('photo'); 
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
@@ -359,7 +359,6 @@ export default function BreakSystem() {
     return { name: 'Under Review', color: 'bg-rose-50 text-rose-700 border-rose-200' };
   };
 
-  // Reset otomatis ke 100 HANYA jika masuk bulan baru (misal 1 Oktober)
   const checkAndPerformMonthlyReset = useCallback(async (currentProf) => {
     if (!currentProf || !user?.id) return;
     const now = new Date();
@@ -394,9 +393,9 @@ export default function BreakSystem() {
         .select('id, full_name, station_placement, role, outlet_id')
         .order('full_name', { ascending: true });
 
-      if (!isAreaManager && profile?.outlet_id) {
+      if (!isManager && profile?.outlet_id) {
         query = query.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      } else if (isManager && selectedBranchId !== 'ALL') {
         query = query.eq('outlet_id', selectedBranchId);
       }
 
@@ -409,7 +408,7 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingProfiles(false);
     }
-  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [isManager, profile?.outlet_id, selectedBranchId]);
 
   // ================= AUTO-CLOSE SESI > 12 JAM & SINKRONISASI IC HARI INI =================
   const fetchActiveShiftStats = useCallback(async () => {
@@ -427,10 +426,10 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, role, outlet_id');
 
-      if (!isAreaManager && profile?.outlet_id) {
+      if (!isManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profilesQuery = profilesQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      } else if (isManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profilesQuery = profilesQuery.eq('outlet_id', selectedBranchId);
       }
@@ -455,7 +454,6 @@ export default function BreakSystem() {
           const inTimeMs = new Date(log.actual_in).getTime();
           const elapsedHours = (nowMs - inTimeMs) / (1000 * 60 * 60);
 
-          // Auto-close sesi jika kru lupa absen pulang > 12 jam
           if (elapsedHours > 12) {
             supabase
               .from('attendance_logs')
@@ -521,7 +519,7 @@ export default function BreakSystem() {
     } catch (e) {
       console.error("Gagal sinkronisasi data shift aktif:", e);
     }
-  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [isManager, profile?.outlet_id, selectedBranchId]);
 
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
@@ -672,10 +670,10 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, outlet_id, current_izin_start, current_izin_duration, current_izin_type');
 
-      if (!isAreaManager && profile?.outlet_id) {
+      if (!isManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      } else if (isManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
       }
@@ -758,7 +756,7 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingLive(false);
     }
-  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [isManager, profile?.outlet_id, selectedBranchId]);
 
   // ================= PERBAIKAN FORMULA POIN BULAN BERJALAN & REKAP KETAT =================
   const fetchLeaderboard = useCallback(async () => {
@@ -776,11 +774,11 @@ export default function BreakSystem() {
         .from('operational_violations')
         .select('*');
 
-      if (!isAreaManager && profile?.outlet_id) {
+      if (!isManager && profile?.outlet_id) {
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         violQuery = violQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      } else if (isManager && selectedBranchId !== 'ALL') {
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         violQuery = violQuery.eq('outlet_id', selectedBranchId);
@@ -854,7 +852,7 @@ export default function BreakSystem() {
             return logDate.substring(0, 7) === selectedMonth;
           });
 
-          // Lacak tanggal kerja kru untuk membedakan hari bersih vs hari indisipliner
+          // Lacak tanggal kerja kru untuk reward hari disiplin (+5 per hari bersih)
           const shiftDates = new Set();
           const datesWithInfractions = new Set();
 
@@ -1003,9 +1001,7 @@ export default function BreakSystem() {
             });
           });
 
-          // ================= LOGIKA PERHITUNGAN POIN REKAP =================
-          // 100 Poin Awal + (+5 Poin per hari kerja yang tidak indisipliner) - (Semua Penalti)
-          // Poin dibiarkan minus jika total potongan lebih besar dari 100
+          // ================= RUMUS POIN DINAMIS: 100 + (+5 per hari bersih) - PENALTI =================
           let cleanDaysCount = 0;
           shiftDates.forEach(dateStr => {
             if (!datesWithInfractions.has(dateStr)) {
@@ -1129,7 +1125,7 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingLeaderboard(false);
     }
-  }, [selectedMonth, currentMonthYear, isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [selectedMonth, currentMonthYear, isManager, profile?.outlet_id, selectedBranchId]);
 
   const handleEvidenceImageChange = async (e) => {
     const file = e.target.files?.[0];
@@ -1256,10 +1252,10 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, outlet_id');
 
-      if (!isAreaManager && profile?.outlet_id) {
+      if (!isManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      } else if (isManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
       }
@@ -1327,7 +1323,7 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingSummary(false);
     }
-  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [isManager, profile?.outlet_id, selectedBranchId]);
 
   const fetchAllCrewLogs = useCallback(async (loadMore = false, pageNum = 0) => {
     if (loadMore) {
@@ -1356,10 +1352,10 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, role, outlet_id');
 
-      if (!isAreaManager && profile?.outlet_id) {
+      if (!isManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      } else if (isManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
       }
@@ -1473,7 +1469,7 @@ export default function BreakSystem() {
       setIsFetchingAllLogs(false);
       setIsFetchingMoreLogs(false);
     }
-  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [isManager, profile?.outlet_id, selectedBranchId]);
 
   const updateDurationsLocally = useCallback(() => {
     setLiveBreaks(prev => prev.map(crew => {
@@ -1856,7 +1852,7 @@ export default function BreakSystem() {
     );
   };
 
-  // ================= RESOLUSI KAMERA NATURAL (TIDAK GEPENG/MEMANJANG) =================
+  // Resolusi natural kamera
   const handleCapture = () => {
     if (humanDetectionStatus !== 'HUMAN_DETECTED' || !videoRef.current) return;
 
@@ -2356,7 +2352,7 @@ export default function BreakSystem() {
 
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* HEADER APLIKASI */}
+        {/* ================= HEADER APLIKASI UTAMA ================= */}
         <div className="sticky top-0 w-full bg-white px-4 py-3 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
           <div className="flex items-center gap-2">
             <img 
@@ -2377,7 +2373,8 @@ export default function BreakSystem() {
           </div>
           
           <div className="flex items-center gap-1.5">
-            {isAreaManager && (
+            {/* ================= PERBAIKAN: HANYA LEVEL MANAGER YANG DAPAT TOMBOL AREA KALTIM ================= */}
+            {isManager && (
               <button
                 onClick={() => setViewMode('area')}
                 className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
@@ -2385,17 +2382,6 @@ export default function BreakSystem() {
               >
                 <FiGlobe className="text-xs" />
                 <span>Area Kaltim</span>
-              </button>
-            )}
-
-            {isStoreManager && (
-              <button
-                onClick={() => setViewMode('store_kpi')}
-                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
-                title="Buka Portal KPI & Task Departemen"
-              >
-                <FiBarChart2 className="text-xs" />
-                <span>Portal KPI</span>
               </button>
             )}
 
@@ -2408,8 +2394,8 @@ export default function BreakSystem() {
           </div>
         </div>
 
-        {/* RESTO SELECTOR DROPDOWN (9 RESTO) */}
-        {isAreaManager && (
+        {/* ================= RESTO SELECTOR DROPDOWN (UNTUK SEMUA LEVEL MANAGER) ================= */}
+        {isManager && (
           <div className="px-4 pt-3 pb-1">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-black text-slate-700">
