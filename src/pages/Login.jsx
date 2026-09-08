@@ -2,356 +2,226 @@
 
 import { useState } from 'react';
 import { supabase } from '../api';
-import { useNavigate } from 'react-router-dom';
-import { FiPhone, FiUser, FiAlertCircle, FiShield, FiBriefcase, FiMapPin, FiLogIn } from 'react-icons/fi';
+import { useAuth } from '../context/AuthContext';
+import { FiPhone, FiLock, FiLogIn, FiEye, FiEyeOff, FiAlertCircle } from 'react-icons/fi';
 
-export default function Register({ onSwitchToLogin }) {
-  const [mode, setMode] = useState('register');
-
-  // State Login
-  const [loginPhone, setLoginPhone] = useState('');
-
-  // State Register
-  const [fullName, setFullName] = useState('');
-  const [whatsappNumber, setWhatsappNumber] = useState('');
-  const [companyNameInput, setCompanyNameInput] = useState('');
-  const [stationPlacement, setStationPlacement] = useState('Crew Station');
-
-  const [errorMsg, setErrorMsg] = useState('');
+export default function Login() {
+  const { login } = useAuth();
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  const navigate = useNavigate();
+  // Buat variasi nomor telepon (08xx, 628xx)
+  const getPhoneVariations = (input) => {
+    let clean = input.replace(/[^0-9]/g, '');
+    const list = [clean];
+    if (clean.startsWith('0')) {
+      list.push('62' + clean.substring(1));
+    } else if (clean.startsWith('62')) {
+      list.push('0' + clean.substring(2));
+    }
+    return list;
+  };
 
-  // ================= 1. PROSES LOGIN =================
   const handleLogin = async (e) => {
-    e.preventDefault();
-    setErrorMsg('');
+    if (e && e.preventDefault) e.preventDefault();
+    setErrorMessage('');
+    
+    if (!phoneNumber || !phoneNumber.trim()) {
+      setErrorMessage('Nomor WhatsApp wajib diisi.');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      let cleanPhone = loginPhone.trim().replace(/[^0-9]/g, '');
-      if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+      const phoneVars = getPhoneVariations(phoneNumber.trim());
 
-      if (cleanPhone.length < 10) {
-        throw new Error('Masukkan nomor WhatsApp terdaftar yang valid.');
-      }
-
-      const { data: userProfile, error: profileError } = await supabase
+      // 1. Cari data kru di tabel user_profiles
+      const { data: profiles, error: pError } = await supabase
         .from('user_profiles')
         .select('*')
-        .eq('whatsapp_number', cleanPhone)
-        .maybeSingle();
+        .in('whatsapp_number', phoneVars)
+        .limit(1);
 
-      if (profileError) throw profileError;
-
-      if (!userProfile) {
-        throw new Error('Nomor WhatsApp belum terdaftar. Silakan daftar akun kru terlebih dahulu.');
+      if (pError) throw pError;
+      if (!profiles || profiles.length === 0) {
+        throw new Error('Nomor WhatsApp tidak terdaftar di sistem.');
       }
 
-      localStorage.setItem('crew_session', JSON.stringify(userProfile));
-      navigate('/break-system');
-      window.location.href = '/break-system';
+      const userProfile = profiles[0];
+      const inputPass = (password || '').trim();
 
-    } catch (err) {
-      console.error("Login Gagal:", err.message);
-      setErrorMsg(err.message || 'Gagal masuk. Periksa nomor HP Anda.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // ================= 2. PROSES REGISTRASI =================
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setIsLoading(true);
-
-    try {
-      const cleanCompanyName = companyNameInput.trim();
-      if (!cleanCompanyName) {
-        throw new Error('Silakan masukkan Nama Perusahaan / Outlet Anda.');
+      // 2. Validasi Password
+      if (userProfile.password && userProfile.password.trim() !== '') {
+        if (!inputPass) {
+          throw new Error('Akun ini memiliki password. Silakan masukkan password Anda.');
+        }
+        if (inputPass !== userProfile.password.trim()) {
+          throw new Error('Password yang dimasukkan salah!');
+        }
+      } else {
+        // Jika akun belum ada password, simpan password yang baru diinput
+        if (inputPass !== '') {
+          await supabase
+            .from('user_profiles')
+            .update({ password: inputPass })
+            .eq('id', userProfile.id);
+          userProfile.password = inputPass;
+        }
       }
 
-      const { data: companyData } = await supabase
-        .from('companies')
-        .select('id, company_name')
-        .ilike('company_name', `%${cleanCompanyName}%`)
-        .maybeSingle();
-
-      if (!companyData) {
-        throw new Error('Outlet tidak ditemukan. Periksa kembali ejaan nama outlet.');
-      }
-
-      let cleanPhone = whatsappNumber.trim().replace(/[^0-9]/g, '');
-      if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
-
-      const { data: existingUser } = await supabase
-        .from('user_profiles')
-        .select('id')
-        .eq('whatsapp_number', cleanPhone)
-        .eq('company_id', companyData.id)
-        .maybeSingle();
-
-      if (existingUser) {
-        throw new Error('Nomor ini sudah terdaftar. Silakan beralih ke menu Login.');
-      }
-
-      const generatedId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : undefined;
-
-      const newCrewData = {
-        id: generatedId,
-        company_id: companyData.id,
-        full_name: fullName.trim(),
-        whatsapp_number: cleanPhone,
-        role: stationPlacement.toLowerCase() === 'manager' ? 'manager' : 'crew',
-        station_placement: stationPlacement,
-        total_points: 100,
-        wage_per_minute: 500
+      // 3. Format Objek User Sesuai AuthContext
+      const sessionUser = {
+        id: userProfile.id,
+        user_metadata: {
+          full_name: userProfile.full_name,
+          role: userProfile.role,
+          station_placement: userProfile.station_placement,
+          outlet_id: userProfile.outlet_id
+        },
+        ...userProfile
       };
 
-      const { data: insertedProfile, error: insertError } = await supabase
-        .from('user_profiles')
-        .insert([newCrewData])
-        .select()
-        .single();
+      // 4. Daftarkan / sinkronkan login ke AuthContext
+      if (login) {
+        login(sessionUser);
+      } else {
+        localStorage.setItem('resto_user_session', JSON.stringify(sessionUser));
+      }
 
-      if (insertError) throw insertError;
-
-      localStorage.setItem('crew_session', JSON.stringify(insertedProfile));
-      alert(`Registrasi Berhasil! Selamat bergabung, ${insertedProfile.full_name}.`);
-      
-      navigate('/break-system');
-      window.location.href = '/break-system';
+      // 5. Pindah ke halaman utama
+      window.location.href = '/';
 
     } catch (err) {
-      console.error("Registrasi Gagal:", err.message);
-      setErrorMsg(err.message || 'Gagal mendaftar. Silakan coba lagi.');
-    } finally {
+      console.error("Login error:", err);
+      setErrorMessage(err.message || 'Gagal masuk ke akun.');
       setIsLoading(false);
     }
-  };
-
-  const switchToLoginMode = (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setMode('login');
-    if (typeof onSwitchToLogin === 'function') onSwitchToLogin();
-  };
-
-  const switchToRegisterMode = (e) => {
-    e.preventDefault();
-    setErrorMsg('');
-    setMode('register');
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#f8fafc] via-[#f1f5f9] to-[#e2e8f0] flex flex-col items-center justify-center p-5 font-sans select-none antialiased">
+    <div className="min-h-screen w-full bg-[#F8FAFC] flex flex-col items-center justify-center p-4 font-sans text-slate-800">
       
-      <div className="w-full max-w-[380px] bg-white/80 backdrop-blur-xl border border-white/60 rounded-[32px] p-8 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.08)] space-y-6 transition-all duration-300">
+      <div className="w-full max-w-sm bg-white rounded-[32px] border border-slate-100 shadow-[0_10px_40px_rgba(0,0,0,0.04)] p-7 space-y-6">
         
-        {/* HEADER */}
-        <div className="text-center space-y-3">
-          <div className="flex justify-center items-center">
-            <img 
-              src="/Diciplin-logo.png" 
-              onError={(e) => {
-                e.target.onerror = null;
-                e.target.style.display = 'none';
-                if (e.target.nextSibling) {
-                  e.target.nextSibling.style.display = 'flex';
-                }
-              }}
-              alt="Diciplin Logo" 
-              className="h-14 w-auto object-contain drop-shadow-md mx-auto" 
-            />
-            <div 
-              style={{ display: 'none' }}
-              className="h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-700 items-center justify-center text-white text-xl font-black tracking-tighter mx-auto shadow-[0_8px_20px_-4px_rgba(79,70,229,0.4)]"
-            >
-              D
-            </div>
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+        <div className="flex flex-col items-center text-center space-y-2">
+          <img 
+            src="/Diciplin-logo.png" 
+            onError={(e) => { 
+              e.currentTarget.onerror = null; 
+              e.currentTarget.src = "/logo.png"; 
+            }} 
+            alt="Diciplin Logo" 
+            className="h-10 w-auto object-contain"
+          />
+          <div>
+            <h1 className="text-xl font-black tracking-tight text-slate-900 leading-none">
               Diciplin<span className="text-indigo-600">.com</span>
-            </h2>
-            <p className="text-[11px] text-slate-400 font-bold uppercase tracking-[0.15em] max-w-[250px] mx-auto leading-none">
-              {mode === 'login' ? 'Masuk Akun Kru' : 'Pendaftaran Kru Baru'}
+            </h1>
+            <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest mt-1">
+              Masuk Akun Kru &amp; Management
             </p>
           </div>
         </div>
 
-        <div className="h-[1px] bg-gradient-to-r from-transparent via-slate-200 to-transparent"></div>
-
-        {/* ERROR MESSAGE */}
-        {errorMsg && (
-          <div className="p-3.5 bg-rose-50/80 border border-rose-100/70 backdrop-blur-sm rounded-2xl text-rose-600 text-xs font-semibold flex items-start gap-2.5 animate-in fade-in duration-200">
-            <FiAlertCircle className="flex-shrink-0 text-sm mt-0.5" />
-            <span className="leading-relaxed">{errorMsg}</span>
+        {errorMessage && (
+          <div className="bg-rose-50 border border-rose-200/80 rounded-2xl p-3 flex items-start gap-2.5 text-rose-700">
+            <FiAlertCircle className="text-base shrink-0 mt-0.5" />
+            <p className="text-xs font-semibold leading-relaxed">{errorMessage}</p>
           </div>
         )}
 
-        {/* FORM 1: LOGIN */}
-        {mode === 'login' && (
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                No. WhatsApp Terdaftar
-              </label>
-              <div className="relative group">
-                <FiPhone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 text-base transition-colors" />
-                <input
-                  type="text"
-                  required
-                  disabled={isLoading}
-                  placeholder="Contoh: 085774554443"
-                  value={loginPhone}
-                  onChange={(e) => setLoginPhone(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3.5 bg-white/50 border border-slate-200 rounded-2xl text-xs font-semibold focus:outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500/80 transition-all text-slate-800 shadow-sm placeholder:text-slate-300"
-                />
-              </div>
+        <form onSubmit={handleLogin} className="space-y-4">
+          
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
+              No. WhatsApp Terdaftar
+            </label>
+            <div className="relative flex items-center">
+              <span className="absolute left-3.5 text-slate-400">
+                <FiPhone className="text-sm" />
+              </span>
+              <input
+                type="text"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                placeholder="082123422234"
+                required
+                className="w-full pl-10 pr-3.5 py-3 bg-slate-50 border border-slate-200/80 rounded-2xl text-xs font-bold text-slate-900 placeholder:text-slate-400 outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-2xs"
+              />
             </div>
+          </div>
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white font-bold py-4 px-4 rounded-2xl text-xs tracking-wider transition-all duration-200 active:scale-[0.98] shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2 mt-4"
-            >
-              {isLoading ? (
-                <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <>
-                  <FiLogIn className="text-base" /> MASUK SEKARANG
-                </>
-              )}
-            </button>
-          </form>
-        )}
-
-        {/* FORM 2: REGISTER */}
-        {mode === 'register' && (
-          <form onSubmit={handleRegister} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                Nama Outlet / Perusahaan
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
+                Password
               </label>
-              <div className="relative group">
-                <FiBriefcase className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 text-base transition-colors" />
-                <input
-                  type="text"
-                  required
-                  disabled={isLoading}
-                  placeholder="Ketik nama outlet (misal: 7005)..."
-                  value={companyNameInput}
-                  onChange={(e) => setCompanyNameInput(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3.5 bg-white/50 border border-slate-200 rounded-2xl text-xs font-semibold focus:outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500/80 transition-all text-slate-800 shadow-sm placeholder:text-slate-300"
-                />
-              </div>
+              <span className="text-[9px] font-bold text-slate-400">
+                (Kosongkan jika belum buat)
+              </span>
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                Nama Lengkap Kru
-              </label>
-              <div className="relative group">
-                <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 text-base transition-colors" />
-                <input
-                  type="text"
-                  required
-                  disabled={isLoading}
-                  placeholder="Masukkan nama lengkap Anda..."
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3.5 bg-white/50 border border-slate-200 rounded-2xl text-xs font-medium focus:outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500/80 transition-all text-slate-800 shadow-sm placeholder:text-slate-300"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                No. WhatsApp Aktif
-              </label>
-              <div className="relative group">
-                <FiPhone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 text-base transition-colors" />
-                <input
-                  type="text"
-                  required
-                  disabled={isLoading}
-                  placeholder="Contoh: 085774554443"
-                  value={whatsappNumber}
-                  onChange={(e) => setWhatsappNumber(e.target.value)}
-                  className="w-full pl-11 pr-4 py-3.5 bg-white/50 border border-slate-200 rounded-2xl text-xs font-medium focus:outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500/80 transition-all text-slate-800 shadow-sm placeholder:text-slate-300"
-                />
-              </div>
-            </div>
-
-            {/* INPUT POSISI / DIVISI KERJA DROPDOWN */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider ml-1">
-                Posisi / Divisi Kerja
-              </label>
-              <div className="relative group">
-                <FiMapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 text-base transition-colors pointer-events-none z-10" />
-                <select
-                  required
-                  disabled={isLoading}
-                  value={stationPlacement}
-                  onChange={(e) => setStationPlacement(e.target.value)}
-                  className="w-full pl-11 pr-8 py-3.5 bg-white/50 border border-slate-200 rounded-2xl text-xs font-semibold focus:outline-none focus:ring-4 focus:ring-indigo-500/10 focus:border-indigo-500/80 transition-all text-slate-800 shadow-sm appearance-none cursor-pointer"
-                >
-                  <option value="Crew Station">Crew Station</option>
-                  <option value="Staff">Staff</option>
-                  <option value="Manager">Manager</option>
-                </select>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white font-bold py-4 px-4 rounded-2xl text-xs tracking-wider transition-all duration-200 active:scale-[0.98] shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2 mt-4"
-            >
-              {isLoading ? (
-                <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                'DAFTARKAN AKUN KRU'
-              )}
-            </button>
-          </form>
-        )}
-
-        {/* TOGGLE SWITCHER */}
-        <div className="text-center pt-2 relative z-20">
-          {mode === 'register' ? (
-            <p className="text-xs text-slate-500 font-medium">
-              Sudah punya akun?{' '}
+            <div className="relative flex items-center">
+              <span className="absolute left-3.5 text-slate-400">
+                <FiLock className="text-sm" />
+              </span>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Masukkan password Anda"
+                className="w-full pl-10 pr-10 py-3 bg-slate-50 border border-slate-200/80 rounded-2xl text-xs font-bold text-slate-900 placeholder:text-slate-400 outline-none focus:border-indigo-500 focus:bg-white transition-all shadow-2xs"
+              />
               <button
                 type="button"
-                onClick={switchToLoginMode}
-                className="text-indigo-600 font-bold hover:underline cursor-pointer py-1 px-2 rounded-lg bg-indigo-50/60 hover:bg-indigo-100 transition-colors inline-block"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3.5 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
-                Masuk di sini
+                {showPassword ? <FiEyeOff className="text-sm" /> : <FiEye className="text-sm" />}
               </button>
-            </p>
-          ) : (
-            <p className="text-xs text-slate-500 font-medium">
-              Belum punya akun kru?{' '}
-              <button
-                type="button"
-                onClick={switchToRegisterMode}
-                className="text-indigo-600 font-bold hover:underline cursor-pointer py-1 px-2 rounded-lg bg-indigo-50/60 hover:bg-indigo-100 transition-colors inline-block"
-              >
-                Daftar Kru Baru
-              </button>
-            </p>
-          )}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60"
+          >
+            {isLoading ? (
+              <span className="animate-pulse">Memverifikasi Akun...</span>
+            ) : (
+              <>
+                <FiLogIn className="text-base" />
+                <span>Masuk Sekarang</span>
+              </>
+            )}
+          </button>
+
+        </form>
+
+        <div className="text-center pt-2">
+          <p className="text-xs font-semibold text-slate-500">
+            Belum punya akun kru?{' '}
+            <button
+              type="button"
+              onClick={() => alert('Pendaftaran akun kru baru dilakukan melalui Store Manager atau Area Manager.')}
+              className="text-indigo-600 font-extrabold hover:underline cursor-pointer"
+            >
+              Daftar Kru Baru
+            </button>
+          </p>
         </div>
 
       </div>
-      
-      <div className="mt-8 flex items-center gap-1.5 text-[10px] text-slate-400 font-semibold uppercase tracking-widest">
-        <FiShield className="text-slate-300 text-xs" /> Secured Multi-Tenant Architecture
+
+      <div className="mt-6 text-center text-[10px] text-slate-400 font-extrabold uppercase tracking-widest flex items-center gap-1.5">
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+        Secured Multi-Tenant Architecture
       </div>
+
     </div>
   );
 }

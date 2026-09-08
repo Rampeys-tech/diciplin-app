@@ -1,104 +1,100 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../api'; 
+'use client';
 
-const AuthContext = createContext({});
+import { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from '../api';
 
-export const AuthProvider = ({ children }) => {
+const AuthContext = createContext();
+
+export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    console.log("=== AUTH CONTEXT MULTI-TENANT ROBUST SYSTEM DIAKTIFKAN ===");
-
-    const initializeAuth = async () => {
-      try {
-        // 1. Cek jalur pertama: Apakah ada session resmi Supabase Auth (Jalur Akun Owner)
-        const { data: { session: currentSession }, error: authError } = await supabase.auth.getSession();
-        if (authError) throw authError;
-
-        // 2. Cek jalur kedua: Apakah ada data login Kru di LocalStorage
-        const localCrewData = localStorage.getItem('crew_session');
-
-        if (currentSession) {
-          // JALUR OWNER OPERASIONAL
-          setSession(currentSession);
-          setUser(currentSession.user);
-
-          const { data: ownerProf } = await supabase
-            .from('user_profiles')
-            .select('role, company_id, full_name')
-            .eq('id', currentSession.user.id)
-            .maybeSingle();
-
-          if (ownerProf) {
-            setProfile(ownerProf);
-            // Proteksi: Jika owner tersasar ke halaman login, lempar ke dashboard
-            if (window.location.pathname === '/login' || window.location.pathname === '/') {
-              window.location.href = '/dashboard';
-            }
-          }
-        } else if (localCrewData) {
-          // JALUR TIM KRU OPERASIONAL (Mengamankan data Kru agar tidak ditendang balik ke login)
-          const parsedCrew = JSON.parse(localCrewData);
-          
-          // Buat mock object user & session agar kodingan komponen BreakSystem tidak crash
-          setUser(parsedCrew);
-          setSession({ user: parsedCrew });
-          setProfile(parsedCrew);
-
-          console.log("✓ Satpam AuthContext mengizinkan sesi Kru aktif via localStorage.");
-          
-          // Proteksi: Jika Kru sudah sukses login tapi masih berada di halaman /login, langsung arahkan ke system utama
-          if (window.location.pathname === '/login' || window.location.pathname === '/') {
-            window.location.href = '/break-system';
-          }
-        } else {
-          // Jika benar-benar kosong (belum login sama sekali)
-          setSession(null);
-          setUser(null);
-          setProfile(null);
-        }
-      } catch (err) {
-        console.error("Gagal inisialisasi otorisasi:", err.message);
-      } finally {
-        setLoading(false);
+  // Fungsi untuk memuat session saat halaman dibuka / direfresh
+  const initializeAuth = async () => {
+    try {
+      // 1. Cek sesi lokal yang disimpan
+      const localData = localStorage.getItem('resto_user_session');
+      if (localData) {
+        const parsed = JSON.parse(localData);
+        setUser(parsed);
+        setProfile(parsed);
       }
-    };
 
+      // 2. Cek sesi bawaan Supabase Auth jika ada
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data: prof } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (prof) {
+          const combinedUser = { ...session.user, ...prof };
+          setUser(combinedUser);
+          setProfile(combinedUser);
+          localStorage.setItem('resto_user_session', JSON.stringify(combinedUser));
+        }
+      }
+    } catch (err) {
+      console.error("Auth init error:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     initializeAuth();
 
-    // Listener otomatis Supabase (Dipertahankan untuk mendeteksi logout / perubahan session Owner)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
-      if (_event === 'SIGNED_OUT') {
-        localStorage.removeItem('crew_session'); // Bersihkan sisa data kru jika owner logout
-        setSession(null);
-        setUser(null);
-        setProfile(null);
-        window.location.href = '/login';
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        const { data: prof } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
+
+        if (prof) {
+          const combinedUser = { ...session.user, ...prof };
+          setUser(combinedUser);
+          setProfile(combinedUser);
+          localStorage.setItem('resto_user_session', JSON.stringify(combinedUser));
+        }
       }
     });
 
     return () => {
-      subscription.unsubscribe();
+      subscription?.unsubscribe();
     };
   }, []);
 
-  const value = {
-    session,
-    user,
-    profile,
-    loading
+  // Fungsi Login Manual
+  const login = (userData) => {
+    setUser(userData);
+    setProfile(userData);
+    localStorage.setItem('resto_user_session', JSON.stringify(userData));
+  };
+
+  // Fungsi Logout
+  const logout = async () => {
+    localStorage.removeItem('resto_user_session');
+    localStorage.removeItem('diciplin_user');
+    setUser(null);
+    setProfile(null);
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {}
+    window.location.href = '/login';
   };
 
   return (
-    <AuthContext.Provider value={value}>
-      {!loading && children}
+    <AuthContext.Provider value={{ user, profile, setUser, setProfile, login, logout, loading }}>
+      {children}
     </AuthContext.Provider>
   );
-};
+}
 
-export const useAuth = () => {
+export function useAuth() {
   return useContext(AuthContext);
-};
+}

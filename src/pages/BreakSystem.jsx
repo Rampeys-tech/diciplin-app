@@ -11,47 +11,47 @@ import {
   FiClock, 
   FiCamera, 
   FiX, 
-  FiCoffee,
-  FiLogIn,
-  FiLogOut,
-  FiLayout,
-  FiUsers,
-  FiRotateCcw,
-  FiSettings,
-  FiShield,
-  FiCheckCircle,
-  FiAlertCircle,
-  FiImage,
-  FiMapPin,
-  FiAlertTriangle,
-  FiDroplet,
-  FiAward,
-  FiFrown,
-  FiUser,
-  FiLock,
-  FiPhone,
-  FiUploadCloud,
-  FiZap,
-  FiPlusCircle,
-  FiVolume2,
-  FiCheck,
-  FiStar,
-  FiRefreshCw,
-  FiUserCheck,
-  FiBriefcase,
-  FiLayers,
-  FiCheckSquare,
-  FiChevronDown,
-  FiCalendar,
-  FiActivity,
-  FiFileText,
-  FiFilter,
-  FiList,
-  FiGlobe,
-  FiBarChart2
+  FiCoffee, 
+  FiLogIn, 
+  FiLogOut, 
+  FiLayout, 
+  FiUsers, 
+  FiRotateCcw, 
+  FiSettings, 
+  FiShield, 
+  FiCheckCircle, 
+  FiAlertCircle, 
+  FiImage, 
+  FiMapPin, 
+  FiAlertTriangle, 
+  FiDroplet, 
+  FiAward, 
+  FiFrown, 
+  FiUser, 
+  FiLock, 
+  FiPhone, 
+  FiUploadCloud, 
+  FiZap, 
+  FiPlusCircle, 
+  FiVolume2, 
+  FiCheck, 
+  FiStar, 
+  FiRefreshCw, 
+  FiUserCheck, 
+  FiBriefcase, 
+  FiLayers, 
+  FiCheckSquare, 
+  FiChevronDown, 
+  FiCalendar, 
+  FiActivity, 
+  FiFileText, 
+  FiFilter, 
+  FiList, 
+  FiGlobe, 
+  FiBarChart2 
 } from 'react-icons/fi';
 
-// ================= FALLBACK GEOFENCE (JIKA DATA OUTLET BELUM TERSEDIA) =================
+// ================= FALLBACK GEOFENCE =================
 const DEFAULT_TARGET_LAT = -1.260041; 
 const DEFAULT_TARGET_LNG = 116.863895; 
 const DEFAULT_MAX_RADIUS = 50; 
@@ -68,7 +68,7 @@ function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
 }
 
 const SHIFT_HOURS_OPTIONS = Array.from({ length: 24 }, (_, i) => ({
-  label: `${i.toString().padStart(2, '0')}:00 WITA${i === 0 ? ' (Midnight)' : i === 22 ? ' (Shift Malam)' : ''}`,
+  label: `${i.toString().padStart(2, '0')}:00 WITA${i === 0 ? ' (Midnight)' : i === 22 ? ' (Shift Malam - 8 Jam)' : ''}`,
   hour: i
 }));
 
@@ -142,6 +142,7 @@ export default function BreakSystem() {
   const [hasCheckedOut, setHasCheckedOut] = useState(false);
   const [checkInTime, setCheckInTime] = useState(null);
   const [activeLogId, setActiveLogId] = useState(null);
+  const [, setActiveShiftStatusIn] = useState('');
   const [requiredWorkHours, setRequiredWorkHours] = useState(9); 
 
   const [showShiftPicker, setShowShiftPicker] = useState(false);
@@ -155,6 +156,14 @@ export default function BreakSystem() {
     managerActive: 0,
     stationCounts: {}
   });
+
+  // Modal Personil Station State
+  const [stationCrewModal, setStationCrewModal] = useState({
+    isOpen: false,
+    stationName: '',
+    crewList: []
+  });
+  const [activeShiftMembers, setActiveShiftMembers] = useState([]);
 
   const [, setBreakLogs] = useState([]);
   const [liveBreaks, setLiveBreaks] = useState([]);
@@ -177,7 +186,6 @@ export default function BreakSystem() {
   const isAssistantManager = Boolean(roleLower === 'ast_store_manager');
   const isFloorLeader = Boolean(roleLower === 'floor_leader' || roleLower === 'floor_leader_orientation');
 
-  // isManager mencakup semua level supervisor/manager di atas kru
   const isManager = Boolean(
     isAreaManager ||
     isStoreManager ||
@@ -191,8 +199,8 @@ export default function BreakSystem() {
 
   const canReportViolation = Boolean(
     isManager || 
-    roleLower === 'quality_control' ||
-    roleLower === 'stocker' ||
+    roleLower === 'quality_control' || 
+    roleLower === 'stocker' || 
     placementLower.includes('quality control') || 
     placementLower.includes('qc') || 
     placementLower.includes('stocker')
@@ -263,7 +271,6 @@ export default function BreakSystem() {
   const localStreamRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  // Filter 9 Resto Asli
   const fetchOutletsList = useCallback(async () => {
     try {
       const { data, error } = await supabase.from('outlets').select('id, name').order('name');
@@ -352,7 +359,11 @@ export default function BreakSystem() {
     setCapturedImage(null);
   }, []);
 
+  // Badge khusus Executive Manager untuk Area Manager
   const getCrewBadge = (points) => {
+    if (isAreaManager) {
+      return { name: 'Executive Manager', color: 'bg-indigo-900 text-indigo-100 border-indigo-700' };
+    }
     if (points >= 120) return { name: 'Elite Guardian', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
     if (points >= 105) return { name: 'Discipline Master', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
     if (points >= 100) return { name: 'Regular Crew', color: 'bg-blue-50 text-blue-700 border-blue-200' };
@@ -390,12 +401,12 @@ export default function BreakSystem() {
     try {
       let query = supabase
         .from('user_profiles')
-        .select('id, full_name, station_placement, role, outlet_id')
+        .select('id, full_name, station_placement, role, outlet_id, avatar')
         .order('full_name', { ascending: true });
 
-      if (!isManager && profile?.outlet_id) {
+      if (!isAreaManager && profile?.outlet_id) {
         query = query.eq('outlet_id', profile.outlet_id);
-      } else if (isManager && selectedBranchId !== 'ALL') {
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
         query = query.eq('outlet_id', selectedBranchId);
       }
 
@@ -408,28 +419,28 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingProfiles(false);
     }
-  }, [isManager, profile?.outlet_id, selectedBranchId]);
+  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
 
-  // ================= AUTO-CLOSE SESI > 12 JAM & SINKRONISASI IC HARI INI =================
+  // ================= SINKRONISASI IC SHIFT AKTIF LINTAS HARI (24 JAM TERAKHIR) =================
   const fetchActiveShiftStats = useCallback(async () => {
     try {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+      const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       let logsQuery = supabase
         .from('attendance_logs')
         .select('id, user_id, status_in, break_start_time, break_end_time, discipline_status, outlet_id, actual_in')
         .not('actual_in', 'is', null)
-        .is('actual_out', null);
+        .is('actual_out', null)
+        .gte('actual_in', past24Hours);
 
       let profilesQuery = supabase
         .from('user_profiles')
-        .select('id, full_name, station_placement, role, outlet_id');
+        .select('id, full_name, station_placement, role, outlet_id, avatar');
 
-      if (!isManager && profile?.outlet_id) {
+      if (!isAreaManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profilesQuery = profilesQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isManager && selectedBranchId !== 'ALL') {
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profilesQuery = profilesQuery.eq('outlet_id', selectedBranchId);
       }
@@ -447,33 +458,41 @@ export default function BreakSystem() {
         let managerCount = 0;
         let totalBreakActive = 0;
         const stationCounts = {};
+        const activeMembersArray = [];
         const nowMs = Date.now();
-        const validTodayLogs = [];
 
         for (const log of activeLogs) {
           const inTimeMs = new Date(log.actual_in).getTime();
-          const elapsedHours = (nowMs - inTimeMs) / (1000 * 60 * 60);
+          const inHour = new Date(log.actual_in).getHours();
+          const targetHours = (inHour === 22) ? 8 : 9;
+          const maxAllowedSessionMs = (targetHours + 3) * 60 * 60 * 1000;
+          const elapsedMs = nowMs - inTimeMs;
 
-          if (elapsedHours > 12) {
+          if (elapsedMs > maxAllowedSessionMs) {
             supabase
               .from('attendance_logs')
               .update({
-                actual_out: new Date(inTimeMs + 9 * 3600 * 1000).toISOString(),
-                status_out: 'Lupa Absen Pulang (-10 Poin)',
-                discipline_status: 'Lupa Absen Pulang',
+                actual_out: new Date(inTimeMs + targetHours * 3600 * 1000).toISOString(),
+                status_out: 'Lupa Absen Pulang (>3 Jam) (-10 Poin)',
+                discipline_status: 'Terlambat Absen Pulang > 3 Jam',
                 penalty_points: 10
               })
               .eq('id', log.id)
               .then(() => {});
+
+            supabase
+              .from('operational_violations')
+              .insert({
+                crew_id: log.user_id,
+                violation_type: 'Terlambat Absen Pulang > 3 Jam',
+                notes: 'Tidak clock out lebih dari 3 jam setelah durasi shift berakhir.',
+                penalty_points: 10,
+                outlet_id: log.outlet_id
+              }).then(() => {});
+
             continue;
           }
 
-          if (new Date(log.actual_in) >= todayStart) {
-            validTodayLogs.push(log);
-          }
-        }
-
-        validTodayLogs.forEach(log => {
           const p = profileMap[log.user_id];
           if (p) {
             const isCurrentlyBreaking = (Boolean(log.break_start_time) && !Boolean(log.break_end_time)) || log.discipline_status === 'Sedang Istirahat';
@@ -486,28 +505,37 @@ export default function BreakSystem() {
             if (isMgr) managerCount += 1;
             else staffCount += 1;
 
+            let stationName = isMgr ? 'Manager Duty' : (p.station_placement || 'Staff Duty');
+            
+            if (!isMgr && log.status_in && log.status_in.includes(' - ')) {
+              const parts = log.status_in.split(' - ');
+              if (parts[1]) stationName = parts[1].trim();
+            }
+
+            if (!stationName) stationName = isMgr ? 'Manager Duty' : 'Staff Duty';
+
+            activeMembersArray.push({
+              id: p.id,
+              name: p.full_name,
+              avatar: p.avatar,
+              station: stationName,
+              actualIn: log.actual_in,
+              isBreaking: isCurrentlyBreaking,
+              role: p.role
+            });
+
             if (isCurrentlyBreaking) {
               totalBreakActive += 1;
             } else {
-              let stationName = isMgr ? 'Manager Duty' : (p.station_placement || 'Staff Duty');
-              
-              if (!isMgr && log.status_in && log.status_in.includes(' - ')) {
-                const parts = log.status_in.split(' - ');
-                if (parts[1]) stationName = parts[1].trim();
-              }
-
-              if (stationName && stationName !== 'Staff Duty') {
-                stationCounts[stationName] = (stationCounts[stationName] || 0) + 1;
-              } else if (isMgr) {
-                stationCounts['Manager Duty'] = (stationCounts['Manager Duty'] || 0) + 1;
-              }
+              stationCounts[stationName] = (stationCounts[stationName] || 0) + 1;
             }
           }
-        });
+        }
 
         const totalIC = staffCount + managerCount;
         const totalStandby = Math.max(0, totalIC - totalBreakActive);
 
+        setActiveShiftMembers(activeMembersArray);
         setActiveShiftStats({
           totalScheduledCrew: totalIC,
           totalActiveNow: totalStandby,
@@ -519,8 +547,18 @@ export default function BreakSystem() {
     } catch (e) {
       console.error("Gagal sinkronisasi data shift aktif:", e);
     }
-  }, [isManager, profile?.outlet_id, selectedBranchId]);
+  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
 
+  const handleOpenStationDetail = (stName) => {
+    const matchedCrew = activeShiftMembers.filter(m => m.station === stName);
+    setStationCrewModal({
+      isOpen: true,
+      stationName: stName,
+      crewList: matchedCrew
+    });
+  };
+
+  // ================= FETCH STATUS ATTENDANCE PENGGUNA (PERBAIKAN LINTAS HARI) =================
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -550,44 +588,41 @@ export default function BreakSystem() {
         }
       }
 
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+      const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       const { data: logs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
         .eq('user_id', user.id)
-        .gte('created_at', todayStart.toISOString())
+        .gte('created_at', past24Hours)
         .order('created_at', { ascending: false })
         .limit(1);
 
       const currentLog = logs?.[0];
 
-      if (currentLog) {
+      if (currentLog && currentLog.actual_in && !currentLog.actual_out) {
         setActiveLogId(currentLog.id);
-        setHasCheckedIn(!!currentLog.actual_in);
-        setHasCheckedOut(!!currentLog.actual_out);
+        setHasCheckedIn(true);
+        setHasCheckedOut(false);
+        setActiveShiftStatusIn(currentLog.status_in || '');
         
-        const inTime = currentLog.actual_in ? new Date(currentLog.actual_in) : null;
+        const inTime = new Date(currentLog.actual_in);
         setCheckInTime(inTime);
 
+        let checkInHour = inTime.getHours();
         if (currentLog.status_in && currentLog.status_in.includes('Shift ')) {
           try {
             const parsedHour = parseInt(currentLog.status_in.split('Shift ')[1].split(':')[0]);
-            if (!isNaN(parsedHour)) setSelectedShiftHour(parsedHour);
+            if (!isNaN(parsedHour)) {
+              setSelectedShiftHour(parsedHour);
+              checkInHour = parsedHour;
+            }
           } catch(e) {}
         }
 
-        let checkInHour = 0;
-        try {
-          const checkInHourStr = inTime ? inTime.toLocaleTimeString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Makassar' }) : '0';
-          checkInHour = parseInt(checkInHourStr);
-        } catch (e) {
-          checkInHour = inTime ? inTime.getHours() : 0;
-        }
-
-        const isShift22 = (selectedShiftHour === 22 || checkInHour === 22);
+        const isShift22 = (checkInHour === 22);
         setRequiredWorkHours(isShift22 ? 8 : 9);
+        const allowedBreakSec = isShift22 ? 1800 : 3600;
         
         const breaking = (!!currentLog.break_start_time && !currentLog.break_end_time) || currentLog.discipline_status === 'Sedang Istirahat';
         
@@ -599,7 +634,6 @@ export default function BreakSystem() {
             setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
           }
 
-          const allowedBreakSec = (checkInHour === 22) ? 1800 : 3600; 
           const startTimeMs = currentLog.break_start_time ? new Date(currentLog.break_start_time).getTime() : Date.now();
           const elapsed = Math.floor((Date.now() - startTimeMs) / 1000);
           
@@ -609,6 +643,13 @@ export default function BreakSystem() {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
+      } else if (currentLog && currentLog.actual_in && currentLog.actual_out) {
+        setActiveLogId(currentLog.id);
+        setHasCheckedIn(true);
+        setHasCheckedOut(true);
+        setCheckInTime(new Date(currentLog.actual_in));
+        setIsOnBreak(false);
+        setBreakStartTime(null);
       } else {
         setHasCheckedIn(false);
         setHasCheckedOut(false);
@@ -620,7 +661,7 @@ export default function BreakSystem() {
     } catch (err) {
       console.error("Gagal memuat status kehadiran:", err);
     }
-  }, [user, selectedShiftHour, checkAndPerformMonthlyReset]);
+  }, [user, checkAndPerformMonthlyReset]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -656,24 +697,23 @@ export default function BreakSystem() {
   const fetchLiveBreakData = useCallback(async () => {
     setIsFetchingLive(true);
     try {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
+      const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       let logsQuery = supabase
         .from('attendance_logs')
         .select('id, user_id, break_start_time, break_end_time, actual_in, actual_out, discipline_status, is_outside_radius, distance_meters, status_in, outlet_id')
         .not('actual_in', 'is', null)
         .is('actual_out', null)
-        .gte('actual_in', todayStart.toISOString());
+        .gte('actual_in', past24Hours);
 
       let profQuery = supabase
         .from('user_profiles')
         .select('id, full_name, station_placement, outlet_id, current_izin_start, current_izin_duration, current_izin_type');
 
-      if (!isManager && profile?.outlet_id) {
+      if (!isAreaManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isManager && selectedBranchId !== 'ALL') {
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
       }
@@ -690,7 +730,7 @@ export default function BreakSystem() {
         const profileMap = {};
         const stationMap = {};
         profilesData.forEach(p => { 
-          profileMap[p.id] = p.full_name;
+          profileMap[p.id] = p.full_name; 
           stationMap[p.id] = p.station_placement || 'Station Staff';
         });
 
@@ -756,9 +796,9 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingLive(false);
     }
-  }, [isManager, profile?.outlet_id, selectedBranchId]);
+  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
 
-  // ================= PERBAIKAN FORMULA POIN BULAN BERJALAN & REKAP KETAT =================
+  // ================= REKAP LEADERBOARD (SORTING URUT MENIT/POIN TERBESAR) =================
   const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -774,11 +814,11 @@ export default function BreakSystem() {
         .from('operational_violations')
         .select('*');
 
-      if (!isManager && profile?.outlet_id) {
+      if (!isAreaManager && profile?.outlet_id) {
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         violQuery = violQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isManager && selectedBranchId !== 'ALL') {
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         violQuery = violQuery.eq('outlet_id', selectedBranchId);
@@ -839,12 +879,9 @@ export default function BreakSystem() {
           let totalOverBreakMinutes = 0;
           let ghostingCount = 0;
           let socCount = 0;
-          let normalBreakCount = 0;
-          let totalBreakMinutes = 0;
           let totalDeduction = 0;
           const userInfractionHistory = [];
 
-          // Log pada bulan yang dipilih
           const personLogs = (logs || []).filter(l => {
             if (l.user_id !== person.id) return false;
             const logDate = l.created_at || l.actual_in;
@@ -852,7 +889,6 @@ export default function BreakSystem() {
             return logDate.substring(0, 7) === selectedMonth;
           });
 
-          // Lacak tanggal kerja kru untuk reward hari disiplin (+5 per hari bersih)
           const shiftDates = new Set();
           const datesWithInfractions = new Set();
 
@@ -869,7 +905,6 @@ export default function BreakSystem() {
             const disciplineLower = (log.discipline_status || '').toLowerCase();
             const statusOutLower = (log.status_out || '').toLowerCase();
 
-            // 1. Deteksi Telat
             const isLate = statusInLower.includes('terlambat') || disciplineLower.includes('terlambat') || disciplineLower.includes('late');
             if (isLate) {
               if (dateKey) datesWithInfractions.add(dateKey);
@@ -891,14 +926,10 @@ export default function BreakSystem() {
               }
             }
 
-            // 2. Deteksi Break & Overbreak
             if (log.break_start_time && log.break_end_time) {
-              normalBreakCount += 1;
               const start = new Date(log.break_start_time);
               const end = new Date(log.break_end_time);
               const actualMins = Math.floor((end.getTime() - start.getTime()) / 60000);
-              totalBreakMinutes += actualMins;
-
               const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
               const allowedMins = (checkInHour === 22) ? 30 : 60;
 
@@ -933,7 +964,6 @@ export default function BreakSystem() {
               });
             }
 
-            // 3. Deteksi Ghosting
             if (log.is_outside_radius || disciplineLower.includes('ghosting')) {
               if (dateKey) datesWithInfractions.add(dateKey);
               ghostingCount += 1;
@@ -948,8 +978,18 @@ export default function BreakSystem() {
               });
             }
 
-            // 4. Deteksi Pulang Cepat & Lupa Absen Pulang
-            if (statusOutLower.includes('pulang cepat') || disciplineLower.includes('pulang lebih awal')) {
+            if (disciplineLower.includes('terlambat absen pulang > 3 jam') || statusOutLower.includes('>3 jam') || statusOutLower.includes('> 3 jam')) {
+              if (dateKey) datesWithInfractions.add(dateKey);
+              totalDeduction += 10;
+              userInfractionHistory.push({
+                type: 'Tidak Clock Out > 3 Jam',
+                badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
+                detail: 'Tidak melakukan clock out lebih dari 3 jam setelah jam pulang shift (-10 Pts)',
+                date: formattedDate,
+                time: `${formattedTime} WITA`,
+                note: log.status_out || 'Melanggar batas maksimal waktu toleransi kepulangan'
+              });
+            } else if (statusOutLower.includes('pulang cepat') || disciplineLower.includes('pulang lebih awal')) {
               if (dateKey) datesWithInfractions.add(dateKey);
               const penOut = log.penalty_points ? Number(log.penalty_points) : 5;
               totalDeduction += penOut;
@@ -975,7 +1015,6 @@ export default function BreakSystem() {
             }
           });
 
-          // 5. Pelanggaran Operasional SOC
           const personViolations = (violations || []).filter(v => {
             if (v.crew_id !== person.id) return false;
             if (!v.created_at) return true;
@@ -1001,12 +1040,9 @@ export default function BreakSystem() {
             });
           });
 
-          // ================= RUMUS POIN DINAMIS: 100 + (+5 per hari bersih) - PENALTI =================
           let cleanDaysCount = 0;
           shiftDates.forEach(dateStr => {
-            if (!datesWithInfractions.has(dateStr)) {
-              cleanDaysCount += 1;
-            }
+            if (!datesWithInfractions.has(dateStr)) cleanDaysCount += 1;
           });
 
           const disciplineBonus = cleanDaysCount * 5;
@@ -1103,8 +1139,9 @@ export default function BreakSystem() {
         return {
           leaderboard: leaderboardArray,
           rankings: {
-            topLate: lateRankingList.sort((a, b) => b.count - a.count || b.totalMinutes - a.totalMinutes),
-            topOverbreak: overbreakRankingList.sort((a, b) => b.count - a.count || b.totalMinutes - a.totalMinutes),
+            // Urutkan berdasarkan totalMinutes / penalti poin terbesar paling atas
+            topLate: lateRankingList.sort((a, b) => b.totalMinutes - a.totalMinutes || b.count - a.count),
+            topOverbreak: overbreakRankingList.sort((a, b) => b.totalMinutes - a.totalMinutes || b.count - a.count),
             topGhosting: ghostingRankingList.sort((a, b) => b.count - a.count),
             topSoc: socRankingList.sort((a, b) => b.count - a.count)
           }
@@ -1125,7 +1162,7 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingLeaderboard(false);
     }
-  }, [selectedMonth, currentMonthYear, isManager, profile?.outlet_id, selectedBranchId]);
+  }, [selectedMonth, currentMonthYear, isAreaManager, profile?.outlet_id, selectedBranchId]);
 
   const handleEvidenceImageChange = async (e) => {
     const file = e.target.files?.[0];
@@ -1252,10 +1289,10 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, outlet_id');
 
-      if (!isManager && profile?.outlet_id) {
+      if (!isAreaManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isManager && selectedBranchId !== 'ALL') {
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
       }
@@ -1323,7 +1360,7 @@ export default function BreakSystem() {
     } finally {
       setIsFetchingSummary(false);
     }
-  }, [isManager, profile?.outlet_id, selectedBranchId]);
+  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
 
   const fetchAllCrewLogs = useCallback(async (loadMore = false, pageNum = 0) => {
     if (loadMore) {
@@ -1352,10 +1389,10 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, role, outlet_id');
 
-      if (!isManager && profile?.outlet_id) {
+      if (!isAreaManager && profile?.outlet_id) {
         logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
         profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isManager && selectedBranchId !== 'ALL') {
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profQuery = profQuery.eq('outlet_id', selectedBranchId);
       }
@@ -1469,7 +1506,7 @@ export default function BreakSystem() {
       setIsFetchingAllLogs(false);
       setIsFetchingMoreLogs(false);
     }
-  }, [isManager, profile?.outlet_id, selectedBranchId]);
+  }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
 
   const updateDurationsLocally = useCallback(() => {
     setLiveBreaks(prev => prev.map(crew => {
@@ -1699,7 +1736,9 @@ export default function BreakSystem() {
       fetchAttendanceStatus();
       fetchAllProfilesList(); 
       fetchActiveShiftStats();
-      fetchOutletsList();
+      if (isAreaManager) {
+        fetchOutletsList();
+      }
     }
     const hour = new Date().getHours();
     if (hour < 11) {
@@ -1712,7 +1751,7 @@ export default function BreakSystem() {
       setGreeting('Selamat Malam');
       setMotivationQuote('Terima kasih atas dedikasi hebatmu menjaga kualitas outlet hari ini! 🌟');
     }
-  }, [user, selectedBranchId, fetchAttendanceStatus, fetchAllProfilesList, fetchActiveShiftStats, fetchOutletsList]);
+  }, [user, selectedBranchId, fetchAttendanceStatus, fetchAllProfilesList, fetchActiveShiftStats, fetchOutletsList, isAreaManager]);
 
   const runLiveHumanDetection = () => {
     if (!videoRef.current || capturedImage) return;
@@ -1733,18 +1772,17 @@ export default function BreakSystem() {
 
   const openCamera = async (mode) => {
     if (mode === 'START_BREAK') {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const { data: existingBreaks } = await supabase
-        .from('attendance_logs')
-        .select('break_start_time')
-        .eq('user_id', user.id)
-        .gte('created_at', todayStart.toISOString())
-        .not('break_start_time', 'is', null);
+      if (activeLogId) {
+        const { data: currentSessionLog } = await supabase
+          .from('attendance_logs')
+          .select('break_start_time')
+          .eq('id', activeLogId)
+          .maybeSingle();
 
-      if (existingBreaks && existingBreaks.length >= 1) {
-        alert("🔒 Akses Ditolak: Anda sudah mengambil jatah 1 kali break untuk shift hari ini.");
-        return;
+        if (currentSessionLog && currentSessionLog.break_start_time) {
+          alert("🔒 Akses Ditolak: Anda sudah mengambil jatah 1 kali break untuk shift ini.");
+          return;
+        }
       }
     }
 
@@ -1852,7 +1890,6 @@ export default function BreakSystem() {
     );
   };
 
-  // Resolusi natural kamera
   const handleCapture = () => {
     if (humanDetectionStatus !== 'HUMAN_DETECTED' || !videoRef.current) return;
 
@@ -1873,6 +1910,7 @@ export default function BreakSystem() {
     setHumanDetectionStatus('SUCCESS');
   };
 
+  // ================= SUBMIT PRESENSI (IN, START_BREAK, END_BREAK, OUT) =================
   const handleConfirmSubmission = async () => {
     if (!capturedImage || humanDetectionStatus !== 'SUCCESS' || !user?.id) {
       alert("Sesi tidak valid.");
@@ -1906,9 +1944,9 @@ export default function BreakSystem() {
         const { error: uploadError } = await supabase.storage
           .from('attendance-proofs')
           .upload(filePath, compressed, {
-            contentType: 'image/jpeg',
-            cacheControl: '31536000',
-            upsert: true
+            contentType: 'image/jpeg', 
+            cacheControl: '31536000', 
+            upsert: true 
           });
 
         if (uploadError) throw uploadError;
@@ -1950,12 +1988,12 @@ export default function BreakSystem() {
           .insert({ 
             user_id: user.id, 
             company_id: fallbackCompanyId, 
-            outlet_id: currentOutletId,
+            outlet_id: currentOutletId, 
             actual_in: timestampIso, 
             status_in: statusInText, 
-            discipline_status: lateMinutes > 0 ? 'Terlambat Masuk' : 'Bekerja',
-            penalty_points: lateMinutes > 0 ? lateMinutes : 0,
-            financial_loss_amount: financialLoss
+            discipline_status: lateMinutes > 0 ? 'Terlambat Masuk' : 'Bekerja', 
+            penalty_points: lateMinutes > 0 ? lateMinutes : 0, 
+            financial_loss_amount: financialLoss 
           });
 
         if (insertError) throw insertError;
@@ -1977,11 +2015,13 @@ export default function BreakSystem() {
         }
 
       } else if (cameraMode === 'START_BREAK') {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
-          .select('id, actual_in')
+          .select('id, actual_in, status_in')
           .eq('user_id', user.id)
           .is('actual_out', null)
+          .gte('actual_in', past24Hours)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -1998,11 +2038,18 @@ export default function BreakSystem() {
             })
             .eq('id', targetLogId);
 
-          let currentHourStr = '0';
+          let checkInHr = 0;
           const refTime = latestActiveLog?.actual_in ? new Date(latestActiveLog.actual_in) : (checkInTime || new Date());
-          try { currentHourStr = refTime.getHours().toString(); } catch(e) {}
-          const checkInHr = parseInt(currentHourStr);
-          const breakDurationSec = (selectedShiftHour === 22 || checkInHr === 22) ? 1800 : 3600;
+          checkInHr = refTime.getHours();
+          
+          if (latestActiveLog?.status_in && latestActiveLog.status_in.includes('Shift ')) {
+            try {
+              const parsed = parseInt(latestActiveLog.status_in.split('Shift ')[1].split(':')[0]);
+              if (!isNaN(parsed)) checkInHr = parsed;
+            } catch(e) {}
+          }
+
+          const breakDurationSec = (checkInHr === 22) ? 1800 : 3600;
 
           localStorage.setItem('resto_break_start_time', Date.now().toString());
           localStorage.setItem('resto_break_max_duration', breakDurationSec.toString());
@@ -2016,11 +2063,13 @@ export default function BreakSystem() {
           setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
         }
       } else if (cameraMode === 'END_BREAK') {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
-          .select('id, break_start_time, actual_in')
+          .select('id, break_start_time, actual_in, status_in')
           .eq('user_id', user.id)
           .is('actual_out', null)
+          .gte('actual_in', past24Hours)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -2033,7 +2082,14 @@ export default function BreakSystem() {
           const elapsedMins = Math.floor((endTimeMs - startTimeMs) / 60000);
           
           let checkInHour = latestActiveLog.actual_in ? new Date(latestActiveLog.actual_in).getHours() : 0;
-          const allowedMins = (selectedShiftHour === 22 || checkInHour === 22) ? 30 : 60;
+          if (latestActiveLog?.status_in && latestActiveLog.status_in.includes('Shift ')) {
+            try {
+              const parsed = parseInt(latestActiveLog.status_in.split('Shift ')[1].split(':')[0]);
+              if (!isNaN(parsed)) checkInHour = parsed;
+            } catch(e) {}
+          }
+
+          const allowedMins = (checkInHour === 22) ? 30 : 60;
           const isOver = elapsedMins > allowedMins;
 
           let penaltyPoints = 0;
@@ -2083,11 +2139,13 @@ export default function BreakSystem() {
           setBreakStartTime(null);
         }
       } else if (cameraMode === 'OUT') {
+        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         const { data: latestActiveLog } = await supabase
           .from('attendance_logs')
-          .select('id, actual_in, status_in')
+          .select('id, actual_in, status_in, outlet_id')
           .eq('user_id', user.id)
           .is('actual_out', null)
+          .gte('actual_in', past24Hours)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -2099,28 +2157,50 @@ export default function BreakSystem() {
           const workedHours = (now.getTime() - inDate.getTime()) / (1000 * 60 * 60);
 
           let checkInHour = inDate.getHours();
-          const targetRequiredHours = (selectedShiftHour === 22 || checkInHour === 22) ? 8 : 9;
+          if (latestActiveLog.status_in && latestActiveLog.status_in.includes('Shift ')) {
+            try {
+              const parsed = parseInt(latestActiveLog.status_in.split('Shift ')[1].split(':')[0]);
+              if (!isNaN(parsed)) checkInHour = parsed;
+            } catch(e) {}
+          }
+
+          const targetRequiredHours = (checkInHour === 22) ? 8 : 9;
 
           let statusOutText = 'Sesuai Jadwal';
-          let earlyPenalty = 0;
-          let earlyFinancialLoss = 0;
+          let disciplineStatusOut = 'Shift Selesai';
+          let penaltyPoints = 0;
+          let financialLoss = 0;
 
-          if (workedHours < targetRequiredHours) {
+          if (workedHours > (targetRequiredHours + 3)) {
+            const lateOutMinutes = Math.floor((workedHours - targetRequiredHours) * 60);
+            statusOutText = `Terlambat Absen Pulang > 3 Jam (${Math.floor(lateOutMinutes / 60)}j ${lateOutMinutes % 60}m)`;
+            disciplineStatusOut = 'Terlambat Absen Pulang > 3 Jam';
+            penaltyPoints = 10;
+            
+            await supabase.from('operational_violations').insert({
+              crew_id: user.id,
+              violation_type: 'Terlambat Absen Pulang > 3 Jam',
+              notes: `Clock out terlambat lebih dari 3 jam dari jam shift seharusnya (${workedHours.toFixed(1)} jam kerja).`,
+              penalty_points: 10,
+              outlet_id: latestActiveLog.outlet_id
+            });
+          } else if (workedHours < targetRequiredHours) {
             const missingMinutes = Math.floor((targetRequiredHours * 60) - (workedHours * 60));
             statusOutText = `Pulang Cepat (${missingMinutes}m)`;
-            earlyPenalty = Math.min(30, Math.max(5, Math.floor(missingMinutes / 10) * 5));
-            earlyFinancialLoss = missingMinutes * 1000;
+            disciplineStatusOut = 'Pulang Lebih Awal';
+            penaltyPoints = Math.min(30, Math.max(5, Math.floor(missingMinutes / 10) * 5));
+            financialLoss = missingMinutes * 1000;
           }
 
           await supabase.from('attendance_logs').update({
             actual_out: timestampIso,
             status_out: statusOutText,
-            discipline_status: workedHours < targetRequiredHours ? 'Pulang Lebih Awal' : 'Shift Selesai',
-            penalty_points: earlyPenalty,
-            financial_loss_amount: earlyFinancialLoss
+            discipline_status: disciplineStatusOut,
+            penalty_points: penaltyPoints,
+            financial_loss_amount: financialLoss
           }).eq('id', targetLogId);
 
-          if (earlyPenalty > 0) {
+          if (penaltyPoints > 0) {
             const { data: currentProf } = await supabase
               .from('user_profiles')
               .select('total_points')
@@ -2130,7 +2210,7 @@ export default function BreakSystem() {
             const existingPts = currentProf?.total_points ?? 100;
             await supabase
               .from('user_profiles')
-              .update({ total_points: Number(existingPts) - earlyPenalty })
+              .update({ total_points: Math.max(0, Number(existingPts) - penaltyPoints) })
               .eq('id', user.id);
           }
         }
@@ -2146,7 +2226,15 @@ export default function BreakSystem() {
       
       setIsCameraOpen(false);
       setCapturedImage(null);
-      alert("✓ Data Presensi & Kedisiplinan Berhasil Diperbarui!");
+
+      if (cameraMode === 'IN') {
+        alert("✓ Presensi MASUK Berhasil Tersimpan!\n\n⚠️ PENTING: Jangan lupa absen di Talenta juga ya!");
+      } else if (cameraMode === 'OUT') {
+        alert("✓ Presensi PULANG Berhasil Tersimpan! Terima kasih atas dedikasi hari ini.\n\n⚠️ PENTING: Jangan lupa absen di Talenta juga ya!");
+      } else {
+        alert("✓ Data Presensi & Kedisiplinan Berhasil Diperbarui!");
+      }
+
     } catch (err) {
       alert(`Gagal sinkronisasi data: ${err.message}`);
     } finally {
@@ -2198,9 +2286,9 @@ export default function BreakSystem() {
       const { error: uploadError } = await supabase.storage
         .from('attendance-proofs')
         .upload(filePath, compressed, {
-          contentType: 'image/jpeg',
-          cacheControl: '31536000',
-          upsert: true
+          contentType: 'image/jpeg', 
+          cacheControl: '31536000', 
+          upsert: true 
         });
 
       if (uploadError) throw uploadError;
@@ -2222,6 +2310,7 @@ export default function BreakSystem() {
     }
   };
 
+  // ================= UPDATE PROFIL & PASSWORD =================
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
     if (!user?.id) return;
@@ -2239,6 +2328,13 @@ export default function BreakSystem() {
         updatePayload.role_locked = true;
       }
 
+      if (newPassword && newPassword.trim() !== '') {
+        if (newPassword.trim().length < 6) {
+          throw new Error("Password minimal terdiri dari 6 karakter!");
+        }
+        updatePayload.password = newPassword.trim();
+      }
+
       const { error: profileError } = await supabase
         .from('user_profiles')
         .update(updatePayload)
@@ -2246,14 +2342,9 @@ export default function BreakSystem() {
 
       if (profileError) throw profileError;
 
-      if (newPassword) {
-        const { error: passError } = await supabase.auth.updateUser({ password: newPassword });
-        if (passError) throw passError;
-        setOldPassword('');
-        setNewPassword('');
-      }
-
-      alert('✓ Profil Anda berhasil diperbarui!');
+      setOldPassword('');
+      setNewPassword('');
+      alert('✓ Profil & Password berhasil diperbarui!');
       await fetchAttendanceStatus();
       await fetchLeaderboard();
     } catch (err) {
@@ -2344,7 +2435,7 @@ export default function BreakSystem() {
       
       <style>{`
         header.sticky.top-0, 
-        div.min-h-screen > header,
+        div.min-h-screen > header, 
         body > div > header {
           display: none !important;
         }
@@ -2358,8 +2449,8 @@ export default function BreakSystem() {
             <img 
               src="/Diciplin-logo.png" 
               onError={(e) => { 
-                e.currentTarget.onerror = null;
-                e.currentTarget.src = "/logo.png";
+                e.currentTarget.onerror = null; 
+                e.currentTarget.src = "/logo.png"; 
               }} 
               alt="Diciplin Logo" 
               className="h-7 w-auto object-contain" 
@@ -2373,8 +2464,7 @@ export default function BreakSystem() {
           </div>
           
           <div className="flex items-center gap-1.5">
-            {/* ================= PERBAIKAN: HANYA LEVEL MANAGER YANG DAPAT TOMBOL AREA KALTIM ================= */}
-            {isManager && (
+            {isAreaManager && (
               <button
                 onClick={() => setViewMode('area')}
                 className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
@@ -2394,8 +2484,8 @@ export default function BreakSystem() {
           </div>
         </div>
 
-        {/* ================= RESTO SELECTOR DROPDOWN (UNTUK SEMUA LEVEL MANAGER) ================= */}
-        {isManager && (
+        {/* ================= RESTO SELECTOR DROPDOWN (HANYA AREA MANAGER) ================= */}
+        {isAreaManager && (
           <div className="px-4 pt-3 pb-1">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-black text-slate-700">
@@ -2461,7 +2551,20 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* LIVE STATION MONITORING (SINKRON HANYA HARI INI) */}
+            {/* BANNER REMINDER TALENTA */}
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 rounded-2xl p-3 shadow-2xs flex items-center gap-2.5">
+              <div className="p-2 bg-amber-500 text-white rounded-xl text-xs font-black shadow-xs flex-shrink-0">
+                <FiCheckCircle className="text-base" />
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-amber-900 uppercase tracking-wider">Integrasi Talenta</p>
+                <p className="text-[11px] text-amber-800 font-bold leading-tight">
+                  Jangan lupa absen di <span className="underline decoration-amber-500 font-black">Talenta</span> juga ya setelah melakukan presensi di sini! ✨
+                </p>
+              </div>
+            </div>
+
+            {/* LIVE STATION MONITORING */}
             <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3.5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <div className="flex items-center gap-2">
@@ -2479,7 +2582,10 @@ export default function BreakSystem() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <div className="bg-gradient-to-br from-indigo-50/70 to-slate-50 border border-indigo-100/70 rounded-xl p-2.5 flex items-center gap-2.5">
+                <div 
+                  onClick={() => handleOpenStationDetail('Staff Duty')} 
+                  className="bg-gradient-to-br from-indigo-50/70 to-slate-50 border border-indigo-100/70 rounded-xl p-2.5 flex items-center gap-2.5 cursor-pointer hover:border-indigo-300 transition-all"
+                >
                   <div className="p-2 bg-indigo-600 text-white rounded-lg text-xs font-black shadow-xs">
                     <FiUserCheck />
                   </div>
@@ -2489,7 +2595,10 @@ export default function BreakSystem() {
                   </div>
                 </div>
 
-                <div className="bg-gradient-to-br from-emerald-50/70 to-slate-50 border border-emerald-100/70 rounded-xl p-2.5 flex items-center gap-2.5">
+                <div 
+                  onClick={() => handleOpenStationDetail('Manager Duty')} 
+                  className="bg-gradient-to-br from-emerald-50/70 to-slate-50 border border-emerald-100/70 rounded-xl p-2.5 flex items-center gap-2.5 cursor-pointer hover:border-emerald-300 transition-all"
+                >
                   <div className="p-2 bg-emerald-600 text-white rounded-lg text-xs font-black shadow-xs">
                     <FiBriefcase />
                   </div>
@@ -2505,7 +2614,7 @@ export default function BreakSystem() {
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                     <FiLayers className="text-indigo-600 text-xs"/> Personil Aktif per Station
                   </p>
-                  <span className="text-[8px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">Live Counter</span>
+                  <span className="text-[8px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">Klik untuk Cek Nama</span>
                 </div>
 
                 {Object.keys(activeShiftStats.stationCounts).length === 0 ? (
@@ -2515,7 +2624,11 @@ export default function BreakSystem() {
                 ) : (
                   <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-0.5">
                     {Object.entries(activeShiftStats.stationCounts).map(([stationName, count]) => (
-                      <div key={stationName} className="bg-slate-50 hover:bg-indigo-50/40 border border-slate-200/80 rounded-xl p-2.5 flex flex-col justify-between transition-all min-h-[58px]">
+                      <div 
+                        key={stationName} 
+                        onClick={() => handleOpenStationDetail(stationName)}
+                        className="bg-slate-50 hover:bg-indigo-50/70 hover:border-indigo-300 border border-slate-200/80 rounded-xl p-2.5 flex flex-col justify-between transition-all min-h-[58px] cursor-pointer"
+                      >
                         <span className="text-[10px] font-extrabold text-slate-700 leading-snug break-words">
                           {stationName}
                         </span>
@@ -2652,7 +2765,7 @@ export default function BreakSystem() {
                 </p>
                 {checkInTime && (
                   <span className="text-[9px] text-emerald-700 font-black bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider">
-                    Masuk: {checkInTime.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit', timeZone: 'Asia/Makassar'})}
+                    Masuk: {checkInTime.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} • {checkInTime.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit', timeZone: 'Asia/Makassar'})} WITA
                   </span>
                 )}
               </div>
@@ -2685,7 +2798,7 @@ export default function BreakSystem() {
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-start gap-2">
                   <FiClock className="text-slate-500 mt-0.5 flex-shrink-0 text-sm" />
                   <p className="text-[10px] text-slate-600 font-semibold leading-relaxed">
-                    Target shift: {requiredWorkHours} Jam Kerja. Wajib lakukan Absen Pulang sebelum meninggalkan area outlet agar poin tidak terpotong.
+                    Target shift: <span className="font-black text-slate-800">{requiredWorkHours} Jam Kerja</span>. Batas toleransi absen pulang maksimal <span className="font-black text-rose-600">3 Jam</span> setelah jadwal selesai. Keterlambatan lebih dari 3 jam dianggap indisipliner (-10 Poin).
                   </p>
                 </div>
               )}
@@ -2715,7 +2828,7 @@ export default function BreakSystem() {
                         <span className="font-mono text-xs text-slate-700 font-bold">MULAI: {breakStartTime || '--:--'}</span>
                       </div>
                       <h2 className="font-mono text-4xl font-black text-slate-900 tracking-tight py-1">{formatCountdown(timeLeft)}</h2>
-                      <p className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest">Sisa Alokasi Waktu Istirahat</p>
+                      <p className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest">Sisa Alokasi Waktu Istirahat ({requiredWorkHours === 8 ? '30m' : '60m'})</p>
                     </div>
                   )}
 
@@ -2732,7 +2845,7 @@ export default function BreakSystem() {
                   <div className="flex justify-between items-center text-[10px] text-slate-500 font-black uppercase tracking-wider">
                     <span className="flex items-center gap-1.5">
                       <FiCoffee className="text-indigo-600 text-base" /> 
-                      Alokasi: {selectedShiftHour === 22 ? '30 Menit' : '60 Menit'}
+                      Alokasi: {requiredWorkHours === 8 || selectedShiftHour === 22 ? '30 Menit (Shift Malam)' : '60 Menit'}
                     </span>
                     <span className={`text-[8px] px-2.5 py-0.5 rounded-full font-black border uppercase tracking-wider ${hasCheckedIn && !hasCheckedOut ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-slate-100 text-slate-400'}`}>{hasCheckedIn && !hasCheckedOut ? 'Ready' : 'Locked'}</span>
                   </div>
@@ -2997,7 +3110,6 @@ export default function BreakSystem() {
               </div>
             ) : (
               <div className="space-y-3.5">
-                
                 <div className="grid grid-cols-4 gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
                   <button
                     onClick={() => setSelectedInfractionCategory('late')}
@@ -3208,6 +3320,77 @@ export default function BreakSystem() {
 
               </div>
             )}
+          </div>
+        )}
+
+        {/* ================= MODAL PERSONIL STATION ================= */}
+        {stationCrewModal.isOpen && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+              
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl text-base">
+                    <FiLayers />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-tight">Kru On-Duty Station</h3>
+                    <p className="text-[10px] text-indigo-600 font-bold">{stationCrewModal.stationName}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setStationCrewModal({ isOpen: false, stationName: '', crewList: [] })}
+                  className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 transition-colors cursor-pointer"
+                >
+                  <FiX className="text-lg"/>
+                </button>
+              </div>
+
+              <div className="p-4 flex-1 overflow-y-auto space-y-2.5">
+                {stationCrewModal.crewList.length === 0 ? (
+                  <div className="py-8 text-center text-xs font-semibold text-slate-400">
+                    Belum ada kru yang bertugas di station ini hari ini.
+                  </div>
+                ) : (
+                  stationCrewModal.crewList.map((crew, idx) => (
+                    <div key={crew.id || idx} className="p-3 bg-slate-50 hover:bg-indigo-50/40 border border-slate-200/80 rounded-2xl flex items-center justify-between transition-colors shadow-2xs">
+                      <div className="flex items-center space-x-3">
+                        <UserAvatar src={crew.avatar} name={crew.name} />
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block">{crew.name}</span>
+                          <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">{crew.role || 'Crew'}</span>
+                          <span className="text-[9px] font-mono text-slate-500 block mt-0.5">
+                            Masuk: {new Date(crew.actualIn).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA
+                          </span>
+                        </div>
+                      </div>
+
+                      <div>
+                        {crew.isBreaking ? (
+                          <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 text-[9px] font-black rounded-md uppercase">
+                            Break
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[9px] font-black rounded-md uppercase">
+                            Standby
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-50 border-t border-slate-100">
+                <button
+                  onClick={() => setStationCrewModal({ isOpen: false, stationName: '', crewList: [] })}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+
+            </div>
           </div>
         )}
 
@@ -3476,6 +3659,10 @@ export default function BreakSystem() {
                               <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-orange-100 text-orange-800 inline-block border border-orange-200">
                                 Pulang Cepat {item.earlyMinutes > 0 ? `(${item.earlyMinutes}m)` : ''}
                               </span>
+                            ) : (item.statusOut.toLowerCase().includes('> 3 jam') || item.statusOut.toLowerCase().includes('>3 jam')) ? (
+                              <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-rose-100 text-rose-800 inline-block border border-rose-200">
+                                Terlambat Out &gt; 3 Jam (-10 Pts)
+                              </span>
                             ) : (
                               <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-slate-100 text-slate-600 inline-block border border-slate-200">
                                 Jadwal Normal
@@ -3534,7 +3721,6 @@ export default function BreakSystem() {
                           </span>
                         </div>
 
-                        {/* RASIO FOTO NATURAL */}
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
                             <div className="flex items-center justify-between">
@@ -3740,7 +3926,7 @@ export default function BreakSystem() {
         {/* MODAL SHIFT PICKER */}
         {showShiftPicker && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-3.5">
               
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
@@ -3761,6 +3947,13 @@ export default function BreakSystem() {
                 </button>
               </div>
 
+              <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-2.5 flex items-start gap-2 text-amber-900">
+                <FiAlertCircle className="text-amber-600 text-sm mt-0.5 shrink-0" />
+                <p className="text-[10px] font-bold leading-relaxed">
+                  <span className="font-black text-amber-950">PENTING:</span> Pastikan Anda tidak salah memilih jam masuk shift. Sistem akan menghitung keterlambatan &amp; alokasi istirahat berdasarkan pilihan Anda.
+                </p>
+              </div>
+
               {!isManager ? (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -3772,7 +3965,7 @@ export default function BreakSystem() {
                     </span>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                  <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
                     {CREW_STATION_OPTIONS.map((st) => {
                       const isSelected = selectedStation === st;
                       return (
@@ -3805,7 +3998,7 @@ export default function BreakSystem() {
                 <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider">
                   {!isManager ? '2. Pilih Jam Masuk Shift' : 'Pilih Jam Masuk Shift'}
                 </label>
-                <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
+                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto pr-1">
                   {SHIFT_HOURS_OPTIONS.map((opt) => {
                     const isSelected = selectedShiftHour === opt.hour;
                     return (
@@ -3925,7 +4118,7 @@ export default function BreakSystem() {
                 <div className="text-xs font-black text-slate-300 text-center font-mono py-1">
                   {humanDetectionStatus === 'LOADING_ENGINE' && <span className="animate-pulse text-indigo-400">Mengaktifkan Sensor Kamera...</span>}
                   {humanDetectionStatus === 'NOT_DETECTED' && <span className="text-rose-400">🚨 Kamera Tidak Siap</span>}
-                  {humanDetectionStatus === 'HUMAN_DETECTED' && <span className="text-emerald-400">✓ Posisikan Wajah & Tekan Tombol Kamera</span>}
+                  {humanDetectionStatus === 'HUMAN_DETECTED' && <span className="text-emerald-400">✓ Posisikan Wajah &amp; Tekan Tombol Kamera</span>}
                 </div>
               )}
             </div>
