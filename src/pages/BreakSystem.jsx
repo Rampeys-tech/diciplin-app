@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { supabase } from '../api';
 import { useAuth } from '../context/AuthContext';
 import imageCompression from 'browser-image-compression';
@@ -90,6 +90,28 @@ const CREW_STATION_OPTIONS = [
 const LOGS_PAGE_SIZE = 15;
 const LOGS_MAX_AGE_DAYS = 45;
 
+function getDefaultCutoffRange() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const day = now.getDate();
+
+  let start, end;
+  if (day >= 21) {
+    start = new Date(year, month, 21);
+    end = new Date(year, month + 1, 20);
+  } else {
+    start = new Date(year, month - 1, 21);
+    end = new Date(year, month, 20);
+  }
+
+  const formatYMD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return {
+    startDate: formatYMD(start),
+    endDate: formatYMD(end)
+  };
+}
+
 const UserAvatar = memo(({ src, name, size = "w-9 h-9", className = "" }) => {
   const [error, setError] = useState(false);
   const initials = (name || 'CR').substring(0, 2).toUpperCase();
@@ -157,7 +179,6 @@ export default function BreakSystem() {
     stationCounts: {}
   });
 
-  // Modal Personil Station State
   const [stationCrewModal, setStationCrewModal] = useState({
     isOpen: false,
     stationName: '',
@@ -207,6 +228,7 @@ export default function BreakSystem() {
   );
 
   // ================= STATE LEADERBOARD & INDISIPLINER =================
+  const defaultDates = useMemo(() => getDefaultCutoffRange(), []);
   const currentMonthYear = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   const [selectedMonth, setSelectedMonth] = useState(currentMonthYear);
   const [leaderboard, setLeaderboard] = useState([]);
@@ -223,7 +245,7 @@ export default function BreakSystem() {
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
 
-  // Modal Input Pelanggaran SOC
+  // Modal Input Pelanggaran / Ketidakhadiran
   const [showReportViolationModal, setShowReportViolationModal] = useState(false);
   const [reportTargetCrewId, setReportTargetCrewId] = useState('');
   const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
@@ -233,12 +255,20 @@ export default function BreakSystem() {
   const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
 
-  // State Rekap & Log
+  // State Rekap Presensi & Custom Range Filter
   const [logSubTab, setLogSubTab] = useState('photo'); 
+  const [filterStartDate, setFilterStartDate] = useState(defaultDates.startDate);
+  const [filterEndDate, setFilterEndDate] = useState(defaultDates.endDate);
+  
   const [allCrewLogs, setAllCrewLogs] = useState([]);
   const [managerCrewLogs, setManagerCrewLogs] = useState([]);
   const [attendanceSummaryList, setAttendanceSummaryList] = useState([]);
+  const [cutoffAttendanceList, setCutoffAttendanceList] = useState([]);
   const [isFetchingSummary, setIsFetchingSummary] = useState(false);
+  const [isFetchingCutoff, setIsFetchingCutoff] = useState(false);
+  const [selectedCutoffDetail, setSelectedCutoffDetail] = useState(null);
+  const [showCutoffDetailModal, setShowCutoffDetailModal] = useState(false);
+
   const [logCategory, setLogCategory] = useState('crew'); 
   const [isFetchingAllLogs, setIsFetchingAllLogs] = useState(false);
   const [isFetchingMoreLogs, setIsFetchingMoreLogs] = useState(false);
@@ -400,7 +430,7 @@ export default function BreakSystem() {
     try {
       let query = supabase
         .from('user_profiles')
-        .select('id, full_name, station_placement, role, outlet_id, avatar')
+        .select('id, full_name, station_placement, role, outlet_id, avatar, total_points')
         .order('full_name', { ascending: true });
 
       if (!isAreaManager && profile?.outlet_id) {
@@ -589,17 +619,17 @@ export default function BreakSystem() {
     });
   };
 
-  // ================= FETCH STATUS ATTENDANCE PENGGUNA (PERBAIKAN SESI BARU) =================
+  // ================= FETCH STATUS ATTENDANCE PENGGUNA (STABIL PROFIL) =================
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
     try {
-      const { data: prof } = await supabase
+      const { data: prof, error: pErr } = await supabase
         .from('user_profiles')
         .select('*')
         .eq('id', user.id)
         .maybeSingle();
         
-      if (prof) {
+      if (!pErr && prof) {
         setProfile(prof);
         checkAndPerformMonthlyReset(prof);
         if (prof.station_placement) setSelectedStation(prof.station_placement);
@@ -619,7 +649,6 @@ export default function BreakSystem() {
         }
       }
 
-      // Ambil log presensi terbaru
       const { data: logs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at') 
@@ -630,7 +659,6 @@ export default function BreakSystem() {
       const currentLog = logs?.[0];
       const nowMs = Date.now();
 
-      // Kasus 1: Sedang dalam shift aktif (Sudah masuk, belum pulang)
       if (currentLog && currentLog.actual_in && !currentLog.actual_out) {
         const inTime = new Date(currentLog.actual_in);
         const inTimeMs = inTime.getTime();
@@ -650,7 +678,6 @@ export default function BreakSystem() {
         const targetHours = isShift22 ? 8 : 9;
         const maxSessionMs = (targetHours + 3) * 60 * 60 * 1000;
 
-        // Auto clock-out jika sudah lewat batas maksimal
         if ((nowMs - inTimeMs) > maxSessionMs) {
           await supabase.from('attendance_logs').update({
             actual_out: new Date(inTimeMs + targetHours * 3600 * 1000).toISOString(),
@@ -659,7 +686,6 @@ export default function BreakSystem() {
             penalty_points: 10
           }).eq('id', currentLog.id);
 
-          // Buka sesi baru untuk hari ini
           setActiveLogId(null);
           setHasCheckedIn(false);
           setHasCheckedOut(false);
@@ -689,13 +715,10 @@ export default function BreakSystem() {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } 
-      // Kasus 2: Sudah absen pulang sebelumnya
-      else if (currentLog && currentLog.actual_in && currentLog.actual_out) {
+      } else if (currentLog && currentLog.actual_in && currentLog.actual_out) {
         const outTimeMs = new Date(currentLog.actual_out).getTime();
         const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
 
-        // Jika kepulangan sudah lebih dari 4 jam yang lalu, reset state agar bisa absen masuk shift baru hari ini
         if (diffHours >= 4) {
           setActiveLogId(null);
           setHasCheckedIn(false);
@@ -704,7 +727,6 @@ export default function BreakSystem() {
           setIsOnBreak(false);
           setBreakStartTime(null);
         } else {
-          // Jika baru saja checkout kurang dari 4 jam lalu
           setActiveLogId(currentLog.id);
           setHasCheckedIn(true);
           setHasCheckedOut(true);
@@ -712,9 +734,7 @@ export default function BreakSystem() {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } 
-      // Kasus 3: Belum pernah absen
-      else {
+      } else {
         setHasCheckedIn(false);
         setHasCheckedOut(false);
         setCheckInTime(null);
@@ -861,6 +881,128 @@ export default function BreakSystem() {
       setIsFetchingLive(false);
     }
   }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+
+  // ================= REKAP KEHADIRAN FLEKSIBEL & RINCIAN DETAIL =================
+  const fetchCutoffAttendance = useCallback(async () => {
+    setIsFetchingCutoff(true);
+    try {
+      const startIso = new Date(`${filterStartDate}T00:00:00`).toISOString();
+      const endIso = new Date(`${filterEndDate}T23:59:59.999`).toISOString();
+
+      let profQuery = supabase
+        .from('user_profiles')
+        .select('id, full_name, avatar, station_placement, role, outlet_id, total_points');
+
+      let logsQuery = supabase
+        .from('attendance_logs')
+        .select('id, user_id, actual_in, actual_out, created_at, outlet_id, status_in, status_out')
+        .not('actual_in', 'is', null)
+        .gte('actual_in', startIso)
+        .lte('actual_in', endIso);
+
+      let violQuery = supabase
+        .from('operational_violations')
+        .select('id, crew_id, violation_type, notes, penalty_points, evidence_image_url, created_at, outlet_id')
+        .gte('created_at', startIso)
+        .lte('created_at', endIso);
+
+      if (!isAreaManager && profile?.outlet_id) {
+        profQuery = profQuery.eq('outlet_id', profile.outlet_id);
+        logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
+        violQuery = violQuery.eq('outlet_id', profile.outlet_id);
+      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+        profQuery = profQuery.eq('outlet_id', selectedBranchId);
+        logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
+        violQuery = violQuery.eq('outlet_id', selectedBranchId);
+      }
+
+      const [{ data: profs }, { data: logs }, { data: viols }] = await Promise.all([
+        profQuery,
+        logsQuery,
+        violQuery
+      ]);
+
+      if (profs) {
+        const attendanceData = profs.map(p => {
+          const pLogs = (logs || []).filter(l => l.user_id === p.id);
+          const uniqueWorkDays = new Set(
+            pLogs.map(l => (l.actual_in || l.created_at).substring(0, 10))
+          ).size;
+
+          const pViols = (viols || []).filter(v => v.crew_id === p.id);
+          let mangkirCount = 0;
+          let sakitCount = 0;
+          let izinCount = 0;
+          let cutiCount = 0;
+
+          const detailRecords = [];
+
+          pViols.forEach(v => {
+            const vType = (v.violation_type || '').toLowerCase();
+            const dateStr = new Date(v.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+
+            if (vType.includes('mangkir') || vType.includes('alfa') || vType.includes('tanpa keterangan')) {
+              mangkirCount++;
+              detailRecords.push({
+                type: 'Mangkir / Alfa (-25 Pts)',
+                date: dateStr,
+                note: v.notes,
+                evidence: v.evidence_image_url,
+                badge: 'bg-rose-100 text-rose-800 border-rose-200'
+              });
+            } else if (vType.includes('sakit')) {
+              sakitCount++;
+              detailRecords.push({
+                type: 'Sakit',
+                date: dateStr,
+                note: v.notes,
+                evidence: v.evidence_image_url,
+                badge: 'bg-amber-100 text-amber-800 border-amber-200'
+              });
+            } else if (vType.includes('izin')) {
+              izinCount++;
+              detailRecords.push({
+                type: 'Izin Resmi',
+                date: dateStr,
+                note: v.notes,
+                evidence: v.evidence_image_url,
+                badge: 'bg-blue-100 text-blue-800 border-blue-200'
+              });
+            } else if (vType.includes('cuti')) {
+              cutiCount++;
+              detailRecords.push({
+                type: 'Cuti Tahunan',
+                date: dateStr,
+                note: v.notes,
+                evidence: v.evidence_image_url,
+                badge: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+              });
+            }
+          });
+
+          return {
+            id: p.id,
+            name: p.full_name,
+            avatar: p.avatar,
+            role: p.station_placement || p.role || 'Crew',
+            totalHadir: uniqueWorkDays,
+            mangkir: mangkirCount,
+            sakit: sakitCount,
+            izin: izinCount,
+            cuti: cutiCount,
+            points: p.total_points ?? 100,
+            records: detailRecords
+          };
+        });
+
+        setCutoffAttendanceList(attendanceData.sort((a, b) => b.totalHadir - a.totalHadir));
+      }
+    } catch (e) {
+      console.error("Gagal load cut-off attendance:", e);
+    } finally {
+      setIsFetchingCutoff(false);
+    }
+  }, [filterStartDate, filterEndDate, isAreaManager, profile?.outlet_id, selectedBranchId]);
 
   // ================= REKAP LEADERBOARD =================
   const fetchLeaderboard = useCallback(async () => {
@@ -1090,13 +1232,13 @@ export default function BreakSystem() {
             if (vDateStr) datesWithInfractions.add(vDateStr);
 
             socCount += 1;
-            const deduction = v.penalty_points ? Number(v.penalty_points) : 5;
+            const deduction = v.penalty_points ? Number(v.penalty_points) : 0;
             totalDeduction += deduction;
             const vDate = new Date(v.created_at);
             userInfractionHistory.push({
-              type: v.violation_type || 'Pelanggaran SOC',
-              badgeColor: 'bg-orange-100 text-orange-800 border-orange-200',
-              detail: `Pengurangan (-${deduction} Poin)`,
+              type: v.violation_type || 'Catatan Operasional',
+              badgeColor: deduction > 0 ? 'bg-orange-100 text-orange-800 border-orange-200' : 'bg-blue-100 text-blue-800 border-blue-200',
+              detail: deduction > 0 ? `Pengurangan (-${deduction} Poin)` : 'Izin Resmi / Tidak Ada Pengurangan Poin',
               date: vDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' }),
               time: `${vDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
               note: v.notes,
@@ -1175,7 +1317,7 @@ export default function BreakSystem() {
           if (lateCount > 0) reasons.push(`${lateCount}x Telat (${totalLateMinutes}m)`);
           if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak (${totalOverBreakMinutes}m)`);
           if (ghostingCount > 0) reasons.push(`${ghostingCount}x Ghosting`);
-          if (socCount > 0) reasons.push(`${socCount}x Unprosedural/SOC`);
+          if (socCount > 0) reasons.push(`${socCount}x Unprosedural/Mangkir`);
 
           let statusDescription = '';
           const hasRealInfractions = reasons.length > 0;
@@ -1263,11 +1405,26 @@ export default function BreakSystem() {
     }
   };
 
+  const handleViolationTypeChange = (newType) => {
+    setReportViolationType(newType);
+    if (newType === 'Mangkir (Tanpa Keterangan)') {
+      setReportPenaltyPoints('25');
+    } else if (newType === 'Sakit' || newType === 'Izin' || newType === 'Cuti') {
+      setReportPenaltyPoints('0');
+    } else if (reportPenaltyPoints === '25' || reportPenaltyPoints === '0') {
+      setReportPenaltyPoints('5');
+    }
+  };
+
   const handleSubmitOperationalViolation = async (e) => {
     e.preventDefault();
     if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
-    if (!reportNotes.trim()) return alert("Tuliskan deskripsi/catatan pelanggaran.");
-    if (!reportEvidenceImage) return alert("⚠️ Wajib mengunggah foto dokumentasi pendukung sebelum mengirim laporan.");
+    if (!reportNotes.trim()) return alert("Tuliskan deskripsi/catatan kejadian.");
+
+    const isNonDisciplinary = ['Sakit', 'Izin', 'Cuti'].includes(reportViolationType);
+    if (!isNonDisciplinary && !reportEvidenceImage) {
+      return alert("⚠️ Wajib mengunggah foto dokumentasi pendukung sebelum mengirim laporan indisipliner.");
+    }
 
     setIsSubmittingReport(true);
     try {
@@ -1301,13 +1458,16 @@ export default function BreakSystem() {
           .eq('id', reportTargetCrewId);
       }
 
-      alert("✓ Laporan pelanggaran & foto bukti berhasil disimpan!");
+      alert("✓ Laporan berhasil disimpan dan masuk ke rekap kedisiplinan kru!");
       setShowReportViolationModal(false);
       setReportNotes('');
       setReportTargetCrewId('');
       setReportEvidenceImage(null);
+      setReportViolationType('Pelanggaran SOC');
+      setReportPenaltyPoints('5');
       fetchLeaderboard();
       fetchAttendanceStatus();
+      if (logSubTab === 'cutoff_attendance') fetchCutoffAttendance();
     } catch (err) {
       alert(`Gagal mengirim laporan: ${err.message}`);
     } finally {
@@ -1318,6 +1478,11 @@ export default function BreakSystem() {
   const openInfractionDetailModal = (crewData) => {
     setSelectedCrewInfractionDetail(crewData);
     setShowInfractionModal(true);
+  };
+
+  const handleOpenCutoffDetail = (crewData) => {
+    setSelectedCutoffDetail(crewData);
+    setShowCutoffDetailModal(true);
   };
 
   const fetchBreakLogs = useCallback(async () => {
@@ -1770,6 +1935,7 @@ export default function BreakSystem() {
     return () => clearInterval(timer);
   }, [isOnBreak, hasPlayed5MinAlarm, hasPlayed0MinAlarm, hasNotifiedOverbreak, activeLogId, speakAiVoice, triggerSystemNotification]);
 
+  // STABIL TAB DATA FETCHING
   useEffect(() => {
     if (activeTab === 'history') {
       fetchBreakLogs();
@@ -1780,6 +1946,8 @@ export default function BreakSystem() {
     } else if (activeTab === 'all-logs') {
       if (logSubTab === 'summary') {
         fetchAttendanceSummaryList();
+      } else if (logSubTab === 'cutoff_attendance') {
+        fetchCutoffAttendance();
       } else if (!isLogsFetchedRef.current) {
         setLogsPage(0);
         setHasMoreLogs(true);
@@ -1792,7 +1960,7 @@ export default function BreakSystem() {
       setEditAvatar(profile.avatar || '');
       setEditRole(profile.role || 'crew');
     }
-  }, [activeTab, logSubTab, profile, selectedBranchId, fetchBreakLogs, fetchLiveBreakData, fetchLeaderboard, fetchAllCrewLogs, fetchAttendanceSummaryList]);
+  }, [activeTab, logSubTab, selectedBranchId, selectedMonth, filterStartDate, filterEndDate]);
 
   useEffect(() => {
     if (user?.id) {
@@ -1814,7 +1982,7 @@ export default function BreakSystem() {
       setGreeting('Selamat Malam');
       setMotivationQuote('Terima kasih atas dedikasi hebatmu menjaga kualitas outlet hari ini! 🌟');
     }
-  }, [user, selectedBranchId, fetchAttendanceStatus, fetchAllProfilesList, fetchActiveShiftStats, fetchOutletsList, isAreaManager]);
+  }, [user?.id, selectedBranchId, isAreaManager]);
 
   const runLiveHumanDetection = () => {
     if (!videoRef.current || capturedImage) return;
@@ -2286,7 +2454,10 @@ export default function BreakSystem() {
       await fetchLiveBreakData();
       await fetchLeaderboard(); 
       await fetchActiveShiftStats(); 
-      if (activeTab === 'all-logs' && logSubTab === 'summary') await fetchAttendanceSummaryList();
+      if (activeTab === 'all-logs') {
+        if (logSubTab === 'summary') await fetchAttendanceSummaryList();
+        if (logSubTab === 'cutoff_attendance') await fetchCutoffAttendance();
+      }
       
       setIsCameraOpen(false);
       setCapturedImage(null);
@@ -2588,7 +2759,7 @@ export default function BreakSystem() {
                   </div>
                   <div>
                     <p className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest">{greeting}</p>
-                    <h1 className="text-sm font-black tracking-tight text-slate-900">{profile?.full_name || 'Crew Member'}</h1>
+                    <h1 className="text-sm font-black tracking-tight text-slate-900">{profile?.full_name || 'Memuat Akun...'}</h1>
                   </div>
                 </div>
                 
@@ -2806,8 +2977,8 @@ export default function BreakSystem() {
                         <FiFileText className="text-xs" />
                       </div>
                       <div>
-                        <h3 className="text-xs font-black uppercase tracking-wider">Input Tindakan Indisipliner</h3>
-                        <p className="text-[9px] text-slate-400">Catat pelanggaran SOC & unprosedural kerja.</p>
+                        <h3 className="text-xs font-black uppercase tracking-wider">Input Indisipliner & Absensi</h3>
+                        <p className="text-[9px] text-slate-400">Catat pelanggaran SOC, mangkir (-25 Poin), sakit, atau cuti.</p>
                       </div>
                     </div>
 
@@ -2818,7 +2989,7 @@ export default function BreakSystem() {
                       }}
                       className="w-full bg-orange-600 hover:bg-orange-500 text-white font-black py-2.5 rounded-xl text-xs uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 transition-all active:scale-[0.98] cursor-pointer"
                     >
-                      <FiAlertTriangle className="text-xs" /> Buka Form Laporan Pelanggaran
+                      <FiAlertTriangle className="text-xs" /> Buka Form Laporan / Presensi Kru
                     </button>
                   </div>
                 )}
@@ -3207,7 +3378,7 @@ export default function BreakSystem() {
                     onClick={() => setSelectedInfractionCategory('soc')}
                     className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'soc' ? 'bg-orange-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>SOC/Lainnya</span>
+                    <span>SOC/Mangkir</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topSoc.length})</span>
                   </button>
                 </div>
@@ -3351,7 +3522,7 @@ export default function BreakSystem() {
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
                       <p className="text-[10px] font-black text-orange-800 uppercase tracking-widest flex items-center gap-1.5">
-                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOC & Unprosedural
+                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOC & Mangkir
                       </p>
                       <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
                     </div>
@@ -3359,7 +3530,7 @@ export default function BreakSystem() {
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
                       {currentFilteredSoc.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil pelanggaran SOC pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
+                          Nihil pelanggaran operasional pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
                         </div>
                       ) : (
                         currentFilteredSoc.map((c, idx) => (
@@ -3539,20 +3710,110 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL INPUT PELANGGARAN SOC ================= */}
+        {/* ================= MODAL DETAIL CUT-OFF & NON-HADIR KRU ================= */}
+        {showCutoffDetailModal && selectedCutoffDetail && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+              
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                <div className="flex items-center space-x-2.5">
+                  <UserAvatar src={selectedCutoffDetail.avatar} name={selectedCutoffDetail.name} />
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-tight">{selectedCutoffDetail.name}</h3>
+                    <p className="text-[9px] text-indigo-600 font-bold">{selectedCutoffDetail.role}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setShowCutoffDetailModal(false)}
+                  className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 transition-colors cursor-pointer"
+                >
+                  <FiX className="text-lg"/>
+                </button>
+              </div>
+
+              {/* CARD REKAP SINGKAT */}
+              <div className="p-4 border-b border-slate-100 bg-slate-50/40">
+                <p className="text-[8px] font-black uppercase text-slate-400 tracking-wider mb-2">Akumulasi Periode ({filterStartDate} s/d {filterEndDate})</p>
+                <div className="grid grid-cols-4 gap-1.5 text-center">
+                  <div className="bg-rose-50 border border-rose-200/80 rounded-xl p-2">
+                    <p className="text-[8px] font-bold text-rose-600 uppercase">Mangkir</p>
+                    <p className="font-mono text-sm font-black text-rose-950">{selectedCutoffDetail.mangkir}</p>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-2">
+                    <p className="text-[8px] font-bold text-amber-600 uppercase">Sakit</p>
+                    <p className="font-mono text-sm font-black text-amber-950">{selectedCutoffDetail.sakit}</p>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-200/80 rounded-xl p-2">
+                    <p className="text-[8px] font-bold text-blue-600 uppercase">Izin</p>
+                    <p className="font-mono text-sm font-black text-blue-950">{selectedCutoffDetail.izin}</p>
+                  </div>
+                  <div className="bg-emerald-50 border border-emerald-200/80 rounded-xl p-2">
+                    <p className="text-[8px] font-bold text-emerald-600 uppercase">Cuti</p>
+                    <p className="font-mono text-sm font-black text-emerald-950">{selectedCutoffDetail.cuti}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* TIMELINE RINCIAN */}
+              <div className="p-4 flex-1 overflow-y-auto space-y-2.5">
+                <p className="text-[8px] font-black uppercase text-slate-400 tracking-wider">Daftar Catatan Ketidakhadiran</p>
+                {selectedCutoffDetail.records.length === 0 ? (
+                  <div className="py-6 text-center text-xs font-semibold text-slate-400">
+                    Tidak ada catatan izin/sakit/mangkir pada periode ini. Kehadiran disiplin! 🌟
+                  </div>
+                ) : (
+                  selectedCutoffDetail.records.map((rec, i) => (
+                    <div key={i} className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 space-y-1.5 shadow-2xs">
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[8px] font-black px-2 py-0.5 rounded-md border uppercase ${rec.badge}`}>
+                          {rec.type}
+                        </span>
+                        <span className="text-[9px] font-mono font-bold text-slate-500">{rec.date}</span>
+                      </div>
+                      {rec.note && (
+                        <p className="text-[10px] text-slate-700 font-medium bg-white p-2 rounded-xl border border-slate-100 leading-relaxed">
+                          {rec.note}
+                        </p>
+                      )}
+                      {rec.evidence && (
+                        <div className="space-y-1 pt-0.5">
+                          <span className="text-[8px] font-black uppercase text-slate-400">Foto Surat / Dokumentasi:</span>
+                          <img src={rec.evidence} alt="Bukti" loading="lazy" className="w-full aspect-video rounded-xl object-cover border border-slate-200 shadow-xs" />
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-50 border-t border-slate-100">
+                <button
+                  onClick={() => setShowCutoffDetailModal(false)}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer"
+                >
+                  Tutup Rincian
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL INPUT PELANGGARAN & ABSENSI KHUSUS ================= */}
         {showReportViolationModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl p-5 space-y-3.5 max-h-[90vh] overflow-y-auto">
+              
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-orange-50 text-orange-600 rounded-xl">
+                  <div className="p-2 bg-orange-50 text-orange-600 rounded-xl">
                     <FiFileText className="text-base" />
                   </div>
                   <div>
                     <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                      Catat Pelanggaran Operasional
+                      Input Indisipliner & Absensi
                     </h3>
-                    <p className="text-[9px] text-slate-400 font-medium">Wajib lampirkan foto dokumentasi pendukung</p>
+                    <p className="text-[9px] text-slate-400 font-medium">Catat pelanggaran SOC, mangkir, izin, sakit, atau cuti</p>
                   </div>
                 </div>
                 <button onClick={() => setShowReportViolationModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400 transition-colors cursor-pointer">
@@ -3561,13 +3822,14 @@ export default function BreakSystem() {
               </div>
 
               <form onSubmit={handleSubmitOperationalViolation} className="space-y-3">
+                {/* PILIH KRU */}
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-600 uppercase">Pilih Kru yang Melanggar</label>
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Pilih Kru yang Bersangkutan</label>
                   <select
                     value={reportTargetCrewId}
                     onChange={(e) => setReportTargetCrewId(e.target.value)}
                     required
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500"
+                    className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl px-3 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500 cursor-pointer"
                   >
                     <option value="">-- Pilih Kru --</option>
                     {allProfiles.map(p => (
@@ -3578,55 +3840,79 @@ export default function BreakSystem() {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-600 uppercase">Jenis Pelanggaran</label>
-                    <select
-                      value={reportViolationType}
-                      onChange={(e) => setReportViolationType(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-semibold text-slate-900 outline-none"
-                    >
+                {/* JENIS KETERANGAN */}
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Jenis Keterangan / Laporan</label>
+                  <select
+                    value={reportViolationType}
+                    onChange={(e) => handleViolationTypeChange(e.target.value)}
+                    className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl px-3 text-xs font-semibold text-slate-900 outline-none cursor-pointer"
+                  >
+                    <optgroup label="Pelanggaran Operasional">
                       <option value="Pelanggaran SOC">Pelanggaran SOC</option>
                       <option value="Tindakan Unprosedural">Unprosedural</option>
                       <option value="Kelalaian Operasional">Kelalaian Kerja</option>
                       <option value="Tindakan Indisipliner Lain">Lainnya</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-600 uppercase">Pengurangan Poin</label>
-                    <select
-                      value={reportPenaltyPoints}
-                      onChange={(e) => setReportPenaltyPoints(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 outline-none"
-                    >
-                      <option value="5">-5 Poin (Ringan)</option>
-                      <option value="10">-10 Poin (Sedang)</option>
-                      <option value="15">-15 Poin (Berat)</option>
-                    </select>
-                  </div>
+                    </optgroup>
+                    <optgroup label="Status Ketidakhadiran">
+                      <option value="Mangkir (Tanpa Keterangan)">Mangkir / Alfa (-25 Pts)</option>
+                      <option value="Sakit">Sakit (Surat Dokter)</option>
+                      <option value="Izin">Izin Resmi</option>
+                      <option value="Cuti">Cuti Tahunan</option>
+                    </optgroup>
+                  </select>
                 </div>
 
+                {/* PENGURANGAN POIN */}
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black text-slate-600 uppercase">Rincian Kejadian / Catatan</label>
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Pengurangan Poin</label>
+                  <select
+                    value={reportPenaltyPoints}
+                    disabled={reportViolationType === 'Mangkir (Tanpa Keterangan)' || ['Sakit', 'Izin', 'Cuti'].includes(reportViolationType)}
+                    onChange={(e) => setReportPenaltyPoints(e.target.value)}
+                    className={`w-full h-10 border border-slate-200 rounded-xl px-3 text-xs font-semibold outline-none ${
+                      reportViolationType === 'Mangkir (Tanpa Keterangan)' || ['Sakit', 'Izin', 'Cuti'].includes(reportViolationType)
+                        ? 'bg-slate-100 text-slate-500 cursor-not-allowed'
+                        : 'bg-slate-50 text-slate-900'
+                    }`}
+                  >
+                    <option value="0">0 Poin (Tidak Ada Pemotongan)</option>
+                    <option value="5">-5 Poin (Ringan)</option>
+                    <option value="10">-10 Poin (Sedang)</option>
+                    <option value="15">-15 Poin (Berat)</option>
+                    <option value="25">-25 Poin (Mangkir / Alfa)</option>
+                  </select>
+                </div>
+
+                {/* RINCIAN KEJADIAN */}
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Rincian / Catatan Keterangan</label>
                   <textarea
                     rows={2}
                     value={reportNotes}
                     onChange={(e) => setReportNotes(e.target.value)}
-                    placeholder="Contoh: Tidak memakai sarung tangan saat handling dimsum / mengabaikan resep..."
+                    placeholder={
+                      reportViolationType === 'Mangkir (Tanpa Keterangan)'
+                        ? 'Tidak hadir kerja tanpa konfirmasi/alasan jelas...'
+                        : ['Sakit', 'Izin', 'Cuti'].includes(reportViolationType)
+                        ? 'Keterangan izin/cuti/surat dokter...'
+                        : 'Contoh: Tidak memakai sarung tangan saat handling dimsum...'
+                    }
                     required
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500"
                   />
                 </div>
 
-                <div className="space-y-1.5 pt-1">
-                  <label className="text-[10px] font-black text-slate-700 uppercase flex items-center gap-1">
-                    <FiCamera className="text-orange-600" /> Foto Bukti Dokumentasi (Wajib)
+                {/* UPLOAD FOTO BUKTI */}
+                <div className="space-y-1 pt-0.5">
+                  <label className="text-[9px] font-black text-slate-700 uppercase flex items-center gap-1">
+                    <FiCamera className="text-orange-600" /> 
+                    Foto Bukti Dokumentasi {['Sakit', 'Izin', 'Cuti'].includes(reportViolationType) ? '(Opsional)' : '(Wajib)'}
                   </label>
                   
                   {reportEvidenceImage ? (
                     <div className="relative rounded-2xl overflow-hidden border border-slate-200">
-                      <img src={reportEvidenceImage} alt="Bukti" loading="lazy" decoding="async" className="w-full h-32 object-cover" />
+                      <img src={reportEvidenceImage} alt="Bukti" loading="lazy" decoding="async" className="w-full h-28 object-cover" />
                       <button 
                         type="button" 
                         onClick={() => setReportEvidenceImage(null)} 
@@ -3636,9 +3922,9 @@ export default function BreakSystem() {
                       </button>
                     </div>
                   ) : (
-                    <label className="w-full border-2 border-dashed border-slate-300 hover:border-orange-500 bg-slate-50 p-4 rounded-2xl flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-colors">
-                      <FiUploadCloud className="text-xl text-slate-400" />
-                      <span className="text-[10px] font-bold text-slate-600">
+                    <label className="w-full border-2 border-dashed border-slate-300 hover:border-orange-500 bg-slate-50 p-3 rounded-2xl flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors">
+                      <FiUploadCloud className="text-lg text-slate-400" />
+                      <span className="text-[9px] font-bold text-slate-600">
                         {isUploadingEvidence ? 'Mengunggah Foto...' : 'Pilih / Ambil Foto Bukti'}
                       </span>
                       <input type="file" accept="image/*" onChange={handleEvidenceImageChange} className="hidden" disabled={isUploadingEvidence} />
@@ -3649,35 +3935,148 @@ export default function BreakSystem() {
                 <button
                   type="submit"
                   disabled={isSubmittingReport || isUploadingEvidence}
-                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all active:scale-[0.98] cursor-pointer disabled:opacity-60"
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-black py-3 rounded-2xl text-xs uppercase tracking-wider shadow-md transition-all active:scale-[0.98] cursor-pointer disabled:opacity-60 mt-1"
                 >
-                  {isSubmittingReport ? 'Menyimpan Laporan...' : 'Kirim & Simpan Pelanggaran'}
+                  {isSubmittingReport ? 'Menyimpan Laporan...' : 'Kirim & Simpan Laporan'}
                 </button>
               </form>
             </div>
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN ================= */}
+        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN / CUT-OFF DENGAN FILTER TANGGAL FLEKSIBEL ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3.5">
             
             <div className="bg-slate-200/80 p-1 rounded-2xl flex gap-1 shadow-inner">
               <button
                 onClick={() => setLogSubTab('photo')}
-                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${logSubTab === 'photo' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer ${logSubTab === 'photo' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
               >
-                <FiImage className="text-sm" /> Log Foto Break
+                <FiImage className="text-xs" /> Log Foto
               </button>
               <button
                 onClick={() => setLogSubTab('summary')}
-                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 cursor-pointer ${logSubTab === 'summary' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer ${logSubTab === 'summary' ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
               >
-                <FiList className="text-sm" /> Rekap Jam Presensi
+                <FiList className="text-xs" /> Jam Presensi
+              </button>
+              <button
+                onClick={() => setLogSubTab('cutoff_attendance')}
+                className={`flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1 cursor-pointer ${logSubTab === 'cutoff_attendance' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                <FiCalendar className="text-xs" /> Rekap Periode
               </button>
             </div>
 
-            {logSubTab === 'summary' ? (
+            {logSubTab === 'cutoff_attendance' ? (
+              <div className="space-y-3">
+                {/* FILTER RENTANG TANGGAL FLEKSIBEL */}
+                <div className="bg-white border border-slate-200/80 rounded-2xl p-3.5 shadow-2xs space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1">
+                      <FiFilter className="text-indigo-600" /> Filter Rentang Tanggal:
+                    </span>
+                    <button 
+                      onClick={() => {
+                        const def = getDefaultCutoffRange();
+                        setFilterStartDate(def.startDate);
+                        setFilterEndDate(def.endDate);
+                      }}
+                      className="text-[9px] font-extrabold text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      Reset Cut-Off (21–20)
+                    </button>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-0.5">
+                      <label className="text-[8px] font-extrabold uppercase text-slate-400">Dari Tanggal</label>
+                      <input 
+                        type="date" 
+                        value={filterStartDate} 
+                        onChange={(e) => setFilterStartDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold text-xs px-2.5 py-1.5 rounded-xl outline-none"
+                      />
+                    </div>
+                    <div className="space-y-0.5">
+                      <label className="text-[8px] font-extrabold uppercase text-slate-400">Sampai Tanggal</label>
+                      <input 
+                        type="date" 
+                        value={filterEndDate} 
+                        onChange={(e) => setFilterEndDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 font-bold text-xs px-2.5 py-1.5 rounded-xl outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between px-1">
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Total Presensi Kru</h3>
+                    <p className="text-[8px] text-slate-400 font-bold">Klik nama kru untuk melihat rincian alasan &amp; foto surat</p>
+                  </div>
+                  <button 
+                    onClick={fetchCutoffAttendance} 
+                    className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer"
+                    title="Refresh Data"
+                  >
+                    <FiRefreshCw className="text-xs" />
+                  </button>
+                </div>
+
+                {isFetchingCutoff ? (
+                  <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung total kehadiran...</div>
+                ) : cutoffAttendanceList.length === 0 ? (
+                  <div className="bg-white border border-slate-200/70 rounded-2xl p-6 text-center text-xs text-slate-400 font-medium shadow-xs">
+                    Belum ada data kehadiran pada rentang tanggal yang dipilih.
+                  </div>
+                ) : (
+                  <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                    {cutoffAttendanceList.map((item, idx) => (
+                      <div 
+                        key={item.id} 
+                        onClick={() => handleOpenCutoffDetail(item)}
+                        className="p-3.5 flex items-center justify-between hover:bg-indigo-50/40 cursor-pointer transition-colors"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold text-slate-400">{idx + 1}.</span>
+                            <span className="text-xs font-bold text-slate-900">{item.name}</span>
+                          </div>
+                          <span className="text-[9px] text-indigo-600 font-black uppercase block pl-4">{item.role}</span>
+                          
+                          {/* INDIKATOR ALFA, SAKIT, IZIN, CUTI */}
+                          <div className="flex items-center gap-1 text-[8px] font-bold pl-4 pt-0.5">
+                            <span className={`px-1.5 py-0.2 rounded border ${item.mangkir > 0 ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                              A: {item.mangkir}
+                            </span>
+                            <span className={`px-1.5 py-0.2 rounded border ${item.sakit > 0 ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                              S: {item.sakit}
+                            </span>
+                            <span className={`px-1.5 py-0.2 rounded border ${item.izin > 0 ? 'bg-blue-100 text-blue-800 border-blue-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                              I: {item.izin}
+                            </span>
+                            <span className={`px-1.5 py-0.2 rounded border ${item.cuti > 0 ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
+                              C: {item.cuti}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-right flex flex-col items-end gap-1">
+                          <span className="bg-emerald-50 text-emerald-700 text-xs font-black px-2.5 py-1 rounded-xl border border-emerald-200">
+                            {item.totalHadir} Hari Hadir
+                          </span>
+                          <span className="text-[8px] font-bold text-slate-400 font-mono">
+                            Skor: {item.points} Pts
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : logSubTab === 'summary' ? (
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
                   <div>
