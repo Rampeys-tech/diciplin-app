@@ -48,7 +48,8 @@ import {
   FiFilter, 
   FiList, 
   FiGlobe, 
-  FiBarChart2 
+  FiBarChart2,
+  FiDownload
 } from 'react-icons/fi';
 
 // ================= FALLBACK GEOFENCE =================
@@ -190,12 +191,18 @@ export default function BreakSystem() {
   const [liveBreaks, setLiveBreaks] = useState([]);
   const [ghostingCrew, setGhostingCrew] = useState([]);
   const [waterBreaks, setWaterBreaks] = useState([]);
-  const [isFetchingLive, setIsFetchingLive] = useState(false);
+  const [, setIsFetchingLive] = useState(false);
   
   const [hasPlayed5MinAlarm, setHasPlayed5MinAlarm] = useState(false);
   const [hasPlayed0MinAlarm, setHasPlayed0MinAlarm] = useState(false);
   const [hasNotifiedOverbreak, setHasNotifiedOverbreak] = useState(false);
   const announcedOverbreakCrew = useRef(new Set());
+
+  // State untuk Tanggapan Indisipliner
+  const [showAppealModal, setShowAppealModal] = useState(false);
+  const [appealTargetViolation, setAppealTargetViolation] = useState(null);
+  const [appealReason, setAppealReason] = useState('');
+  const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
 
   // Role Checker
   const roleLower = (profile?.role || '').toLowerCase();
@@ -300,6 +307,19 @@ export default function BreakSystem() {
   const videoRef = useRef(null);
   const localStreamRef = useRef(null);
   const animationFrameRef = useRef(null);
+
+  // Logout Handler yang Benar-Benar Membersihkan Sesi
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.error("Gagal logout:", e);
+    } finally {
+      localStorage.clear();
+      sessionStorage.clear();
+      window.location.replace('/login');
+    }
+  };
 
   const fetchOutletsList = useCallback(async () => {
     try {
@@ -619,7 +639,7 @@ export default function BreakSystem() {
     });
   };
 
-  // ================= FETCH STATUS ATTENDANCE PENGGUNA (STABIL PROFIL) =================
+  // ================= FETCH STATUS ATTENDANCE PENGGUNA =================
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -1004,6 +1024,159 @@ export default function BreakSystem() {
     }
   }, [filterStartDate, filterEndDate, isAreaManager, profile?.outlet_id, selectedBranchId]);
 
+  // ================= EKSPOR PDF REKAP BULANAN SEMUA KRU =================
+  const handleExportMonthlyPdf = () => {
+    if (!activeLeaderboardData || activeLeaderboardData.length === 0) {
+      alert("Data rekap bulanan belum tersedia untuk diunduh.");
+      return;
+    }
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert("Pop-up diblokir oleh browser. Izinkan pop-up untuk mencetak PDF.");
+      return;
+    }
+
+    const rowsHtml = activeLeaderboardData.map((person, idx) => `
+      <tr>
+        <td style="text-align:center;">${idx + 1}</td>
+        <td><strong>${person.name}</strong></td>
+        <td>${person.role}</td>
+        <td style="text-align:center;"><strong>${person.points} Pts</strong></td>
+        <td>${person.breakInfo || '-'}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Rekap Absensi & Disiplin - ${selectedMonth}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 30px; color: #0f172a; }
+            .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 24px; }
+            .title { font-size: 20px; font-weight: 900; letter-spacing: 0.5px; margin: 0; }
+            .subtitle { font-size: 11px; color: #64748b; font-weight: 700; margin-top: 6px; text-transform: uppercase; }
+            table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+            th { background-color: #f1f5f9; color: #334155; font-size: 11px; text-transform: uppercase; padding: 10px; border: 1px solid #cbd5e1; }
+            td { border: 1px solid #e2e8f0; padding: 9px 12px; font-size: 11px; }
+            tr:nth-child(even) { background-color: #f8fafc; }
+            .footer { margin-top: 35px; display: flex; justify-content: space-between; font-size: 11px; color: #64748b; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1 class="title">DICIPLIN.COM — REKAP EVALUASI & KEDISIPLINAN CREW</h1>
+            <p class="subtitle">Periode: ${selectedMonth} | Kategori: ${leaderboardCategory.toUpperCase()}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 40px;">No</th>
+                <th>Nama Anggota</th>
+                <th>Station / Posisi</th>
+                <th style="width: 100px;">Total Skor</th>
+                <th>Catatan Kehadiran & Evaluasi</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <div class="footer">
+            <span>Dicetak otomatis oleh Sistem Presensi Diciplin.com</span>
+            <span>WITA: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Makassar' })}</span>
+          </div>
+          <script>
+            window.onload = function() { window.print(); };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  // ================= EKSPOR PDF REKAP PER KRU =================
+  const handleExportSingleCrewPdf = (crewItem) => {
+    try {
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        alert("Pop-up diblokir browser. Izinkan pop-up untuk mencetak PDF.");
+        return;
+      }
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Rekap Kehadiran - ${crewItem.name}</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 25px; color: #1e293b; }
+              .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; }
+              .info { margin-bottom: 20px; font-size: 13px; line-height: 1.6; }
+              table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+              th, td { border: 1px solid #cbd5e1; padding: 8px 12px; text-align: left; font-size: 11px; }
+              th { background-color: #f1f5f9; text-transform: uppercase; }
+              .summary { display: flex; gap: 10px; margin: 20px 0; }
+              .summary-box { flex: 1; border: 1px solid #cbd5e1; padding: 10px; text-align: center; border-radius: 8px; background: #f8fafc; }
+              .summary-box h3 { margin: 0 0 4px 0; font-size: 18px; font-weight: bold; }
+              .summary-box p { margin: 0; font-size: 10px; color: #64748b; text-transform: uppercase; font-weight: bold; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h2 style="margin:0;">DICIPLIN.COM - LAPORAN REKAP KEHADIRAN CREW</h2>
+              <p style="margin:4px 0 0 0; font-size:12px; color:#64748b;">Periode: ${filterStartDate} s/d ${filterEndDate}</p>
+            </div>
+            <div class="info">
+              <strong>Nama Crew:</strong> ${crewItem.name}<br/>
+              <strong>Jabatan / Station:</strong> ${crewItem.role}<br/>
+              <strong>Sisa Poin Kedisiplinan:</strong> ${crewItem.points} Pts
+            </div>
+            <div class="summary">
+              <div class="summary-box"><h3>${crewItem.totalHadir}</h3><p>Hari Hadir</p></div>
+              <div class="summary-box"><h3 style="color:#e11d48;">${crewItem.mangkir}</h3><p>Mangkir</p></div>
+              <div class="summary-box"><h3 style="color:#d97706;">${crewItem.sakit}</h3><p>Sakit</p></div>
+              <div class="summary-box"><h3 style="color:#2563eb;">${crewItem.izin}</h3><p>Izin / Cuti</p></div>
+            </div>
+            <h4 style="margin-bottom:8px;">Rincian Catatan / Ketidakhadiran:</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40px;">No</th>
+                  <th>Keterangan / Status</th>
+                  <th>Tanggal</th>
+                  <th>Catatan / Alasan</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${crewItem.records.length === 0 ? '<tr><td colspan="4" style="text-align:center;">Tidak ada catatan khusus pada periode ini. Kehadiran disiplin.</td></tr>' : 
+                  crewItem.records.map((r, i) => `
+                    <tr>
+                      <td>${i + 1}</td>
+                      <td><b>${r.type}</b></td>
+                      <td>${r.date}</td>
+                      <td>${r.note || '-'}</td>
+                    </tr>
+                  `).join('')}
+              </tbody>
+            </table>
+            <script>
+              window.onload = function() { window.print(); };
+            </script>
+          </body>
+        </html>
+      `;
+
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+    } catch (e) {
+      alert("Gagal mencetak PDF: " + e.message);
+    }
+  };
+
   // ================= REKAP LEADERBOARD =================
   const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
@@ -1122,6 +1295,7 @@ export default function BreakSystem() {
                 totalLateMinutes += mins;
                 totalDeduction += mins;
                 userInfractionHistory.push({
+                  id: log.id,
                   type: 'Terlambat Masuk Shift',
                   badgeColor: 'bg-amber-100 text-amber-800 border-amber-200',
                   detail: `${mins} Menit terlambat`,
@@ -1146,6 +1320,7 @@ export default function BreakSystem() {
                 totalOverBreakMinutes += overM;
                 totalDeduction += overM;
                 userInfractionHistory.push({
+                  id: log.id,
                   type: 'Overbreak Istirahat',
                   badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
                   detail: `Over +${overM} Menit (Total break ${actualMins}m)`,
@@ -1161,6 +1336,7 @@ export default function BreakSystem() {
               totalOverBreakMinutes += penalty;
               totalDeduction += penalty;
               userInfractionHistory.push({
+                id: log.id,
                 type: 'Overbreak Terdeteksi',
                 badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
                 detail: `Overbreak aktif (${penalty} Poin deduksi)`,
@@ -1175,6 +1351,7 @@ export default function BreakSystem() {
               ghostingCount += 1;
               totalDeduction += 15;
               userInfractionHistory.push({
+                id: log.id,
                 type: 'Ghosting / Luar Radius',
                 badgeColor: 'bg-red-100 text-red-800 border-red-200',
                 detail: `${log.distance_meters || '50+'}m di luar area tugas (-15 Pts)`,
@@ -1188,6 +1365,7 @@ export default function BreakSystem() {
               if (dateKey) datesWithInfractions.add(dateKey);
               totalDeduction += 10;
               userInfractionHistory.push({
+                id: log.id,
                 type: 'Tidak Clock Out > 3 Jam',
                 badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
                 detail: 'Tidak melakukan clock out lebih dari 3 jam setelah jam pulang shift (-10 Pts)',
@@ -1200,6 +1378,7 @@ export default function BreakSystem() {
               const penOut = log.penalty_points ? Number(log.penalty_points) : 5;
               totalDeduction += penOut;
               userInfractionHistory.push({
+                id: log.id,
                 type: 'Pulang Cepat (Early Leave)',
                 badgeColor: 'bg-orange-100 text-orange-800 border-orange-200',
                 detail: `Checkout sebelum durasi shift selesai (-${penOut} Pts)`,
@@ -1211,6 +1390,7 @@ export default function BreakSystem() {
               if (dateKey) datesWithInfractions.add(dateKey);
               totalDeduction += 10;
               userInfractionHistory.push({
+                id: log.id,
                 type: 'Lupa Absen Pulang',
                 badgeColor: 'bg-rose-100 text-rose-800 border-rose-200',
                 detail: 'Tidak melakukan absen pulang hingga shift berakhir (-10 Pts)',
@@ -1236,6 +1416,7 @@ export default function BreakSystem() {
             totalDeduction += deduction;
             const vDate = new Date(v.created_at);
             userInfractionHistory.push({
+              id: v.id,
               type: v.violation_type || 'Catatan Operasional',
               badgeColor: deduction > 0 ? 'bg-orange-100 text-orange-800 border-orange-200' : 'bg-blue-100 text-blue-800 border-blue-200',
               detail: deduction > 0 ? `Pengurangan (-${deduction} Poin)` : 'Izin Resmi / Tidak Ada Pengurangan Poin',
@@ -1368,6 +1549,36 @@ export default function BreakSystem() {
       setIsFetchingLeaderboard(false);
     }
   }, [selectedMonth, currentMonthYear, isAreaManager, profile?.outlet_id, selectedBranchId]);
+
+  // Submit Tanggapan Indisipliner ke Atasan
+  const handleSubmitAppeal = async (e) => {
+    e.preventDefault();
+    if (!appealTargetViolation || !appealReason.trim()) {
+      alert("Tuliskan alasan tanggapan/klarifikasi Anda.");
+      return;
+    }
+    setIsSubmittingAppeal(true);
+    try {
+      const existingNote = appealTargetViolation.note || '';
+      const updatedNotes = `${existingNote} | [Klarifikasi Crew (${profile?.full_name}): ${appealReason.trim()}]`;
+
+      const { error } = await supabase
+        .from('operational_violations')
+        .update({ notes: updatedNotes })
+        .eq('id', appealTargetViolation.id);
+
+      if (error) throw error;
+      alert("✓ Tanggapan berhasil dikirim dan menunggu persetujuan (*acc*) dari atasan langsung.");
+      setShowAppealModal(false);
+      setAppealReason('');
+      setAppealTargetViolation(null);
+      fetchLeaderboard();
+    } catch (err) {
+      alert(`Gagal mengirim tanggapan: ${err.message}`);
+    } finally {
+      setIsSubmittingAppeal(false);
+    }
+  };
 
   const handleEvidenceImageChange = async (e) => {
     const file = e.target.files?.[0];
@@ -1935,7 +2146,7 @@ export default function BreakSystem() {
     return () => clearInterval(timer);
   }, [isOnBreak, hasPlayed5MinAlarm, hasPlayed0MinAlarm, hasNotifiedOverbreak, activeLogId, speakAiVoice, triggerSystemNotification]);
 
-  // STABIL TAB DATA FETCHING
+  // Tab Data Fetching
   useEffect(() => {
     if (activeTab === 'history') {
       fetchBreakLogs();
@@ -2331,7 +2542,7 @@ export default function BreakSystem() {
           if (isOver) {
             const overMins = elapsedMins - allowedMins;
             penaltyPoints = overMins; 
-            financialLoss = overMins * 1000;               
+            financialLoss = overMins * 1000;                
             finalStatus = 'Overbreak';
           }
 
@@ -2677,7 +2888,7 @@ export default function BreakSystem() {
 
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* ================= HEADER APLIKASI UTAMA ================= */}
+        {/* ================= HEADER APLIKASI UTAMA (Logout Bersih) ================= */}
         <div className="sticky top-0 w-full bg-white px-4 py-3 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
           <div className="flex items-center gap-2">
             <img 
@@ -2709,8 +2920,9 @@ export default function BreakSystem() {
               </button>
             )}
 
+            {/* Tombol Keluar: Menghapus sesi dan pindah ke /login */}
             <button 
-              onClick={async () => { await supabase.auth.signOut(); }} 
+              onClick={handleLogout} 
               className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
             >
               Keluar
@@ -3127,9 +3339,7 @@ export default function BreakSystem() {
                 <FiCoffee className="text-indigo-600 text-sm" /> Main Break Active ({liveBreaks.length})
               </h3>
               
-              {isFetchingLive ? (
-                <div className="text-center py-4 text-xs font-bold text-slate-400 animate-pulse">Menghubungkan Database...</div>
-              ) : liveBreaks.length === 0 ? (
+              {liveBreaks.length === 0 ? (
                 <div className="bg-white border border-slate-200/70 rounded-2xl p-4 text-center text-xs text-slate-400 font-medium shadow-xs">
                   Semua crew sedang standby di station masing-masing (0 Crew Break).
                 </div>
@@ -3227,7 +3437,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 3: LEADERBOARD & REKAP INDISIPLINER ================= */}
+        {/* ================= TAB 3: LEADERBOARD & REKAP INDISIPLINER (Modern Top 1 Podium & PDF) ================= */}
         {activeTab === 'leaderboard' && (
           <div className="flex-1 px-4 py-4 space-y-4">
             <div className="flex items-center justify-between">
@@ -3240,14 +3450,26 @@ export default function BreakSystem() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 py-1 shadow-2xs">
-                <FiCalendar className="text-indigo-600 text-xs" />
-                <input 
-                  type="month" 
-                  value={selectedMonth} 
-                  onChange={(e) => setSelectedMonth(e.target.value)} 
-                  className="text-[10px] font-black text-slate-700 bg-transparent outline-none cursor-pointer"
-                />
+              <div className="flex items-center gap-1.5">
+                {/* Tombol Download PDF Rekapan Bulanan */}
+                <button
+                  onClick={handleExportMonthlyPdf}
+                  className="flex items-center gap-1 bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-black px-2.5 py-1.5 rounded-xl uppercase tracking-wider transition-all active:scale-95 shadow-xs cursor-pointer"
+                  title="Unduh PDF Rekap Absensi Bulanan"
+                >
+                  <FiDownload className="text-xs" />
+                  <span>PDF Rekap</span>
+                </button>
+
+                <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-2 py-1 shadow-2xs">
+                  <FiCalendar className="text-indigo-600 text-xs" />
+                  <input 
+                    type="month" 
+                    value={selectedMonth} 
+                    onChange={(e) => setSelectedMonth(e.target.value)} 
+                    className="text-[10px] font-black text-slate-700 bg-transparent outline-none cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 
@@ -3287,22 +3509,73 @@ export default function BreakSystem() {
               <div className="text-center py-8 text-xs text-slate-400 font-medium animate-pulse">Menghitung matriks evaluasi...</div>
             ) : activeSubTabLeaderboard === 'ranking' ? (
               <div className="space-y-4">
+
+                {/* PODIUM MODERN CREW TERBAIK (TOP 1) */}
+                {topTierList.length > 0 && (
+                  <div 
+                    onClick={() => openInfractionDetailModal(topTierList[0])}
+                    className="relative overflow-hidden rounded-[26px] bg-gradient-to-b from-amber-400/20 via-yellow-50/40 to-white border-2 border-amber-400 p-5 flex flex-col items-center text-center shadow-lg shadow-amber-500/10 cursor-pointer transition-all hover:scale-[1.01]"
+                  >
+                    <div className="relative mb-2 flex flex-col items-center">
+                      <span className="text-3xl select-none animate-bounce -mb-2 filter drop-shadow">👑</span>
+                      <div className="relative p-1 rounded-full bg-gradient-to-tr from-amber-400 via-yellow-200 to-amber-500 shadow-[0_0_30px_rgba(245,158,11,0.6)]">
+                        {topTierList[0].avatar ? (
+                          <img 
+                            src={topTierList[0].avatar} 
+                            alt={topTierList[0].name} 
+                            className="w-20 h-20 rounded-full object-cover border-2 border-white shadow-md"
+                          />
+                        ) : (
+                          <div className="w-20 h-20 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-xl border-2 border-white">
+                            {(topTierList[0].name || 'CR').substring(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                        <span className="absolute bottom-0 right-0 bg-amber-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full border-2 border-white shadow">
+                          #1
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <span className="inline-block px-3 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-black uppercase tracking-widest rounded-full">
+                        Crew Terbaik Bulan Ini 🏆
+                      </span>
+                      <h3 className="text-base font-black text-slate-900 tracking-tight">
+                        {topTierList[0].name}
+                      </h3>
+                      <p className="text-[10px] text-indigo-600 font-extrabold uppercase tracking-wider">
+                        {topTierList[0].role}
+                      </p>
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-2">
+                      <span className="bg-emerald-600 text-white text-xs font-black px-3.5 py-1 rounded-xl shadow-xs">
+                        {topTierList[0].points} Pts
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-xl border border-slate-200">
+                        {topTierList[0].breakInfo}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* DAFTAR PERINGKAT BERIKUTNYA */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-emerald-700 uppercase tracking-widest flex items-center gap-1">
-                    🌟 PALING RAJIN ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
+                    🌟 PERINGKAT SELANJUTNYA ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
                   </p>
                   <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
-                    {topTierList.length === 0 ? (
-                      <div className="p-4 text-center text-xs font-bold text-slate-400">Belum ada user di Top Tier.</div>
+                    {topTierList.length <= 1 ? (
+                      <div className="p-4 text-center text-xs font-bold text-slate-400">Belum ada kandidat lain di daftar peringkat.</div>
                     ) : (
-                      topTierList.map((person, index) => (
+                      topTierList.slice(1).map((person, index) => (
                         <div 
                           className="p-3.5 flex items-center justify-between w-full hover:bg-slate-50/80 cursor-pointer transition-colors" 
                           key={person.id}
                           onClick={() => openInfractionDetailModal(person)}
                         >
                           <div className="flex items-center space-x-3">
-                            <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 1}.</span>
+                            <span className="font-mono text-xs font-bold text-slate-400 w-4">{index + 2}.</span>
                             <UserAvatar src={person.avatar} name={person.name} />
                             <div>
                               <span className="text-xs font-bold text-slate-900 block">{person.name}</span>
@@ -3317,6 +3590,7 @@ export default function BreakSystem() {
                   </div>
                 </div>
 
+                {/* DAFTAR ZONA EVALUASI */}
                 <div className="space-y-2">
                   <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest flex items-center gap-1">
                     ⚠️ PERLU EVALUASI ({leaderboardCategory === 'manager' && isManager ? 'MANAGER' : 'CREW'})
@@ -3633,7 +3907,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= MODAL DETAIL INDISIPLINER ================= */}
+        {/* ================= MODAL DETAIL INDISIPLINER & TANGGAPAN ================= */}
         {showInfractionModal && selectedCrewInfractionDetail && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
             <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
@@ -3692,6 +3966,21 @@ export default function BreakSystem() {
                           />
                         </div>
                       )}
+
+                      {/* Tombol Berikan Tanggapan / Klarifikasi Bagi Kru */}
+                      {user?.id === selectedCrewInfractionDetail.id && inf.id && (
+                        <div className="pt-1">
+                          <button
+                            onClick={() => {
+                              setAppealTargetViolation(inf);
+                              setShowAppealModal(true);
+                            }}
+                            className="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black text-[9px] py-1.5 px-3 rounded-xl border border-indigo-200 uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer"
+                          >
+                            <FiFileText /> Berikan Tanggapan / Klarifikasi
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -3706,6 +3995,40 @@ export default function BreakSystem() {
                 </button>
               </div>
 
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL FORM TANGGAPAN/KLARIFIKASI ================= */}
+        {showAppealModal && appealTargetViolation && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-200 rounded-[28px] max-w-sm w-full p-5 space-y-3 shadow-2xl">
+              <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                <h3 className="text-xs font-black text-slate-900 uppercase">Tanggapan Indisipliner</h3>
+                <button onClick={() => setShowAppealModal(false)} className="text-slate-400 hover:text-slate-700 cursor-pointer">
+                  <FiX className="text-base" />
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-600 leading-relaxed">
+                Tuliskan klarifikasi atau bukti pendukung jika catatan ini bukan kesalahan Anda. Laporan akan ditinjau dan disetujui (*acc*) oleh atasan langsung.
+              </p>
+              <form onSubmit={handleSubmitAppeal} className="space-y-3">
+                <textarea
+                  rows={3}
+                  value={appealReason}
+                  onChange={(e) => setAppealReason(e.target.value)}
+                  placeholder="Tuliskan keterangan klarifikasi Anda di sini..."
+                  required
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-medium text-slate-900 outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="submit"
+                  disabled={isSubmittingAppeal}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-2.5 rounded-xl text-xs uppercase tracking-wider cursor-pointer"
+                >
+                  {isSubmittingAppeal ? 'Mengirim...' : 'Kirim Tanggapan ke Atasan'}
+                </button>
+              </form>
             </div>
           </div>
         )}
@@ -3733,7 +4056,15 @@ export default function BreakSystem() {
 
               {/* CARD REKAP SINGKAT */}
               <div className="p-4 border-b border-slate-100 bg-slate-50/40">
-                <p className="text-[8px] font-black uppercase text-slate-400 tracking-wider mb-2">Akumulasi Periode ({filterStartDate} s/d {filterEndDate})</p>
+                <div className="flex justify-between items-center mb-2">
+                  <p className="text-[8px] font-black uppercase text-slate-400 tracking-wider">Akumulasi Periode ({filterStartDate} s/d {filterEndDate})</p>
+                  <button
+                    onClick={() => handleExportSingleCrewPdf(selectedCutoffDetail)}
+                    className="bg-slate-900 hover:bg-slate-800 text-white text-[9px] font-black px-2.5 py-1 rounded-xl uppercase tracking-wider flex items-center gap-1 shadow-xs cursor-pointer"
+                  >
+                    <FiDownload className="text-xs" /> Unduh PDF
+                  </button>
+                </div>
                 <div className="grid grid-cols-4 gap-1.5 text-center">
                   <div className="bg-rose-50 border border-rose-200/80 rounded-xl p-2">
                     <p className="text-[8px] font-bold text-rose-600 uppercase">Mangkir</p>
@@ -3944,7 +4275,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN / CUT-OFF DENGAN FILTER TANGGAL FLEKSIBEL ================= */}
+        {/* ================= TAB 4: LOG FOTO & REKAP HARIAN ================= */}
         {activeTab === 'all-logs' && (
           <div className="flex-1 px-4 py-4 space-y-3.5">
             
