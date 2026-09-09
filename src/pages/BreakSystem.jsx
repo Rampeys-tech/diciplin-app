@@ -420,7 +420,7 @@ export default function BreakSystem() {
     }
   }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
 
-  // ================= SINKRONISASI IC SHIFT AKTIF & REPAIR STATION =================
+  // ================= SINKRONISASI IC SHIFT AKTIF =================
   const fetchActiveShiftStats = useCallback(async () => {
     try {
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -457,7 +457,6 @@ export default function BreakSystem() {
         let managerCount = 0;
         let totalBreakActive = 0;
         
-        // Inisialisasi awal seluruh station operasional dengan nilai 0
         const stationCounts = {};
         CREW_STATION_OPTIONS.forEach((st) => {
           stationCounts[st] = 0;
@@ -531,7 +530,6 @@ export default function BreakSystem() {
               if (lastPart) stationName = lastPart;
             }
 
-            // Normalisasi pencocokan ke CREW_STATION_OPTIONS
             const matchedStation = CREW_STATION_OPTIONS.find(
               (opt) => opt.toLowerCase() === stationName.toLowerCase() ||
                        stationName.toLowerCase().includes(opt.toLowerCase().replace('station ', ''))
@@ -591,7 +589,7 @@ export default function BreakSystem() {
     });
   };
 
-  // ================= FETCH STATUS ATTENDANCE PENGGUNA =================
+  // ================= FETCH STATUS ATTENDANCE PENGGUNA (PERBAIKAN SESI BARU) =================
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -621,28 +619,23 @@ export default function BreakSystem() {
         }
       }
 
-      const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
+      // Ambil log presensi terbaru
       const { data: logs } = await supabase
         .from('attendance_logs')
-        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in') 
+        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at') 
         .eq('user_id', user.id)
-        .gte('created_at', past24Hours)
         .order('created_at', { ascending: false })
         .limit(1);
 
       const currentLog = logs?.[0];
+      const nowMs = Date.now();
 
+      // Kasus 1: Sedang dalam shift aktif (Sudah masuk, belum pulang)
       if (currentLog && currentLog.actual_in && !currentLog.actual_out) {
-        setActiveLogId(currentLog.id);
-        setHasCheckedIn(true);
-        setHasCheckedOut(false);
-        setActiveShiftStatusIn(currentLog.status_in || '');
-        
         const inTime = new Date(currentLog.actual_in);
-        setCheckInTime(inTime);
-
+        const inTimeMs = inTime.getTime();
         let checkInHour = inTime.getHours();
+
         if (currentLog.status_in && currentLog.status_in.includes('Shift ')) {
           try {
             const parsedHour = parseInt(currentLog.status_in.split('Shift ')[1].split(':')[0]);
@@ -654,32 +647,74 @@ export default function BreakSystem() {
         }
 
         const isShift22 = (checkInHour === 22);
-        setRequiredWorkHours(isShift22 ? 8 : 9);
-        const allowedBreakSec = isShift22 ? 1800 : 3600;
+        const targetHours = isShift22 ? 8 : 9;
+        const maxSessionMs = (targetHours + 3) * 60 * 60 * 1000;
+
+        // Auto clock-out jika sudah lewat batas maksimal
+        if ((nowMs - inTimeMs) > maxSessionMs) {
+          await supabase.from('attendance_logs').update({
+            actual_out: new Date(inTimeMs + targetHours * 3600 * 1000).toISOString(),
+            status_out: 'Lupa Absen Pulang (>3 Jam) (-10 Poin)',
+            discipline_status: 'Terlambat Absen Pulang > 3 Jam',
+            penalty_points: 10
+          }).eq('id', currentLog.id);
+
+          // Buka sesi baru untuk hari ini
+          setActiveLogId(null);
+          setHasCheckedIn(false);
+          setHasCheckedOut(false);
+          setCheckInTime(null);
+          setIsOnBreak(false);
+          setBreakStartTime(null);
+          return;
+        }
+
+        setActiveLogId(currentLog.id);
+        setHasCheckedIn(true);
+        setHasCheckedOut(false);
+        setActiveShiftStatusIn(currentLog.status_in || '');
+        setCheckInTime(inTime);
+        setRequiredWorkHours(targetHours);
         
+        const allowedBreakSec = isShift22 ? 1800 : 3600;
         const breaking = Boolean(currentLog.break_start_time) && !Boolean(currentLog.break_end_time);
         
         if (breaking) {
           setIsOnBreak(true);
           setBreakStartTime(new Date(currentLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
-
-          const startTimeMs = new Date(currentLog.break_start_time).getTime();
-          const elapsed = Math.floor((Date.now() - startTimeMs) / 1000);
-          
+          const elapsed = Math.floor((nowMs - new Date(currentLog.break_start_time).getTime()) / 1000);
           setTimeLeft(allowedBreakSec - elapsed);
           setMaxBreakDuration(allowedBreakSec);
         } else {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } else if (currentLog && currentLog.actual_in && currentLog.actual_out) {
-        setActiveLogId(currentLog.id);
-        setHasCheckedIn(true);
-        setHasCheckedOut(true);
-        setCheckInTime(new Date(currentLog.actual_in));
-        setIsOnBreak(false);
-        setBreakStartTime(null);
-      } else {
+      } 
+      // Kasus 2: Sudah absen pulang sebelumnya
+      else if (currentLog && currentLog.actual_in && currentLog.actual_out) {
+        const outTimeMs = new Date(currentLog.actual_out).getTime();
+        const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
+
+        // Jika kepulangan sudah lebih dari 4 jam yang lalu, reset state agar bisa absen masuk shift baru hari ini
+        if (diffHours >= 4) {
+          setActiveLogId(null);
+          setHasCheckedIn(false);
+          setHasCheckedOut(false);
+          setCheckInTime(null);
+          setIsOnBreak(false);
+          setBreakStartTime(null);
+        } else {
+          // Jika baru saja checkout kurang dari 4 jam lalu
+          setActiveLogId(currentLog.id);
+          setHasCheckedIn(true);
+          setHasCheckedOut(true);
+          setCheckInTime(new Date(currentLog.actual_in));
+          setIsOnBreak(false);
+          setBreakStartTime(null);
+        }
+      } 
+      // Kasus 3: Belum pernah absen
+      else {
         setHasCheckedIn(false);
         setHasCheckedOut(false);
         setCheckInTime(null);
@@ -2796,7 +2831,7 @@ export default function BreakSystem() {
                 <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
                   <FiShield className="text-indigo-600 text-sm" /> Presensi Shift Kerja
                 </p>
-                {checkInTime && (
+                {checkInTime && hasCheckedIn && !hasCheckedOut && (
                   <span className="text-[9px] text-emerald-700 font-black bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider">
                     Masuk: {checkInTime.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} • {checkInTime.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit', timeZone: 'Asia/Makassar'})} WITA
                   </span>
@@ -2807,7 +2842,7 @@ export default function BreakSystem() {
                 <button
                   disabled={hasCheckedIn || isVerifyingLocation}
                   onClick={triggerCheckInProcess}
-                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${hasCheckedIn ? 'bg-emerald-50/80 border-emerald-200 text-emerald-700 shadow-inner' : 'bg-slate-50 hover:bg-slate-100 border-slate-200/80 text-slate-800 active:scale-[0.97]'}`}
+                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${hasCheckedIn ? 'bg-emerald-50/80 border-emerald-200 text-emerald-700 shadow-inner' : 'bg-slate-50 hover:bg-slate-100 border-slate-200/80 text-slate-800 active:scale-[0.97] cursor-pointer'}`}
                 >
                   <div className={`p-2 rounded-xl ${hasCheckedIn ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-50 text-indigo-600'}`}>
                     <FiLogIn className="text-lg" />
@@ -2818,7 +2853,7 @@ export default function BreakSystem() {
                 <button
                   disabled={!hasCheckedIn || hasCheckedOut || isVerifyingLocation}
                   onClick={() => openCamera('OUT')}
-                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 cursor-pointer active:scale-[0.97] ${hasCheckedOut ? 'bg-slate-100 border-slate-200 text-slate-400' : 'bg-slate-50 hover:bg-rose-50 border-slate-200/80 text-slate-800 hover:text-rose-700 hover:border-rose-200'}`}
+                  className={`py-3.5 px-3 rounded-2xl border flex flex-col items-center justify-center gap-1.5 font-black text-xs transition-all duration-200 ${!hasCheckedIn || hasCheckedOut ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed' : 'bg-slate-50 hover:bg-rose-50 border-slate-200/80 text-slate-800 hover:text-rose-700 hover:border-rose-200 cursor-pointer active:scale-[0.97]'}`}
                 >
                   <div className={`p-2 rounded-xl ${hasCheckedOut ? 'bg-slate-200 text-slate-400' : 'bg-rose-50 text-rose-600'}`}>
                     <FiLogOut className="text-lg" />
@@ -2885,7 +2920,7 @@ export default function BreakSystem() {
                   <button
                     disabled={!hasCheckedIn || hasCheckedOut || isVerifyingLocation}
                     onClick={() => openCamera('START_BREAK')}
-                    className={`w-full py-3.5 px-4 rounded-xl font-black text-xs tracking-wider transition-all duration-200 cursor-pointer ${hasCheckedIn && !hasCheckedOut ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-md active:scale-[0.98]' : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'}`}
+                    className={`w-full py-3.5 px-4 rounded-xl font-black text-xs tracking-wider transition-all duration-200 ${hasCheckedIn && !hasCheckedOut ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-md active:scale-[0.98] cursor-pointer' : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'}`}
                   >
                     Ambil Absen Istirahat (Mulai Timer)
                   </button>
