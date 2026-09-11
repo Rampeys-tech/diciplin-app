@@ -922,7 +922,7 @@ export default function BreakSystem() {
 
       let violQuery = supabase
         .from('operational_violations')
-        .select('id, crew_id, violation_type, notes, penalty_points, evidence_image_url, created_at, outlet_id')
+        .select('*')
         .gte('created_at', startIso)
         .lte('created_at', endIso);
 
@@ -960,6 +960,7 @@ export default function BreakSystem() {
           pViols.forEach(v => {
             const vType = (v.violation_type || '').toLowerCase();
             const dateStr = new Date(v.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+            const evidenceUrl = v.evidence_image_url || null;
 
             if (vType.includes('mangkir') || vType.includes('alfa') || vType.includes('tanpa keterangan')) {
               mangkirCount++;
@@ -967,7 +968,7 @@ export default function BreakSystem() {
                 type: 'Mangkir / Alfa (-25 Pts)',
                 date: dateStr,
                 note: v.notes,
-                evidence: v.evidence_image_url,
+                evidence: evidenceUrl,
                 badge: 'bg-rose-100 text-rose-800 border-rose-200'
               });
             } else if (vType.includes('sakit')) {
@@ -976,7 +977,7 @@ export default function BreakSystem() {
                 type: 'Sakit',
                 date: dateStr,
                 note: v.notes,
-                evidence: v.evidence_image_url,
+                evidence: evidenceUrl,
                 badge: 'bg-amber-100 text-amber-800 border-amber-200'
               });
             } else if (vType.includes('izin')) {
@@ -985,7 +986,7 @@ export default function BreakSystem() {
                 type: 'Izin Resmi',
                 date: dateStr,
                 note: v.notes,
-                evidence: v.evidence_image_url,
+                evidence: evidenceUrl,
                 badge: 'bg-blue-100 text-blue-800 border-blue-200'
               });
             } else if (vType.includes('cuti')) {
@@ -994,7 +995,7 @@ export default function BreakSystem() {
                 type: 'Cuti Tahunan',
                 date: dateStr,
                 note: v.notes,
-                evidence: v.evidence_image_url,
+                evidence: evidenceUrl,
                 badge: 'bg-emerald-100 text-emerald-800 border-emerald-200'
               });
             }
@@ -1415,6 +1416,18 @@ export default function BreakSystem() {
             const deduction = v.penalty_points ? Number(v.penalty_points) : 0;
             totalDeduction += deduction;
             const vDate = new Date(v.created_at);
+
+            // Cek bukti foto dari kolom ataupun dari catatan fallback
+            let resolvedEvidence = v.evidence_image_url || null;
+            let displayNotes = v.notes || '';
+            if (!resolvedEvidence && displayNotes.includes('[Foto Bukti:')) {
+              const matched = displayNotes.match(/\[Foto Bukti:\s*([^\]]+)\]/);
+              if (matched && matched[1]) {
+                resolvedEvidence = matched[1].trim();
+                displayNotes = displayNotes.replace(/\[Foto Bukti:\s*[^\]]+\]/, '').trim();
+              }
+            }
+
             userInfractionHistory.push({
               id: v.id,
               type: v.violation_type || 'Catatan Operasional',
@@ -1422,8 +1435,8 @@ export default function BreakSystem() {
               detail: deduction > 0 ? `Pengurangan (-${deduction} Poin)` : 'Izin Resmi / Tidak Ada Pengurangan Poin',
               date: vDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' }),
               time: `${vDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
-              note: v.notes,
-              evidence_image_url: v.evidence_image_url || null
+              note: displayNotes,
+              evidence_image_url: resolvedEvidence
             });
           });
 
@@ -1627,6 +1640,7 @@ export default function BreakSystem() {
     }
   };
 
+  // ================= PERBAIKAN: SUBMIT LAPORAN INDISIPLINER DENGAN AUTO FALLBACK =================
   const handleSubmitOperationalViolation = async (e) => {
     e.preventDefault();
     if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
@@ -1641,7 +1655,7 @@ export default function BreakSystem() {
     try {
       const deduction = parseInt(reportPenaltyPoints) || 0;
 
-      const { error: insErr } = await supabase.from('operational_violations').insert({
+      const violationPayload = {
         crew_id: reportTargetCrewId,
         reported_by: user?.id,
         reporter_name: profile?.full_name || 'Supervisor/QC',
@@ -1651,7 +1665,20 @@ export default function BreakSystem() {
         penalty_points: deduction,
         evidence_image_url: reportEvidenceImage,
         outlet_id: profile?.outlet_id || null
-      });
+      };
+
+      let { error: insErr } = await supabase.from('operational_violations').insert(violationPayload);
+
+      // JIKA KOLOM evidence_image_url BELUM ADA DI TABEL SUPABASE, SISTEM MENGGUNAKAN FALLBACK OTOMATIS
+      if (insErr && (insErr.message?.includes('evidence_image_url') || insErr.details?.includes('evidence_image_url'))) {
+        const fallbackPayload = { ...violationPayload };
+        delete fallbackPayload.evidence_image_url;
+        if (reportEvidenceImage) {
+          fallbackPayload.notes = `${fallbackPayload.notes} [Foto Bukti: ${reportEvidenceImage}]`;
+        }
+        const fallbackRes = await supabase.from('operational_violations').insert(fallbackPayload);
+        insErr = fallbackRes.error;
+      }
 
       if (insErr) throw insErr;
 
