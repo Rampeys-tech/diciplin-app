@@ -204,6 +204,9 @@ export default function BreakSystem() {
   const [appealReason, setAppealReason] = useState('');
   const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
 
+  // State Modal Fullscreen Image Preview
+  const [previewFullImage, setPreviewFullImage] = useState(null);
+
   // Role Checker
   const roleLower = (profile?.role || '').toLowerCase();
   const placementLower = (profile?.station_placement || '').toLowerCase();
@@ -225,13 +228,16 @@ export default function BreakSystem() {
     nameLower.includes('owner')
   );
 
+  // 1. Crew dengan status CEL diizinkan untuk report pelanggaran
   const canReportViolation = Boolean(
     isManager || 
     roleLower === 'quality_control' || 
     roleLower === 'stocker' || 
+    roleLower === 'cel' ||
     placementLower.includes('quality control') || 
     placementLower.includes('qc') || 
-    placementLower.includes('stocker')
+    placementLower.includes('stocker') ||
+    placementLower.includes('cel')
   );
 
   // ================= STATE LEADERBOARD & INDISIPLINER =================
@@ -247,8 +253,9 @@ export default function BreakSystem() {
   const [selectedInfractionCategory, setSelectedInfractionCategory] = useState('late');
   const [selectedStationFilter, setSelectedStationFilter] = useState('ALL');
 
-  const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
-  const [managerInfractionRankings, setManagerInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topSoc: [] });
+  // Pisahkan topMangkir secara independen dari topSoc
+  const [crewInfractionRankings, setCrewInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topMangkir: [], topSoc: [] });
+  const [managerInfractionRankings, setManagerInfractionRankings] = useState({ topLate: [], topOverbreak: [], topGhosting: [], topMangkir: [], topSoc: [] });
   const [selectedCrewInfractionDetail, setSelectedCrewInfractionDetail] = useState(null);
   const [showInfractionModal, setShowInfractionModal] = useState(false);
 
@@ -258,6 +265,7 @@ export default function BreakSystem() {
   const [reportViolationType, setReportViolationType] = useState('Pelanggaran SOC');
   const [reportNotes, setReportNotes] = useState('');
   const [reportPenaltyPoints, setReportPenaltyPoints] = useState('5');
+  const [reportIncidentDate, setReportIncidentDate] = useState(() => new Date().toISOString().substring(0, 10));
   const [reportEvidenceImage, setReportEvidenceImage] = useState(null);
   const [isUploadingEvidence, setIsUploadingEvidence] = useState(false);
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
@@ -308,7 +316,6 @@ export default function BreakSystem() {
   const localStreamRef = useRef(null);
   const animationFrameRef = useRef(null);
 
-  // Logout Handler yang Benar-Benar Membersihkan Sesi
   const handleLogout = async () => {
     try {
       await supabase.auth.signOut();
@@ -959,7 +966,7 @@ export default function BreakSystem() {
 
           pViols.forEach(v => {
             const vType = (v.violation_type || '').toLowerCase();
-            const dateStr = new Date(v.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+            const dateStr = new Date(v.incident_date || v.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
             const evidenceUrl = v.evidence_image_url || null;
 
             if (vType.includes('mangkir') || vType.includes('alfa') || vType.includes('tanpa keterangan')) {
@@ -1148,7 +1155,7 @@ export default function BreakSystem() {
                 <tr>
                   <th style="width: 40px;">No</th>
                   <th>Keterangan / Status</th>
-                  <th>Tanggal</th>
+                  <th>Tanggal Kejadian</th>
                   <th>Catatan / Alasan</th>
                 </tr>
               </thead>
@@ -1178,7 +1185,7 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= REKAP LEADERBOARD =================
+  // ================= REKAP LEADERBOARD & INDISIPLINER =================
   const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
     try {
@@ -1250,6 +1257,7 @@ export default function BreakSystem() {
         const lateRankingList = [];
         const overbreakRankingList = [];
         const ghostingRankingList = [];
+        const mangkirRankingList = [];
         const socRankingList = [];
 
         const leaderboardArray = profileList.map(person => {
@@ -1258,6 +1266,7 @@ export default function BreakSystem() {
           let overBreakCount = 0;
           let totalOverBreakMinutes = 0;
           let ghostingCount = 0;
+          let mangkirCount = 0;
           let socCount = 0;
           let totalDeduction = 0;
           const userInfractionHistory = [];
@@ -1402,22 +1411,35 @@ export default function BreakSystem() {
             }
           });
 
+          // Filter pelanggaran operasional per bulan
           const personViolations = (violations || []).filter(v => {
             if (v.crew_id !== person.id) return false;
-            if (!v.created_at) return true;
-            return v.created_at.substring(0, 7) === selectedMonth;
+            const refDate = v.incident_date || v.created_at;
+            if (!refDate) return true;
+            return refDate.substring(0, 7) === selectedMonth;
           });
 
           personViolations.forEach(v => {
-            const vDateStr = v.created_at ? v.created_at.substring(0, 10) : '';
+            const vDateRaw = v.incident_date || v.created_at;
+            const vDateStr = vDateRaw ? vDateRaw.substring(0, 10) : '';
             if (vDateStr) datesWithInfractions.add(vDateStr);
 
-            socCount += 1;
+            const vTypeLower = (v.violation_type || '').toLowerCase();
+            const isMangkirType = vTypeLower.includes('mangkir') || vTypeLower.includes('alfa') || vTypeLower.includes('tanpa keterangan');
+
+            if (isMangkirType) {
+              mangkirCount += 1;
+            } else {
+              socCount += 1;
+            }
+
             const deduction = v.penalty_points ? Number(v.penalty_points) : 0;
             totalDeduction += deduction;
-            const vDate = new Date(v.created_at);
+            
+            // Format tanggal kejadian tindakan (Point 2)
+            const eventDateObj = new Date(v.incident_date ? `${v.incident_date}T00:00:00` : v.created_at);
+            const formattedEventDate = eventDateObj.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 
-            // Cek bukti foto dari kolom ataupun dari catatan fallback
             let resolvedEvidence = v.evidence_image_url || null;
             let displayNotes = v.notes || '';
             if (!resolvedEvidence && displayNotes.includes('[Foto Bukti:')) {
@@ -1431,10 +1453,13 @@ export default function BreakSystem() {
             userInfractionHistory.push({
               id: v.id,
               type: v.violation_type || 'Catatan Operasional',
-              badgeColor: deduction > 0 ? 'bg-orange-100 text-orange-800 border-orange-200' : 'bg-blue-100 text-blue-800 border-blue-200',
+              badgeColor: isMangkirType 
+                ? 'bg-rose-100 text-rose-800 border-rose-200' 
+                : (deduction > 0 ? 'bg-orange-100 text-orange-800 border-orange-200' : 'bg-blue-100 text-blue-800 border-blue-200'),
               detail: deduction > 0 ? `Pengurangan (-${deduction} Poin)` : 'Izin Resmi / Tidak Ada Pengurangan Poin',
-              date: vDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' }),
-              time: `${vDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA`,
+              date: formattedEventDate,
+              time: v.created_at ? `${new Date(v.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA` : '',
+              incident_date: v.incident_date || null,
               note: displayNotes,
               evidence_image_url: resolvedEvidence
             });
@@ -1494,6 +1519,23 @@ export default function BreakSystem() {
             });
           }
 
+          // 4. Pisahkan list mangkir
+          if (mangkirCount > 0) {
+            mangkirRankingList.push({
+              id: person.id,
+              name: person.full_name,
+              avatar: person.avatar,
+              role: personStation,
+              station: personStation,
+              count: mangkirCount,
+              totalMinutes: 0,
+              history: userInfractionHistory.filter(h => {
+                const t = (h.type || '').toLowerCase();
+                return t.includes('mangkir') || t.includes('alfa');
+              })
+            });
+          }
+
           if (socCount > 0) {
             socRankingList.push({
               id: person.id,
@@ -1503,7 +1545,10 @@ export default function BreakSystem() {
               station: personStation,
               count: socCount,
               totalMinutes: 0,
-              history: userInfractionHistory.filter(h => !h.type.includes('Terlambat') && !h.type.includes('Overbreak') && !h.type.includes('Ghosting'))
+              history: userInfractionHistory.filter(h => {
+                const t = (h.type || '').toLowerCase();
+                return !t.includes('terlambat') && !t.includes('overbreak') && !t.includes('ghosting') && !t.includes('mangkir') && !t.includes('alfa');
+              })
             });
           }
 
@@ -1511,7 +1556,8 @@ export default function BreakSystem() {
           if (lateCount > 0) reasons.push(`${lateCount}x Telat (${totalLateMinutes}m)`);
           if (overBreakCount > 0) reasons.push(`${overBreakCount}x Overbreak (${totalOverBreakMinutes}m)`);
           if (ghostingCount > 0) reasons.push(`${ghostingCount}x Ghosting`);
-          if (socCount > 0) reasons.push(`${socCount}x Unprosedural/Mangkir`);
+          if (mangkirCount > 0) reasons.push(`${mangkirCount}x Mangkir`);
+          if (socCount > 0) reasons.push(`${socCount}x SOC/Lainnya`);
 
           let statusDescription = '';
           const hasRealInfractions = reasons.length > 0;
@@ -1542,6 +1588,7 @@ export default function BreakSystem() {
             topLate: lateRankingList.sort((a, b) => b.totalMinutes - a.totalMinutes || b.count - a.count),
             topOverbreak: overbreakRankingList.sort((a, b) => b.totalMinutes - a.totalMinutes || b.count - a.count),
             topGhosting: ghostingRankingList.sort((a, b) => b.count - a.count),
+            topMangkir: mangkirRankingList.sort((a, b) => b.count - a.count),
             topSoc: socRankingList.sort((a, b) => b.count - a.count)
           }
         };
@@ -1640,10 +1687,11 @@ export default function BreakSystem() {
     }
   };
 
-  // ================= PERBAIKAN: SUBMIT LAPORAN INDISIPLINER DENGAN AUTO FALLBACK =================
+  // 2. SUBMIT LAPORAN DENGAN TANGGAL KEJADIAN TINDAKAN
   const handleSubmitOperationalViolation = async (e) => {
     e.preventDefault();
     if (!reportTargetCrewId) return alert("Pilih kru yang bersangkutan.");
+    if (!reportIncidentDate) return alert("Pilih tanggal kejadian tindakan tersebut.");
     if (!reportNotes.trim()) return alert("Tuliskan deskripsi/catatan kejadian.");
 
     const isNonDisciplinary = ['Sakit', 'Izin', 'Cuti'].includes(reportViolationType);
@@ -1658,9 +1706,10 @@ export default function BreakSystem() {
       const violationPayload = {
         crew_id: reportTargetCrewId,
         reported_by: user?.id,
-        reporter_name: profile?.full_name || 'Supervisor/QC',
-        reporter_role: profile?.station_placement || profile?.role || 'Quality Control',
+        reporter_name: profile?.full_name || 'Supervisor/QC/CEL',
+        reporter_role: profile?.station_placement || profile?.role || 'QC/CEL',
         violation_type: reportViolationType,
+        incident_date: reportIncidentDate,
         notes: reportNotes.trim(),
         penalty_points: deduction,
         evidence_image_url: reportEvidenceImage,
@@ -1669,13 +1718,26 @@ export default function BreakSystem() {
 
       let { error: insErr } = await supabase.from('operational_violations').insert(violationPayload);
 
-      // JIKA KOLOM evidence_image_url BELUM ADA DI TABEL SUPABASE, SISTEM MENGGUNAKAN FALLBACK OTOMATIS
-      if (insErr && (insErr.message?.includes('evidence_image_url') || insErr.details?.includes('evidence_image_url'))) {
+      // Fallback jika kolom incident_date atau evidence_image_url belum tersedia di Supabase schema
+      if (insErr && (
+        insErr.message?.includes('incident_date') || 
+        insErr.details?.includes('incident_date') ||
+        insErr.message?.includes('evidence_image_url') || 
+        insErr.details?.includes('evidence_image_url')
+      )) {
         const fallbackPayload = { ...violationPayload };
+        delete fallbackPayload.incident_date;
         delete fallbackPayload.evidence_image_url;
-        if (reportEvidenceImage) {
-          fallbackPayload.notes = `${fallbackPayload.notes} [Foto Bukti: ${reportEvidenceImage}]`;
+
+        let appendedNotes = fallbackPayload.notes;
+        if (reportIncidentDate) {
+          appendedNotes = `[Tgl Kejadian: ${reportIncidentDate}] ` + appendedNotes;
         }
+        if (reportEvidenceImage) {
+          appendedNotes = `${appendedNotes} [Foto Bukti: ${reportEvidenceImage}]`;
+        }
+        fallbackPayload.notes = appendedNotes;
+
         const fallbackRes = await supabase.from('operational_violations').insert(fallbackPayload);
         insErr = fallbackRes.error;
       }
@@ -1696,13 +1758,14 @@ export default function BreakSystem() {
           .eq('id', reportTargetCrewId);
       }
 
-      alert("✓ Laporan berhasil disimpan dan masuk ke rekap kedisiplinan kru!");
+      alert("✓ Laporan indisipliner berhasil disimpan dan tercatat di riwayat kru!");
       setShowReportViolationModal(false);
       setReportNotes('');
       setReportTargetCrewId('');
       setReportEvidenceImage(null);
       setReportViolationType('Pelanggaran SOC');
       setReportPenaltyPoints('5');
+      setReportIncidentDate(new Date().toISOString().substring(0, 10));
       fetchLeaderboard();
       fetchAttendanceStatus();
       if (logSubTab === 'cutoff_attendance') fetchCutoffAttendance();
@@ -2842,6 +2905,7 @@ export default function BreakSystem() {
     .sort((a, b) => a.points - b.points);
 
   const filterByStation = (list) => {
+    if (!list) return [];
     if (selectedStationFilter === 'ALL') return list;
     return list.filter(item => {
       const st = (item.station || item.role || '').toLowerCase();
@@ -2852,6 +2916,7 @@ export default function BreakSystem() {
   const currentFilteredLate = filterByStation(activeInfractionRanking.topLate);
   const currentFilteredOverbreak = filterByStation(activeInfractionRanking.topOverbreak);
   const currentFilteredGhosting = filterByStation(activeInfractionRanking.topGhosting);
+  const currentFilteredMangkir = filterByStation(activeInfractionRanking.topMangkir);
   const currentFilteredSoc = filterByStation(activeInfractionRanking.topSoc);
 
   if (viewMode === 'area') {
@@ -2915,7 +2980,7 @@ export default function BreakSystem() {
 
       <div className="w-full max-w-md bg-[#F8FAFC] min-h-screen flex flex-col relative pb-20">
         
-        {/* ================= HEADER APLIKASI UTAMA (Logout Bersih) ================= */}
+        {/* ================= HEADER APLIKASI UTAMA ================= */}
         <div className="sticky top-0 w-full bg-white px-4 py-3 border-b border-slate-100 flex items-center justify-between z-30 shadow-2xs">
           <div className="flex items-center gap-2">
             <img 
@@ -2947,7 +3012,6 @@ export default function BreakSystem() {
               </button>
             )}
 
-            {/* Tombol Keluar: Menghapus sesi dan pindah ke /login */}
             <button 
               onClick={handleLogout} 
               className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
@@ -2957,7 +3021,7 @@ export default function BreakSystem() {
           </div>
         </div>
 
-        {/* ================= RESTO SELECTOR DROPDOWN (HANYA AREA MANAGER) ================= */}
+        {/* RESTO SELECTOR DROPDOWN (AREA MANAGER) */}
         {isAreaManager && (
           <div className="px-4 pt-3 pb-1">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between">
@@ -3156,7 +3220,7 @@ export default function BreakSystem() {
               </div>
             </div>
 
-            {/* MANAGER CONTROL PANEL */}
+            {/* MANAGER / QC / CEL CONTROL PANEL */}
             {(isManager || canReportViolation) && (
               <div className="space-y-3">
                 {isManager && (
@@ -3217,7 +3281,7 @@ export default function BreakSystem() {
                       </div>
                       <div>
                         <h3 className="text-xs font-black uppercase tracking-wider">Input Indisipliner & Absensi</h3>
-                        <p className="text-[9px] text-slate-400">Catat pelanggaran SOC, mangkir (-25 Poin), sakit, atau cuti.</p>
+                        <p className="text-[9px] text-slate-400">Tersedia untuk Atasan, QC, Stocker, dan CEL.</p>
                       </div>
                     </div>
 
@@ -3464,7 +3528,7 @@ export default function BreakSystem() {
           </div>
         )}
 
-        {/* ================= TAB 3: LEADERBOARD & REKAP INDISIPLINER (Modern Top 1 Podium & PDF) ================= */}
+        {/* ================= TAB 3: LEADERBOARD & REKAP INDISIPLINER ================= */}
         {activeTab === 'leaderboard' && (
           <div className="flex-1 px-4 py-4 space-y-4">
             <div className="flex items-center justify-between">
@@ -3478,7 +3542,6 @@ export default function BreakSystem() {
               </div>
 
               <div className="flex items-center gap-1.5">
-                {/* Tombol Download PDF Rekapan Bulanan */}
                 <button
                   onClick={handleExportMonthlyPdf}
                   className="flex items-center gap-1 bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-black px-2.5 py-1.5 rounded-xl uppercase tracking-wider transition-all active:scale-95 shadow-xs cursor-pointer"
@@ -3537,7 +3600,7 @@ export default function BreakSystem() {
             ) : activeSubTabLeaderboard === 'ranking' ? (
               <div className="space-y-4">
 
-                {/* PODIUM MODERN CREW TERBAIK (TOP 1) */}
+                {/* PODIUM TOP 1 */}
                 {topTierList.length > 0 && (
                   <div 
                     onClick={() => openInfractionDetailModal(topTierList[0])}
@@ -3650,36 +3713,45 @@ export default function BreakSystem() {
               </div>
             ) : (
               <div className="space-y-3.5">
-                <div className="grid grid-cols-4 gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
+                {/* 4. Filter Kategori: Mangkir dipisahkan secara independen */}
+                <div className="grid grid-cols-5 gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/70">
                   <button
                     onClick={() => setSelectedInfractionCategory('late')}
-                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'late' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    className={`py-2 px-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'late' ? 'bg-amber-500 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>Terlambat</span>
+                    <span>Telat</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topLate.length})</span>
                   </button>
 
                   <button
                     onClick={() => setSelectedInfractionCategory('overbreak')}
-                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'overbreak' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    className={`py-2 px-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'overbreak' ? 'bg-rose-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>Overbreak</span>
+                    <span>Over</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topOverbreak.length})</span>
                   </button>
 
                   <button
                     onClick={() => setSelectedInfractionCategory('ghosting')}
-                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'ghosting' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    className={`py-2 px-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'ghosting' ? 'bg-red-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>Ghosting</span>
+                    <span>Ghost</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topGhosting.length})</span>
                   </button>
 
                   <button
-                    onClick={() => setSelectedInfractionCategory('soc')}
-                    className={`py-2 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'soc' ? 'bg-orange-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                    onClick={() => setSelectedInfractionCategory('mangkir')}
+                    className={`py-2 px-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'mangkir' ? 'bg-rose-700 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
                   >
-                    <span>SOC/Mangkir</span>
+                    <span>Mangkir</span>
+                    <span className="text-[8px] opacity-90">({activeInfractionRanking.topMangkir.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setSelectedInfractionCategory('soc')}
+                    className={`py-2 px-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-0.5 ${selectedInfractionCategory === 'soc' ? 'bg-orange-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200'}`}
+                  >
+                    <span>SOC</span>
                     <span className="text-[8px] opacity-90">({activeInfractionRanking.topSoc.length})</span>
                   </button>
                 </div>
@@ -3702,6 +3774,7 @@ export default function BreakSystem() {
                   </select>
                 </div>
 
+                {/* LIST TELAT */}
                 {selectedInfractionCategory === 'late' && (
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
@@ -3741,6 +3814,7 @@ export default function BreakSystem() {
                   </div>
                 )}
 
+                {/* LIST OVERBREAK */}
                 {selectedInfractionCategory === 'overbreak' && (
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
@@ -3780,6 +3854,7 @@ export default function BreakSystem() {
                   </div>
                 )}
 
+                {/* LIST GHOSTING */}
                 {selectedInfractionCategory === 'ghosting' && (
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
@@ -3819,11 +3894,57 @@ export default function BreakSystem() {
                   </div>
                 )}
 
+                {/* 4. LIST MANGKIR TERPISAH (Bisa melihat total kru mangkir dalam 1 bulan) */}
+                {selectedInfractionCategory === 'mangkir' && (
+                  <div className="space-y-2 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between px-1">
+                      <div>
+                        <p className="text-[10px] font-black text-rose-800 uppercase tracking-widest flex items-center gap-1.5">
+                          <FiAlertCircle className="text-rose-600 text-xs" /> Total Kru Mangkir / Alfa
+                        </p>
+                        <p className="text-[9px] text-slate-400 font-semibold">
+                          Total bulan ini: <span className="font-black text-rose-600">{currentFilteredMangkir.length} Orang</span>
+                        </p>
+                      </div>
+                      <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
+                    </div>
+
+                    <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
+                      {currentFilteredMangkir.length === 0 ? (
+                        <div className="p-6 text-center text-xs font-semibold text-slate-400">
+                          Nihil crew mangkir pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). Luar biasa disiplin! 🌟
+                        </div>
+                      ) : (
+                        currentFilteredMangkir.map((c, idx) => (
+                          <div 
+                            key={c.id} 
+                            onClick={() => openInfractionDetailModal(c)}
+                            className="p-3.5 flex items-center justify-between hover:bg-rose-50/40 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center space-x-3">
+                              <span className="font-mono text-xs font-black text-rose-600 w-4">{idx + 1}.</span>
+                              <UserAvatar src={c.avatar} name={c.name} />
+                              <div>
+                                <span className="text-xs font-bold text-slate-900 block">{c.name}</span>
+                                <span className="text-[9px] text-slate-400 font-bold uppercase">{c.role}</span>
+                              </div>
+                            </div>
+                            <span className="bg-rose-100 text-rose-800 text-xs font-black px-2.5 py-1 rounded-xl border border-rose-200">
+                              {c.count}x Mangkir (-{c.count * 25} Pts)
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* LIST SOC / PELANGGARAN KERJA */}
                 {selectedInfractionCategory === 'soc' && (
                   <div className="space-y-2 animate-in fade-in duration-200">
                     <div className="flex items-center justify-between px-1">
                       <p className="text-[10px] font-black text-orange-800 uppercase tracking-widest flex items-center gap-1.5">
-                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOC & Mangkir
+                        <FiFileText className="text-orange-600 text-xs" /> Pelanggaran SOP & Kebersihan (SOC)
                       </p>
                       <span className="text-[8px] font-bold text-slate-400">Klik nama untuk detail</span>
                     </div>
@@ -3831,7 +3952,7 @@ export default function BreakSystem() {
                     <div className="bg-white border border-slate-200/70 rounded-2xl divide-y divide-slate-100 shadow-xs overflow-hidden">
                       {currentFilteredSoc.length === 0 ? (
                         <div className="p-6 text-center text-xs font-semibold text-slate-400">
-                          Nihil pelanggaran operasional pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
+                          Nihil pelanggaran SOC pada {selectedStationFilter === 'ALL' ? 'semua station' : selectedStationFilter} ({selectedMonth}). 🌟
                         </div>
                       ) : (
                         currentFilteredSoc.map((c, idx) => (
@@ -3970,8 +4091,9 @@ export default function BreakSystem() {
                         <span className={`text-[8px] font-black px-2 py-0.5 rounded-md border uppercase ${inf.badgeColor}`}>
                           {inf.type}
                         </span>
+                        {/* 2. Menampilkan tanggal kejadian tindakan */}
                         <span className="text-[9px] font-mono font-bold text-slate-500">
-                          {inf.date} • {inf.time}
+                          {inf.date} {inf.time ? `• ${inf.time}` : ''}
                         </span>
                       </div>
                       <p className="text-xs font-extrabold text-slate-900">{inf.detail}</p>
@@ -3981,16 +4103,28 @@ export default function BreakSystem() {
                         </p>
                       )}
 
+                      {/* 3. Foto di catatan history indisipliner bisa diklik / dilihat full */}
                       {inf.evidence_image_url && (
                         <div className="space-y-1 pt-1">
-                          <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Foto Bukti Dokumentasi:</span>
-                          <img 
-                            src={inf.evidence_image_url} 
-                            alt="Bukti Pelanggaran" 
-                            loading="lazy" 
-                            decoding="async" 
-                            className="w-full aspect-video rounded-xl object-cover border border-slate-200 shadow-xs" 
-                          />
+                          <div className="flex justify-between items-center">
+                            <span className="text-[8px] font-black uppercase text-slate-400 tracking-wider block">Foto Bukti Dokumentasi:</span>
+                            <span className="text-[8px] font-bold text-indigo-600">Klik untuk lihat penuh</span>
+                          </div>
+                          <div 
+                            onClick={() => setPreviewFullImage(inf.evidence_image_url)}
+                            className="relative group cursor-pointer overflow-hidden rounded-xl border border-slate-200 shadow-xs"
+                          >
+                            <img 
+                              src={inf.evidence_image_url} 
+                              alt="Bukti Pelanggaran" 
+                              loading="lazy" 
+                              decoding="async" 
+                              className="w-full aspect-video object-cover transition-transform group-hover:scale-105" 
+                            />
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-black transition-opacity">
+                              Perbesar Foto
+                            </div>
+                          </div>
                         </div>
                       )}
 
@@ -4023,6 +4157,29 @@ export default function BreakSystem() {
               </div>
 
             </div>
+          </div>
+        )}
+
+        {/* ================= MODAL FULL SCREEN PREVIEW FOTO ================= */}
+        {previewFullImage && (
+          <div 
+            onClick={() => setPreviewFullImage(null)}
+            className="fixed inset-0 bg-black/95 z-[60] flex flex-col items-center justify-center p-4 animate-in fade-in duration-200"
+          >
+            <div className="w-full max-w-md flex justify-between items-center text-white mb-3">
+              <span className="text-xs font-black uppercase tracking-wider">Foto Bukti Penuh</span>
+              <button 
+                onClick={() => setPreviewFullImage(null)}
+                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-full transition-colors cursor-pointer"
+              >
+                <FiX className="text-base" />
+              </button>
+            </div>
+            <img 
+              src={previewFullImage} 
+              alt="Full Preview" 
+              className="max-w-full max-h-[80vh] object-contain rounded-2xl border border-white/10 shadow-2xl" 
+            />
           </div>
         )}
 
@@ -4136,7 +4293,13 @@ export default function BreakSystem() {
                       {rec.evidence && (
                         <div className="space-y-1 pt-0.5">
                           <span className="text-[8px] font-black uppercase text-slate-400">Foto Surat / Dokumentasi:</span>
-                          <img src={rec.evidence} alt="Bukti" loading="lazy" className="w-full aspect-video rounded-xl object-cover border border-slate-200 shadow-xs" />
+                          <img 
+                            src={rec.evidence} 
+                            alt="Bukti" 
+                            loading="lazy" 
+                            onClick={() => setPreviewFullImage(rec.evidence)}
+                            className="w-full aspect-video rounded-xl object-cover border border-slate-200 shadow-xs cursor-pointer" 
+                          />
                         </div>
                       )}
                     </div>
@@ -4196,6 +4359,20 @@ export default function BreakSystem() {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                {/* 2. TANGGAL KEJADIAN TINDAKAN */}
+                <div className="space-y-1">
+                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                    <FiCalendar className="text-orange-600" /> Tanggal Kejadian Tindakan
+                  </label>
+                  <input
+                    type="date"
+                    value={reportIncidentDate}
+                    onChange={(e) => setReportIncidentDate(e.target.value)}
+                    required
+                    className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl px-3 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500 cursor-pointer"
+                  />
                 </div>
 
                 {/* JENIS KETERANGAN */}
@@ -4329,7 +4506,6 @@ export default function BreakSystem() {
 
             {logSubTab === 'cutoff_attendance' ? (
               <div className="space-y-3">
-                {/* FILTER RENTANG TANGGAL FLEKSIBEL */}
                 <div className="bg-white border border-slate-200/80 rounded-2xl p-3.5 shadow-2xs space-y-2.5">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                     <span className="text-[10px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1">
@@ -4404,7 +4580,6 @@ export default function BreakSystem() {
                           </div>
                           <span className="text-[9px] text-indigo-600 font-black uppercase block pl-4">{item.role}</span>
                           
-                          {/* INDIKATOR ALFA, SAKIT, IZIN, CUTI */}
                           <div className="flex items-center gap-1 text-[8px] font-bold pl-4 pt-0.5">
                             <span className={`px-1.5 py-0.2 rounded border ${item.mangkir > 0 ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
                               A: {item.mangkir}
@@ -4555,7 +4730,10 @@ export default function BreakSystem() {
                               </span>
                             </div>
                             {log.image_url ? (
-                              <div className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100">
+                              <div 
+                                onClick={() => setPreviewFullImage(log.image_url)}
+                                className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100 cursor-pointer"
+                              >
                                 <img 
                                   src={log.image_url} 
                                   loading="lazy" 
@@ -4577,7 +4755,10 @@ export default function BreakSystem() {
                               </span>
                             </div>
                             {log.after_break_image_url ? (
-                              <div className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100">
+                              <div 
+                                onClick={() => setPreviewFullImage(log.after_break_image_url)}
+                                className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100 cursor-pointer"
+                              >
                                 <img 
                                   src={log.after_break_image_url} 
                                   loading="lazy" 
@@ -4852,9 +5033,9 @@ export default function BreakSystem() {
                 <button 
                   type="button" 
                   onClick={() => setShowShiftPicker(false)} 
-                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-black py-3 rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  Batal
+                  <FiX className="text-sm" /> Batal
                 </button>
               </div>
 
