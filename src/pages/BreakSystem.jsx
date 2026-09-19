@@ -1920,13 +1920,17 @@ if (!isAreaManager && currentOutletId) {
         .from('user_profiles')
         .select('id, full_name, station_placement, role, outlet_id');
 
-      if (!isAreaManager && profile?.outlet_id) {
-        logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
-        profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
-        logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
-        profQuery = profQuery.eq('outlet_id', selectedBranchId);
-      }
+      // Tentukan target outlet:
+   // Jika Manager memilih resto di dropdown, gunakan selectedBranchId
+   // Jika Kru biasa, gunakan outlet_id dari akunnya
+   const targetOutlet = isManager
+     ? (selectedBranchId !== 'ALL' ? selectedBranchId : null)
+     : (profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id);
+
+   if (targetOutlet) {
+     logsQuery = logsQuery.eq('outlet_id', targetOutlet);
+     profQuery = profQuery.eq('outlet_id', targetOutlet);
+   }
 
       const [{ data: logs, error: lError }, { data: profiles, error: pError }] = await Promise.all([
         logsQuery,
@@ -2251,12 +2255,13 @@ if (!isAreaManager && currentOutletId) {
         fetchAttendanceSummaryList();
       } else if (logSubTab === 'cutoff_attendance') {
         fetchCutoffAttendance();
-      } else if (!isLogsFetchedRef.current) {
-        setLogsPage(0);
-        setHasMoreLogs(true);
-        fetchAllCrewLogs(false, 0);
-        isLogsFetchedRef.current = true;
-      }
+      } else {
+     setAllCrewLogs([]);
+     setManagerCrewLogs([]);
+     setLogsPage(0);
+     setHasMoreLogs(true);
+     fetchAllCrewLogs(false, 0);
+   }
     } else if (activeTab === 'profile' && profile) {
       setEditName(profile.full_name || '');
       setEditPhone(profile.whatsapp_number || '');
@@ -3003,7 +3008,7 @@ if (!isAreaManager && currentOutletId) {
           </div>
           
           <div className="flex items-center gap-1.5">
-            {isAreaManager && (
+            {isManager && (
               <button
                 onClick={() => setViewMode('area')}
                 className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
@@ -3033,7 +3038,12 @@ if (!isAreaManager && currentOutletId) {
               </div>
               <select
                 value={selectedBranchId}
-                onChange={(e) => setSelectedBranchId(e.target.value)}
+                onChange={(e) => {
+  setSelectedBranchId(e.target.value);
+  setAllCrewLogs([]);
+  setManagerCrewLogs([]);
+  setLogsPage(0);
+}}
                 className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer max-w-[200px]"
               >
                 <option value="ALL">Semua Resto (Gabungan)</option>

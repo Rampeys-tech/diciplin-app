@@ -197,16 +197,17 @@ export default function Login() {
 
       // 3. Simpan data kru baru ke user_profiles (tanpa kolom is_active)
       const { error: insertError } = await supabase
-        .from('user_profiles')
-        .insert([
-          {
-            full_name: regFullName.trim(),
-            whatsapp_number: cleanPhone,
-            password: regPassword.trim(),
-            outlet_id: outletData.id,
-            role: 'kru'
-          }
-        ]);
+  .from('user_profiles')
+  .insert([
+    {
+      full_name: regFullName.trim(),
+      whatsapp_number: cleanPhone,
+      password: regPassword.trim(),
+      outlet_id: outletData.id,
+      company_id: '17377d4d-4a72-4ee8-99d5-65ec8ac0b001', // Tambahkan ini
+      role: 'kru'
+    }
+  ]);
 
       if (insertError) throw insertError;
 
