@@ -195,7 +195,7 @@ export default function Login() {
         cleanPhone = '0' + cleanPhone.substring(2);
       }
 
-      // 3. Simpan data kru baru ke user_profiles dengan relasi ke outlet_id resto tersebut
+      // 3. Simpan data kru baru ke user_profiles (tanpa kolom is_active)
       const { error: insertError } = await supabase
         .from('user_profiles')
         .insert([
@@ -204,8 +204,7 @@ export default function Login() {
             whatsapp_number: cleanPhone,
             password: regPassword.trim(),
             outlet_id: outletData.id,
-            role: 'kru',
-            is_active: true
+            role: 'kru'
           }
         ]);
 
@@ -366,7 +365,7 @@ export default function Login() {
           /* FORM REGISTRASI KRU MANDIRI */
           <form onSubmit={handleRegister} className="space-y-3.5">
             
-            {/* Input Kode Resto (Bersih tanpa hint angka) */}
+            {/* Input Kode Resto */}
             <div className="space-y-1">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">
                 Kode Resto / Cabang

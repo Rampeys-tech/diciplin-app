@@ -493,10 +493,12 @@ export default function BreakSystem() {
         .from('user_profiles')
         .select('id, full_name, station_placement, role, outlet_id, avatar, total_points');
 
-      if (!isAreaManager && profile?.outlet_id) {
-        logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
-        profilesQuery = profilesQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
+      const currentOutletId = profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id;
+
+if (!isAreaManager && currentOutletId) {
+  logsQuery = logsQuery.eq('outlet_id', currentOutletId);
+  profilesQuery = profilesQuery.eq('outlet_id', currentOutletId);
+} else if (isAreaManager && selectedBranchId !== 'ALL') {
         logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
         profilesQuery = profilesQuery.eq('outlet_id', selectedBranchId);
       }
