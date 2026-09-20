@@ -1923,7 +1923,7 @@ if (!isAreaManager && currentOutletId) {
       // Tentukan target outlet:
    // Jika Manager memilih resto di dropdown, gunakan selectedBranchId
    // Jika Kru biasa, gunakan outlet_id dari akunnya
-   const targetOutlet = isManager
+   const targetOutlet = isAreaManager
      ? (selectedBranchId !== 'ALL' ? selectedBranchId : null)
      : (profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id);
 
