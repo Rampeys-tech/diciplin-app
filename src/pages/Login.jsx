@@ -109,7 +109,8 @@ export default function Login() {
           full_name: userProfile.full_name,
           role: userProfile.role,
           station_placement: userProfile.station_placement,
-          outlet_id: userProfile.outlet_id
+          outlet_id: userProfile.outlet_id,
+          company_id: userProfile.company_id
         },
         ...userProfile
       };
@@ -176,7 +177,16 @@ export default function Login() {
         throw new Error(`Kode resto "${cleanOutletCode}" tidak valid. Pastikan kode cabang sudah benar.`);
       }
 
-      // 2. Pastikan nomor WhatsApp belum pernah terdaftar sebelumnya
+      // 2. Ambil valid company_id langsung dari tabel companies agar tidak melanggar foreign key
+      const { data: companyRecord } = await supabase
+        .from('companies')
+        .select('id')
+        .limit(1)
+        .maybeSingle();
+
+      const validCompanyId = companyRecord?.id || null;
+
+      // 3. Pastikan nomor WhatsApp belum pernah terdaftar sebelumnya
       const phoneVars = getPhoneVariations(regPhone.trim());
       const { data: existingUser, error: checkError } = await supabase
         .from('user_profiles')
@@ -195,19 +205,22 @@ export default function Login() {
         cleanPhone = '0' + cleanPhone.substring(2);
       }
 
-      // 3. Simpan data kru baru ke user_profiles (tanpa kolom is_active)
+      // 4. Simpan data kru baru ke user_profiles dengan company_id resmi dari database
+      const insertPayload = {
+        full_name: regFullName.trim(),
+        whatsapp_number: cleanPhone,
+        password: regPassword.trim(),
+        outlet_id: outletData.id,
+        role: 'kru'
+      };
+
+      if (validCompanyId) {
+        insertPayload.company_id = validCompanyId;
+      }
+
       const { error: insertError } = await supabase
-  .from('user_profiles')
-  .insert([
-    {
-      full_name: regFullName.trim(),
-      whatsapp_number: cleanPhone,
-      password: regPassword.trim(),
-      outlet_id: outletData.id,
-      company_id: '17377d4d-4a72-4ee8-99d5-65ec8ac0b001', // Tambahkan ini
-      role: 'kru'
-    }
-  ]);
+        .from('user_profiles')
+        .insert([insertPayload]);
 
       if (insertError) throw insertError;
 
