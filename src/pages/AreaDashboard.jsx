@@ -52,17 +52,38 @@ import {
 const CACP_GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeinsH4vwQ-1K5WMYsOv6dkbg6sOgW_2zMMFtEnutuyxXf2EQ/viewform";
 const OPEX_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1r1MCRJycu8gEjKMfnIl_nVdJvPfAGqOmn7QHbPrO-dY/edit?gid=301774897#gid=301774897";
 
-// DAFTAR KODE RESTO RESMI AREA KALTIM
+// MASTER DAFTAR RESTO PER WILAYAH DENGAN KATA KUNCI
+const REGIONAL_AREAS = {
+  KALSEL_1: {
+    name: 'Kalsel 1',
+    outlets: ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'],
+    keywords: ['banjarmasin', 'tanah laut', 'bali rejo', 'batu licin', 'tanah bumbu', 'tanahbumbu', 'hasan basri', 'a yani']
+  },
+  KALTIM: {
+    name: 'Kaltim',
+    outlets: ['BPPHAR', 'BPPSOE', 'BPPMUL', 'SMRYAM', 'SMRAHM', 'SMRKES', 'TRGAKH', 'SGTMAR', 'BONIMA'],
+    keywords: ['balikpapan', 'samarinda', 'tenggarong', 'sangatta', 'bontang']
+  }
+};
+
+const isOutletInRegion = (outlet, regionKey) => {
+  if (!outlet || !regionKey || regionKey === 'ALL') return true;
+  const target = REGIONAL_AREAS[regionKey];
+  if (!target) return true;
+
+  const code = (outlet.code || '').toUpperCase();
+  const name = (outlet.name || '').toLowerCase();
+
+  const matchCode = target.outlets.some(c => code === c || code.includes(c));
+  const matchKeyword = target.keywords.some(k => name.includes(k));
+
+  return matchCode || matchKeyword;
+};
+
+// GABUNGAN SELURUH KODE RESTO
 const OUTLET_CODES = [
-  'BPPHAR', // Gacoan Balikpapan MT Haryono
-  'BPPSOE', // Gacoan Balikpapan Soetta
-  'BPPMUL', // Gacoan Balikpapan Mulawarman
-  'SMRYAM', // Gacoan Samarinda Wahid Hasyim
-  'SMRAHM', // Gacoan Samarinda Ahmad Yani
-  'SMRKES', // Gacoan Samarinda Kesejahteraan
-  'TRGAKH', // Gacoan Tenggarong
-  'SGTMAR', // Gacoan Sangatta
-  'BONIMA'  // Gacoan Bontang
+  ...REGIONAL_AREAS.KALSEL_1.outlets,
+  ...REGIONAL_AREAS.KALTIM.outlets
 ];
 
 // MASTER ITEM RESMI SESUAI FORMULIR STOCK OPNAME (SO) GACOAN
@@ -247,6 +268,7 @@ export default function AreaDashboard() {
   const [selectedOutletForCacp, setSelectedOutletForCacp] = useState(null);
   const [selectedManagerForDetail, setSelectedManagerForDetail] = useState(null);
   const [selectedDevOutlet, setSelectedDevOutlet] = useState('ALL');
+  const [selectedRegionFilter, setSelectedRegionFilter] = useState('ALL'); // 'ALL' | 'KALSEL_1' | 'KALTIM'
   const [selectedOpexOutlet, setSelectedOpexOutlet] = useState('ALL');
   const [rankingTab, setRankingTab] = useState('resto');
 
@@ -324,7 +346,26 @@ export default function AreaDashboard() {
         .select('*')
         .eq('id', user.id)
         .maybeSingle();
-      if (data) setCurrentProfile(data);
+      if (data) {
+        setCurrentProfile(data);
+        const isSuper = ['superadmin', 'area_manager', 'owner'].includes((data.role || '').toLowerCase());
+        if (!isSuper) {
+          if (data.outlet_id) {
+            setSelectedDevOutlet(data.outlet_id);
+          }
+          // Ambil data outlet untuk mendeteksi wilayah resto manajer
+          const { data: outData } = await supabase
+            .from('outlets')
+            .select('*')
+            .eq('id', data.outlet_id)
+            .maybeSingle();
+
+          if (outData) {
+            const isKalsel = isOutletInRegion(outData, 'KALSEL_1');
+            setSelectedRegionFilter(isKalsel ? 'KALSEL_1' : 'KALTIM');
+          }
+        }
+      }
     }
     loadUser();
   }, [user]);
@@ -1077,15 +1118,17 @@ export default function AreaDashboard() {
     return map;
   }, [SO_DEVIATION_DATA]);
 
-  // KALKULASI RANKING RESTO
+  // KALKULASI RANKING RESTO (TERFILTER SESUAI WILAYAH)
   const outletScoreRankings = useMemo(() => {
-    const activeOnly = outlets.filter(o => {
+    const regionalFilteredOutlets = outlets.filter(o => isOutletInRegion(o, selectedRegionFilter));
+
+    const activeOnly = regionalFilteredOutlets.filter(o => {
       const hasCrew = profiles.some(p => p.outlet_id === o.id);
       const hasLogs = attendanceLogs.some(l => l.outlet_id === o.id);
       return hasCrew || hasLogs;
     });
 
-    const targetList = activeOnly.length > 0 ? activeOnly : outlets;
+    const targetList = activeOnly.length > 0 ? activeOnly : regionalFilteredOutlets;
 
     return targetList.map((outlet) => {
       const restoCrew = profiles.filter(p => p.outlet_id === outlet.id);
@@ -1214,14 +1257,19 @@ export default function AreaDashboard() {
         }
       };
     }).sort((a, b) => b.healthScore - a.healthScore);
-  }, [outlets, profiles, attendanceLogs, violations, tasks, selectedMonth, totalDaysInSelectedMonth, highDeviationsByOutlet, top5DailyDeviationsByOutlet]);
+  }, [outlets, profiles, attendanceLogs, violations, tasks, selectedMonth, totalDaysInSelectedMonth, highDeviationsByOutlet, top5DailyDeviationsByOutlet, selectedRegionFilter]);
 
   const allLeaderRankings = useMemo(() => {
     const leaderProfiles = profiles.filter(p => {
       const r = (p.role || '').toLowerCase();
       const isLeaderRole = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(r);
       const isNamed = p.full_name && !p.full_name.toLowerCase().includes('dummy') && !p.full_name.toLowerCase().includes('uji coba');
-      return isLeaderRole && isNamed;
+      
+     // Saring manager hanya dari resto di wilayah yang dipilih
+      const personOutlet = outlets.find(o => o.id === p.outlet_id);
+      const matchRegion = isOutletInRegion(personOutlet, selectedRegionFilter);
+
+      return isLeaderRole && isNamed && matchRegion;
     });
 
     return leaderProfiles.map(person => {
@@ -1291,7 +1339,7 @@ export default function AreaDashboard() {
           : 'Memenuhi Syarat'
       };
     }).sort((a, b) => b.compositeScore - a.compositeScore);
-  }, [profiles, outlets, attendanceLogs, tasks, outletScoreRankings, selectedMonth]);
+  }, [profiles, outlets, attendanceLogs, tasks, outletScoreRankings, selectedMonth, selectedRegionFilter]);
 
   const top1Outlet = outletScoreRankings[0];
   const top1Leader = allLeaderRankings[0];
@@ -1318,38 +1366,71 @@ export default function AreaDashboard() {
   };
 
   const isCurrentUserManager = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(currentProfile?.role);
-
+const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentProfile?.role || '').toLowerCase());
+  const userAssignedOutlet = outlets.find(o => o.id === currentProfile?.outlet_id);
+  const userRegionLabel = isOutletInRegion(userAssignedOutlet, 'KALSEL_1') ? 'Wilayah Kalsel 1' : 'Wilayah Kaltim';
+  const managerAreaSubtitle = isSuperUser
+    ? (selectedRegionFilter === 'KALSEL_1' ? 'Wilayah Kalsel 1' : selectedRegionFilter === 'KALTIM' ? 'Wilayah Kaltim' : 'Multi-Regional (Kaltim & Kalsel 1)')
+    : `${userAssignedOutlet?.name || 'Cabang Resto'} • ${userRegionLabel}`;
   return (
     <div className="min-h-screen bg-slate-100 flex justify-center font-sans antialiased text-slate-800">
       <div className="w-full max-w-md bg-[#FAFBFD] min-h-screen flex flex-col shadow-2xl relative pb-28 border-x border-slate-200">
         
-        {/* HEADER UTAMA */}
-        <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-100 flex items-center justify-between sticky top-0 z-20 shadow-2xs">
-          <div>
-            <h1 className="text-base font-black text-slate-900 tracking-tight">Dashboard Area Kaltim</h1>
-            <p className="text-[10px] text-slate-400 font-medium">Executive Controlling & Performance</p>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <div className="flex items-center gap-1 bg-slate-50 border border-slate-200/80 px-2 py-1 rounded-xl text-xs font-bold text-slate-700">
-              <FiCalendar className="text-indigo-600 text-xs" />
-              <input
-                type="month"
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="bg-transparent outline-none cursor-pointer text-[11px] font-bold text-slate-700 w-20"
-              />
+       {/* HEADER UTAMA */}
+        <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-100 flex flex-col gap-2.5 sticky top-0 z-20 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <div className="min-w-0 flex-1 pr-2">
+              <h1 className="text-base font-black text-slate-900 tracking-tight truncate leading-tight">
+                Dashboard Operasional
+              </h1>
+              <p className="text-[10px] text-indigo-600 font-bold tracking-wide mt-0.5 truncate">
+                {isSuperUser
+                  ? (selectedRegionFilter === 'KALSEL_1' ? 'Wilayah Kalsel 1' : selectedRegionFilter === 'KALTIM' ? 'Wilayah Kaltim' : 'Multi-Regional (Kaltim & Kalsel 1)')
+                  : `${userAssignedOutlet?.name || 'Cabang Resto'} • ${userRegionLabel}`
+                }
+              </p>
             </div>
 
-            <button
-              onClick={loadMasterData}
-              disabled={isLoading}
-              className="p-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200/80 text-slate-600 rounded-xl transition-colors cursor-pointer"
-              title="Perbarui Data"
-            >
-              <FiRefreshCw className={`text-xs ${isLoading ? 'animate-spin text-indigo-600' : ''}`} />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-1 bg-slate-50 border border-slate-200/80 px-2 py-1 rounded-xl text-xs font-bold text-slate-700">
+                <FiCalendar className="text-indigo-600 text-xs" />
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="bg-transparent outline-none cursor-pointer text-[11px] font-bold text-slate-700 w-20"
+                />
+              </div>
+
+              <button
+                onClick={loadMasterData}
+                disabled={isLoading}
+                className="p-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200/80 text-slate-600 rounded-xl transition-colors cursor-pointer"
+                title="Perbarui Data"
+              >
+                <FiRefreshCw className={`text-xs ${isLoading ? 'animate-spin text-indigo-600' : ''}`} />
+              </button>
+            </div>
           </div>
+
+          {/* Baris Kedua Khusus Filter Wilayah bagi Superadmin / Area Manager */}
+          {isSuperUser && (
+            <div className="pt-0.5">
+              <select
+                value={selectedRegionFilter}
+                onChange={(e) => {
+                  const reg = e.target.value;
+                  setSelectedRegionFilter(reg);
+                  setSelectedDevOutlet('ALL');
+                }}
+                className="w-full bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 outline-none cursor-pointer shadow-2xs"
+              >
+                <option value="ALL">🌐 Semua Wilayah (Kaltim & Kalsel 1)</option>
+                <option value="KALSEL_1">📍 Wilayah Kalsel 1 (5 Resto)</option>
+                <option value="KALTIM">📍 Wilayah Kaltim (9 Resto)</option>
+              </select>
+            </div>
+          )}
         </div>
 
         {/* STATUS SHIFT & ABSEN */}

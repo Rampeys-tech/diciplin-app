@@ -330,7 +330,7 @@ export default function BreakSystem() {
 
   const fetchOutletsList = useCallback(async () => {
     try {
-      const { data, error } = await supabase.from('outlets').select('id, name').order('name');
+      const { data, error } = await supabase.from('outlets').select('id, name, code').order('name');
       if (!error && data) {
         const filtered = data.filter(o => !/cabang\s*0[2-9]|cabang\s*10/i.test(o.name));
         setOutletsList(filtered);
@@ -2275,9 +2275,7 @@ if (!isAreaManager && currentOutletId) {
       fetchAttendanceStatus();
       fetchAllProfilesList(); 
       fetchActiveShiftStats();
-      if (isAreaManager) {
-        fetchOutletsList();
-      }
+      fetchOutletsList();
     }
     const hour = new Date().getHours();
     if (hour < 11) {
@@ -3012,14 +3010,14 @@ if (!isAreaManager && currentOutletId) {
               <button
                 onClick={() => setViewMode('area')}
                 className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
-                title="Buka Dashboard Monitoring Area Kaltim"
+                title="Buka Dashboard Monitoring Area"
               >
                 <FiGlobe className="text-xs" />
-                <span>Area Kaltim</span>
+                <span>{selectedBranchId && selectedBranchId !== 'ALL' ? (outletsList.find(o => o.id === selectedBranchId)?.name || 'AREA') : 'MULTI-AREA'}</span>
               </button>
             )}
 
-            <button 
+            <button
               onClick={handleLogout} 
               className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-extrabold rounded-xl border border-rose-100 uppercase tracking-wider transition-all active:scale-95 cursor-pointer"
             >
@@ -3028,31 +3026,59 @@ if (!isAreaManager && currentOutletId) {
           </div>
         </div>
 
-        {/* RESTO SELECTOR DROPDOWN (AREA MANAGER) */}
-        {isAreaManager && (
+        {/* RESTO & WILAYAH SELECTOR DROPDOWN */}
+        {isAreaManager ? (
           <div className="px-4 pt-3 pb-1">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-black text-slate-700">
                 <FiMapPin className="text-indigo-600" />
-                <span>Pilih Resto:</span>
+                <span>Wilayah & Resto:</span>
               </div>
               <select
                 value={selectedBranchId}
                 onChange={(e) => {
-  setSelectedBranchId(e.target.value);
-  setAllCrewLogs([]);
-  setManagerCrewLogs([]);
-  setLogsPage(0);
-}}
-                className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer max-w-[200px]"
+                  setSelectedBranchId(e.target.value);
+                  setAllCrewLogs([]);
+                  setManagerCrewLogs([]);
+                  setLogsPage(0);
+                }}
+                className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer max-w-[210px]"
               >
-                <option value="ALL">Semua Resto (Gabungan)</option>
-                {outletsList.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
+                <option value="ALL">🌐 Semua Resto</option>
+                
+                <optgroup label="📍 Wilayah Kalsel 1 (5 Resto)">
+                  {outletsList
+                    .filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code))))
+                    .map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                </optgroup>
+
+                <optgroup label="📍 Wilayah Kaltim">
+                  {outletsList
+                    .filter(b => !['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code))))
+                    .map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                </optgroup>
               </select>
+            </div>
+          </div>
+        ) : (
+          /* Untuk Akun Manager Cabang Lain */
+          <div className="px-4 pt-3 pb-1">
+            <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between text-xs font-bold text-slate-700">
+              <div className="flex items-center gap-1.5">
+                <FiMapPin className="text-indigo-600 shrink-0" />
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase">Penempatan:</span>
+              </div>
+              <span className="text-indigo-700 font-black truncate max-w-[230px] text-right">
+                {profile?.station_placement || profile?.outlet_name || (outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name) || 'Gacoan Penempatan'}
+              </span>
             </div>
           </div>
         )}
