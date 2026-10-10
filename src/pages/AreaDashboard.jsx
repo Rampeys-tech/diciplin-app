@@ -250,7 +250,15 @@ export default function AreaDashboard() {
   
   const currentMonthYear = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
   const [selectedMonth, setSelectedMonth] = useState(currentMonthYear);
-  
+  // STATE METRIK TARGET ORIENTASI / PROBATION
+  const [probationMetrics, setProbationMetrics] = useState({
+    salesAchievement: { target: 100, actual: 96.35, unit: '%' },
+    opexGas: { target: 2.53, actual: 2.53, unit: '%' },
+    opexInventaris: { target: 0.13, actual: 0.13, unit: '%' },
+    serviceTimeOjol: { target: 20.0, actual: 20.2, unit: 'menit' },
+    opexOfficeSupply: { target: 0.21, actual: 0.24, unit: '%' },
+    csKomplainRatio: { target: 1.0, actual: 0.8, unit: 'rasio' }
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdatingLock, setIsUpdatingLock] = useState(false);
   
@@ -1716,67 +1724,252 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             </div>
           </div>
 
-          {/* 3. MENU OPERASIONAL UTAMA */}
-          <div>
-            <div className="flex items-center justify-between mb-2.5 px-1">
-              <h3 className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                Menu Operasional Utama
-              </h3>
-              <span className="text-[10px] text-slate-400">4 Pilar Kontrol</span>
+          {/* 3. EXECUTIVE SCORECARD: TARGET MASA ORIENTASI & PROJECT JOBDESK */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between px-1">
+              <div>
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
+                  Target & Indikator Keberhasilan
+                </h3>
+                <p className="text-[10px] text-slate-400 font-medium">Monitoring Realisasi KPI & Eksekusi Project</p>
+              </div>
+              <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200">
+                Live Scorecard
+              </span>
             </div>
 
-            <div className="grid grid-cols-4 gap-2">
-              <button 
-                onClick={() => setActiveModal('deviasi_kru')}
-                className="flex flex-col items-center text-center p-2 rounded-2xl bg-white border border-slate-200 hover:border-rose-300 hover:bg-rose-50/20 transition-all group cursor-pointer shadow-2xs"
-              >
-                <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 text-base shadow-2xs group-hover:scale-105 transition-all">
-                  <FiPieChart />
-                </div>
-                <span className="text-[11px] font-bold text-slate-800 mt-1">Deviasi</span>
-                <span className="text-[8px] text-slate-400">Fisik SO</span>
-              </button>
-
-              <button 
-                onClick={() => setActiveModal('opex_control')}
-                className="flex flex-col items-center text-center p-2 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/20 transition-all group cursor-pointer shadow-2xs"
-              >
-                <div className="w-11 h-11 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 text-base shadow-2xs group-hover:scale-105 transition-all">
-                  <FiDollarSign />
-                </div>
-                <span className="text-[11px] font-bold text-slate-800 mt-1">OPEX</span>
-                <span className="text-[8px] text-slate-400">Budget</span>
-              </button>
-
-              <button 
-                onClick={() => {
-                  setSelectedOutletForCacp(null);
-                  setActiveModal('cacp_control');
-                }}
-                className="flex flex-col items-center text-center p-2 rounded-2xl bg-white border border-slate-200 hover:border-purple-300 hover:bg-purple-50/20 transition-all group cursor-pointer shadow-2xs"
-              >
-                <div className="w-11 h-11 rounded-2xl bg-purple-50 border border-purple-100 flex items-center justify-center text-purple-600 text-base shadow-2xs group-hover:scale-105 transition-all">
-                  <FiClipboard />
-                </div>
-                <span className="text-[11px] font-bold text-slate-800 mt-1">Audit CACP</span>
-                <span className="text-[8px] text-slate-400">Persen</span>
-              </button>
-
-              <button 
-                onClick={() => setActiveModal('controlling_equipment')}
-                className="flex flex-col items-center text-center p-2 rounded-2xl bg-white border border-slate-200 hover:border-amber-300 hover:bg-amber-50/20 transition-all group cursor-pointer relative shadow-2xs"
-              >
-                <div className="w-11 h-11 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 text-base shadow-2xs group-hover:scale-105 transition-all">
-                  <FiTool />
-                  {totalShortageCount > 0 && (
-                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-white rounded-full text-[8px] font-black flex items-center justify-center border-2 border-white">
-                      {totalShortageCount}
+            {/* 6 KARTU KPI TARGET LENGKAP DENGAN JOBDESK PROYEK */}
+            <div className="grid grid-cols-2 gap-2.5">
+              
+              {/* 1. SALES */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <FiTrendingUp className="text-indigo-600 text-xs" /> Sales
                     </span>
-                  )}
+                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
+                      probationMetrics.salesAchievement.actual >= probationMetrics.salesAchievement.target 
+                        ? 'bg-emerald-50 text-emerald-700' 
+                        : 'bg-amber-50 text-amber-700'
+                    }`}>
+                      {probationMetrics.salesAchievement.actual >= probationMetrics.salesAchievement.target ? 'Achieved' : `Kurang ${(probationMetrics.salesAchievement.target - probationMetrics.salesAchievement.actual).toFixed(2)}%`}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-slate-900">
+                      {probationMetrics.salesAchievement.actual}%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Target: {probationMetrics.salesAchievement.target}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div 
+                      className="h-full bg-indigo-600 rounded-full" 
+                      style={{ width: `${Math.min(100, probationMetrics.salesAchievement.actual)}%` }} 
+                    />
+                  </div>
                 </div>
-                <span className="text-[11px] font-bold text-slate-800 mt-1">Equipment</span>
-                <span className="text-[8px] text-slate-400">Aset</span>
-              </button>
+
+                {/* Jobdesk Project */}
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-indigo-600 block">Jobdesk Project:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Flyering customer baru, sosialisasi TTC/GAR, Reservasi & Big Order.
+                  </p>
+                </div>
+              </div>
+
+              {/* 2. OPEX GAS */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <FiZap className="text-amber-500 text-xs" /> Opex Gas
+                    </span>
+                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
+                      probationMetrics.opexGas.actual <= probationMetrics.opexGas.target 
+                        ? 'bg-emerald-50 text-emerald-700' 
+                        : 'bg-rose-50 text-rose-700'
+                    }`}>
+                      {probationMetrics.opexGas.actual <= probationMetrics.opexGas.target ? 'On-Track' : `Over +${(probationMetrics.opexGas.actual - probationMetrics.opexGas.target).toFixed(2)}%`}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className={`text-base font-black font-mono ${probationMetrics.opexGas.actual <= probationMetrics.opexGas.target ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      {probationMetrics.opexGas.actual}%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Maks: {probationMetrics.opexGas.target}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div 
+                      className={`h-full rounded-full ${probationMetrics.opexGas.actual <= probationMetrics.opexGas.target ? 'bg-emerald-500' : 'bg-rose-500'}`} 
+                      style={{ width: `${Math.min(100, (probationMetrics.opexGas.actual / probationMetrics.opexGas.target) * 100)}%` }} 
+                    />
+                  </div>
+                </div>
+
+                {/* Jobdesk Project */}
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-amber-600 block">Jobdesk Project:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Incoming Gas (Manager + Stocker), monitor produktivitas sales/tabung, DOT kompor.
+                  </p>
+                </div>
+              </div>
+
+              {/* 3. OPEX INVENTARIS */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <FiTool className="text-blue-600 text-xs" /> Opex Inventaris
+                    </span>
+                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
+                      probationMetrics.opexInventaris.actual <= probationMetrics.opexInventaris.target 
+                        ? 'bg-emerald-50 text-emerald-700' 
+                        : 'bg-rose-50 text-rose-700'
+                    }`}>
+                      {probationMetrics.opexInventaris.actual <= probationMetrics.opexInventaris.target ? 'Aman' : `Over +${(probationMetrics.opexInventaris.actual - probationMetrics.opexInventaris.target).toFixed(2)}%`}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-slate-900">
+                      {probationMetrics.opexInventaris.actual}%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Maks: {probationMetrics.opexInventaris.target}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div 
+                      className="h-full bg-blue-600 rounded-full" 
+                      style={{ width: `${Math.min(100, (probationMetrics.opexInventaris.actual / probationMetrics.opexInventaris.target) * 100)}%` }} 
+                    />
+                  </div>
+                </div>
+
+                {/* Jobdesk Project */}
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-blue-600 block">Jobdesk Project:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Project Log Book TPS, Manager IC wajib catat alat rusak/pecah harian.
+                  </p>
+                </div>
+              </div>
+
+              {/* 4. OPEX ATK */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <FiFileText className="text-purple-600 text-xs" /> Opex ATK
+                    </span>
+                    <span className="text-[8px] font-black px-1.5 py-0.2 rounded-md bg-purple-50 text-purple-700">
+                      ±0.21%
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-slate-900">
+                      {probationMetrics.opexOfficeSupply.actual}%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Target: {probationMetrics.opexOfficeSupply.target}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div 
+                      className="h-full bg-purple-600 rounded-full" 
+                      style={{ width: `${Math.min(100, (probationMetrics.opexOfficeSupply.actual / probationMetrics.opexOfficeSupply.target) * 100)}%` }} 
+                    />
+                  </div>
+                </div>
+
+                {/* Jobdesk Project */}
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-purple-600 block">Jobdesk Project:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Digitalisasi form QC & Stocker, sosialisasi bayar via ESB Digital.
+                  </p>
+                </div>
+              </div>
+
+              {/* 5. SERVICE TIME */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <FiClock className="text-rose-500 text-xs" /> Service Time
+                    </span>
+                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
+                      probationMetrics.serviceTimeOjol.actual <= probationMetrics.serviceTimeOjol.target 
+                        ? 'bg-emerald-50 text-emerald-700' 
+                        : 'bg-rose-50 text-rose-700'
+                    }`}>
+                      {probationMetrics.serviceTimeOjol.actual <= probationMetrics.serviceTimeOjol.target ? 'Cepat' : `+${(probationMetrics.serviceTimeOjol.actual - probationMetrics.serviceTimeOjol.target).toFixed(1)}m`}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-slate-900">
+                      {probationMetrics.serviceTimeOjol.actual} <span className="text-[10px] font-normal font-sans text-slate-500">Mnt</span>
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Maks: {probationMetrics.serviceTimeOjol.target} Mnt
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div 
+                      className={`h-full rounded-full ${probationMetrics.serviceTimeOjol.actual <= probationMetrics.serviceTimeOjol.target ? 'bg-emerald-500' : 'bg-rose-500'}`} 
+                      style={{ width: `${Math.min(100, (probationMetrics.serviceTimeOjol.target / probationMetrics.serviceTimeOjol.actual) * 100)}%` }} 
+                    />
+                  </div>
+                </div>
+
+                {/* Jobdesk Project */}
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-rose-600 block">Jobdesk Project:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Compact kabel ties panci mie, 2 boiler rush hour, geser app presenter.
+                  </p>
+                </div>
+              </div>
+
+              {/* 6. COMPLAINT */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <FiShield className="text-emerald-600 text-xs" /> Complaint
+                    </span>
+                    <span className="text-[8px] font-black px-1.5 py-0.2 rounded-md bg-emerald-50 text-emerald-700">
+                      &lt; Rata2 AM
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-emerald-700">
+                      {probationMetrics.csKomplainRatio.actual}
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Rasio / Store
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: '85%' }} />
+                  </div>
+                </div>
+
+                {/* Jobdesk Project */}
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-emerald-600 block">Jobdesk Project:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Audit presenter per 1 jam oleh Manager IC, triple check packaging.
+                  </p>
+                </div>
+              </div>
+
             </div>
           </div>
 
@@ -3820,27 +4013,18 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
           </div>
         )}
 
-        {/* BOTTOM NAVIGATION BAR */}
-        <div className="fixed bottom-0 max-w-md w-full bg-white border-t border-slate-200 px-8 py-2.5 flex justify-between items-center z-30 shadow-lg">
+       {/* BOTTOM NAVIGATION BAR (SEJAJAR & ELEGAN) */}
+        <div className="fixed bottom-0 max-w-md w-full bg-white border-t border-slate-200 px-4 py-2.5 flex justify-around items-center z-30 shadow-lg">
+          {/* 1. BERANDA */}
           <button 
             onClick={() => setActiveModal(null)} 
             className={`flex flex-col items-center cursor-pointer transition-colors ${activeModal === null ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
           >
             <FiActivity className="text-lg" />
-            <span className="text-[10px] mt-0.5">Beranda</span>
+            <span className="text-[9px] mt-0.5 font-bold">Beranda</span>
           </button>
 
-          <button 
-            onClick={() => {
-              setRankingTab('resto');
-              setActiveModal('peringkat_modern');
-            }} 
-            className={`flex flex-col items-center cursor-pointer transition-colors ${activeModal === 'peringkat_modern' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
-          >
-            <FiAward className="text-lg" />
-            <span className="text-[10px] mt-0.5">Peringkat</span>
-          </button>
-
+          {/* 2. SLA TASKS (REPORT PROJECT) */}
           <button 
             onClick={() => setActiveModal('task_manager')} 
             className={`flex flex-col items-center cursor-pointer relative transition-colors ${activeModal === 'task_manager' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
@@ -3851,7 +4035,31 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                 {taskAnalytics.pendingCount}
               </span>
             )}
-            <span className="text-[10px] mt-0.5">Task Mgr</span>
+            <span className="text-[9px] mt-0.5 font-bold">SLA Tasks</span>
+          </button>
+
+          {/* 3. AUDIT CACP */}
+          <button 
+            onClick={() => {
+              setSelectedOutletForCacp(null);
+              setActiveModal('cacp_control');
+            }} 
+            className={`flex flex-col items-center cursor-pointer transition-colors ${activeModal === 'cacp_control' ? 'text-purple-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <FiClipboard className="text-lg" />
+            <span className="text-[9px] mt-0.5 font-bold">CACP RM</span>
+          </button>
+
+          {/* 4. PERINGKAT */}
+          <button 
+            onClick={() => {
+              setRankingTab('resto');
+              setActiveModal('peringkat_modern');
+            }} 
+            className={`flex flex-col items-center cursor-pointer transition-colors ${activeModal === 'peringkat_modern' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <FiAward className="text-lg" />
+            <span className="text-[9px] mt-0.5 font-bold">Peringkat</span>
           </button>
         </div>
 
