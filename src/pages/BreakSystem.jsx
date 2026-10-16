@@ -3044,7 +3044,7 @@ if (!isAreaManager && currentOutletId) {
                 }}
                 className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer max-w-[210px]"
               >
-                <option value="ALL">🌐 Semua Resto</option>
+                <option value="ALL">🌐 Semua Resto (Kaltim & Kalsel 1)</option>
                 
                 <optgroup label="📍 Wilayah Kalsel 1 (5 Resto)">
                   {outletsList
@@ -4994,7 +4994,7 @@ if (!isAreaManager && currentOutletId) {
               <div className="bg-amber-50 border border-amber-200/80 rounded-xl p-2.5 flex items-start gap-2 text-amber-900">
                 <FiAlertCircle className="text-amber-600 text-sm mt-0.5 shrink-0" />
                 <p className="text-[10px] font-bold leading-relaxed">
-                  <span className="font-black text-amber-950">PENTING:</span> Pastikan Anda tidak salah memilih jam masuk shift. Sistem akan menghitung keterlambatan &amp; alokasi istirahat berdasarkan pilihan Anda.
+                  <span className="font-black text-amber-950">PENTING:</span> Shift jam 20:00 Midnight Non-24 Jam berlaku 8 jam kerja + 30 menit istirahat (pulang jam 04:00).
                 </p>
               </div>
 
@@ -5042,18 +5042,71 @@ if (!isAreaManager && currentOutletId) {
                 <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider">
                   {!isManager ? '2. Pilih Jam Masuk Shift' : 'Pilih Jam Masuk Shift'}
                 </label>
-                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto pr-1">
-                  {SHIFT_HOURS_OPTIONS.map((opt) => {
-                    const isSelected = selectedShiftHour === opt.hour;
+                
+                {/* GRID 2 KOLOM RAPI */}
+                <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                  {Array.from({ length: 24 }, (_, i) => {
+                    if (i === 20) {
+                      const isSelected20Normal = selectedShiftHour === 20 && requiredWorkHours === 9;
+                      const isSelected20Midnight = selectedShiftHour === 20 && requiredWorkHours === 8;
+
+                      return [
+                        <button
+                          key="shift_20_normal"
+                          type="button"
+                          onClick={() => {
+                            setSelectedShiftHour(20);
+                            setRequiredWorkHours(9);
+                          }}
+                          className={`p-2 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[10px] font-black cursor-pointer text-center leading-tight ${
+                            isSelected20Normal 
+                              ? 'bg-slate-900 text-white border-slate-900 shadow-sm' 
+                              : 'bg-slate-50 text-slate-700 border-slate-200/80 hover:bg-indigo-50'
+                          }`}
+                        >
+                          <FiClock className="text-xs shrink-0"/>
+                          <span>20:00 (24 Jam)</span>
+                        </button>,
+                        <button
+                          key="shift_20_midnight"
+                          type="button"
+                          onClick={() => {
+                            setSelectedShiftHour(20);
+                            setRequiredWorkHours(8);
+                          }}
+                          className={`p-2 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[10px] font-black cursor-pointer text-center leading-tight ${
+                            isSelected20Midnight 
+                              ? 'bg-rose-600 text-white border-rose-600 shadow-sm' 
+                              : 'bg-rose-50/70 text-rose-800 border-rose-200 hover:bg-rose-100'
+                          }`}
+                        >
+                          <FiClock className="text-xs shrink-0 text-rose-500"/>
+                          <span>20:00 (Midnight 8J)</span>
+                        </button>
+                      ];
+                    }
+
+                    const isSelected = selectedShiftHour === i && requiredWorkHours !== 8;
+                    let label = `${i.toString().padStart(2, '0')}:00 WITA`;
+                    if (i === 0) label += ' (Midnight)';
+                    if (i === 22) label += ' (Malam 8 Jam)';
+
                     return (
                       <button
-                        key={opt.hour}
+                        key={`shift_${i}`}
                         type="button"
-                        onClick={() => setSelectedShiftHour(opt.hour)}
-                        className={`p-2 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[10px] font-black cursor-pointer ${isSelected ? 'bg-slate-900 text-white border-slate-900 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200/80 hover:bg-indigo-50'}`}
+                        onClick={() => {
+                          setSelectedShiftHour(i);
+                          setRequiredWorkHours(i === 22 ? 8 : 9);
+                        }}
+                        className={`p-2 rounded-xl border flex items-center justify-center gap-1.5 transition-all text-[10px] font-black cursor-pointer text-center leading-tight ${
+                          isSelected 
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-sm' 
+                            : 'bg-slate-50 text-slate-700 border-slate-200/80 hover:bg-indigo-50'
+                        }`}
                       >
-                        <FiClock className="text-xs"/>
-                        <span>{opt.label}</span>
+                        <FiClock className="text-xs shrink-0"/>
+                        <span>{label}</span>
                       </button>
                     );
                   })}
