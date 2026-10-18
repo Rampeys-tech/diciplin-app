@@ -207,28 +207,12 @@ export default function BreakSystem() {
   // State Modal Fullscreen Image Preview
   const [previewFullImage, setPreviewFullImage] = useState(null);
 
-  // Daftar kode outlet resmi area kamu (Kaltim & Kalsel 1)
-  const INTERNAL_OUTLET_CODES = [
-    'BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO',
-    'BPPHAR', 'BPPSOE', 'BPPMUL', 'SMRYAM', 'SMRAHM', 'SMRKES', 'TRGAKH', 'SGTMAR', 'BONIMA'
-  ];
-
-  // Cek apakah akun berasal dari grup resto internal kamu
-  const userOutlet = outletsList.find(o => o.id === (profile?.outlet_id || user?.outlet_id));
-  const isInternalResto = Boolean(
-    profile?.is_internal === true ||
-    (userOutlet?.code && INTERNAL_OUTLET_CODES.includes(userOutlet.code.toUpperCase()))
-  );
-
   // Role Checker
   const roleLower = (profile?.role || '').toLowerCase();
   const placementLower = (profile?.station_placement || '').toLowerCase();
   const nameLower = (profile?.full_name || '').toLowerCase();
 
-  // Akses Area Dashboard HANYA untuk akun Area Manager internal
-  const isAreaManager = Boolean(
-    isInternalResto && (roleLower === 'area_manager' || nameLower.includes('area manager') || nameLower.includes('owner'))
-  );
+  const isAreaManager = Boolean(roleLower === 'area_manager' || nameLower.includes('area manager'));
   const isStoreManager = Boolean(roleLower === 'store_manager');
   const isAssistantManager = Boolean(roleLower === 'ast_store_manager');
   const isFloorLeader = Boolean(roleLower === 'floor_leader' || roleLower === 'floor_leader_orientation');
@@ -3048,8 +3032,7 @@ if (!isAreaManager && currentOutletId) {
           </div>
           
           <div className="flex items-center gap-1.5">
-            {/* Tombol MULTI-AREA HANYA muncul untuk kamu (Area Manager Resto Internal) */}
-            {isAreaManager && (
+            {isManager && (
               <button
                 onClick={() => setViewMode('area')}
                 className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
@@ -3112,15 +3095,15 @@ if (!isAreaManager && currentOutletId) {
             </div>
           </div>
         ) : (
-          /* Tampilan Otomatis untuk Klien Luar / Store Manager Cabang */
+          /* Untuk Akun Manager Cabang Lain */
           <div className="px-4 pt-3 pb-1">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between text-xs font-bold text-slate-700">
               <div className="flex items-center gap-1.5">
                 <FiMapPin className="text-indigo-600 shrink-0" />
-                <span className="text-[10px] font-extrabold text-slate-400 uppercase">Outlet / Resto:</span>
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase">Penempatan:</span>
               </div>
               <span className="text-indigo-700 font-black truncate max-w-[230px] text-right">
-                {outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name || profile?.outlet_name || 'Resto Operasional'}
+                {profile?.station_placement || profile?.outlet_name || (outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name) || 'Gacoan Penempatan'}
               </span>
             </div>
           </div>
