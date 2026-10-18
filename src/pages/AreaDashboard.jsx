@@ -283,6 +283,10 @@ export default function AreaDashboard() {
   // Controlling Equipment
   const [equipmentList, setEquipmentList] = useState(GENERATED_EQUIPMENT_DATA);
   const [selectedEquipOutlet, setSelectedEquipOutlet] = useState('BPPHAR');
+  // STATE FILTER KHUSUS MODUL SLA TASKS
+  const [slaFilterRegion, setSlaFilterRegion] = useState('ALL');
+  const [slaFilterOutletId, setSlaFilterOutletId] = useState('ALL');
+  const [slaActiveTab, setSlaActiveTab] = useState('ranking');
   const [equipStationFilter, setEquipStationFilter] = useState('ALL');
   const [equipSearchQuery, setEquipSearchQuery] = useState('');
   const [equipTabFilter, setEquipTabFilter] = useState('all');
@@ -323,6 +327,41 @@ export default function AreaDashboard() {
   const [taskDept, setTaskDept] = useState('ordering');
   const [taskDeadline, setTaskDeadline] = useState('');
   const [taskPriority, setTaskPriority] = useState('normal');
+  // Target Scope Baru untuk Task Assignment
+  const [taskScopeType, setTaskScopeType] = useState('ALL_SM'); // 'ALL_SM' | 'AREA' | 'STORE' | 'DEPT' | 'USER'
+  const [taskTargetRegion, setTaskTargetRegion] = useState('KALTIM');
+  const [taskTargetUserId, setTaskTargetUserId] = useState('');
+
+  // Fungsi Hitung Skor SLA (80-100%, 50%, 25%, 0%, atau 100% toleransi)
+  const calculateTaskScore = (task) => {
+    if (task.has_tolerance) return 100;
+
+    if (task.status !== 'completed') {
+      const isOverdue = new Date(task.deadline) < new Date();
+      return isOverdue ? 0 : null; // null jika waktu masih berjalan
+    }
+
+    const createdTime = new Date(task.created_at).getTime();
+    const deadlineTime = new Date(task.deadline).getTime();
+    const completedTime = new Date(task.completed_at || task.created_at).getTime();
+
+    // Selesai Tepat Waktu / Lebih Cepat
+    if (completedTime <= deadlineTime) {
+      const totalDur = Math.max(1, deadlineTime - createdTime);
+      const timeSaved = Math.max(0, deadlineTime - completedTime);
+      return Math.round(80 + ((timeSaved / totalDur) * 20)); // Rentang 80 - 100%
+    }
+
+    // Over Deadline: Cek apakah hari yang sama atau beda hari
+    const deadlineDate = new Date(task.deadline).toDateString();
+    const completedDate = new Date(completedTime).toDateString();
+
+    if (deadlineDate === completedDate) {
+      return 50; // Over deadline di hari yang sama
+    } else {
+      return 25; // Over deadline lewat hari
+    }
+  };
   const [isSubmittingTask, setIsSubmittingTask] = useState(false);
 
   // Konfirmasi Bukti Foto Tugas
@@ -534,15 +573,23 @@ export default function AreaDashboard() {
     };
   }, [opexList]);
 
-  // FILTER TUGAS SESUAI ROLE & PENUGASAN RESTO
+  // FILTER TUGAS SESUAI TARGET AKUN / RESTO / WILAYAH / DEPARTEMEN
   const userVisibleTasks = useMemo(() => {
     if (!currentProfile) return [];
-    if (currentProfile.role === 'area_manager') return tasks;
+    const isSuper = ['superadmin', 'area_manager', 'owner'].includes((currentProfile.role || '').toLowerCase()) || currentProfile.is_internal;
+    if (isSuper) return tasks;
 
     return tasks.filter(t => {
-      if (t.target_user_id && t.target_user_id !== currentProfile.id) return false;
-      if (t.target_role === 'store_manager' && currentProfile.role !== 'store_manager') return false;
+      // 1. Target spesifik user ID
+      if (t.target_user_id) return t.target_user_id === currentProfile.id;
+      // 2. Target spesifik resto/outlet
       if (t.outlet_id && t.outlet_id !== currentProfile.outlet_id) return false;
+      // 3. Target departemen
+      if (t.department && t.department !== 'general_management' && t.department !== currentProfile.department && t.department !== currentProfile.station_placement) {
+        // jika ditugaskan spesifik ke dept tertentu
+      }
+      // 4. Target role SM
+      if (t.target_role === 'store_manager' && currentProfile.role !== 'store_manager') return false;
       return true;
     });
   }, [tasks, currentProfile]);
@@ -744,28 +791,23 @@ export default function AreaDashboard() {
 
     setIsSubmittingTask(true);
     try {
-      let targetOutlet = null;
-      if (taskTargetType === 'STORE') {
-        targetOutlet = taskSelectedTargetId || outlets[0]?.id;
-      } else if (currentProfile?.role !== 'area_manager') {
-        targetOutlet = currentProfile?.outlet_id;
-      }
-
       const payload = {
-        department: taskTargetType === 'ALL_SM' ? 'general_management' : taskDept,
-        target_role: taskTargetType === 'ALL_SM' ? 'store_manager' : null,
         title: taskTitle.trim(),
         deadline: new Date(taskDeadline).toISOString(),
         priority: taskPriority,
-        outlet_id: targetOutlet,
+        department: taskScopeType === 'DEPT' ? taskDept : 'general_management',
+        target_role: taskScopeType === 'ALL_SM' ? 'store_manager' : null,
+        outlet_id: taskScopeType === 'STORE' ? (taskSelectedTargetId || outlets[0]?.id) : null,
+        target_user_id: taskScopeType === 'USER' ? taskTargetUserId : null,
         created_by: user?.id,
-        status: 'pending'
+        status: 'pending',
+        has_tolerance: false
       };
 
       const { error } = await supabase.from('department_tasks').insert([payload]);
       if (error) throw error;
 
-      alert("✓ Jobdesk tugas berhasil diterbitkan!");
+      alert("✓ Jobdesk tugas berhasil diterbitkan sesuai sasaran akun!");
       setTaskTitle('');
       setTaskDeadline('');
       loadMasterData();
@@ -775,6 +817,31 @@ export default function AreaDashboard() {
       setIsSubmittingTask(false);
     }
   };
+
+  // Fungsi Memberikan Toleransi Khusus oleh AM (Jadikan 100%)
+  const handleGrantTolerance = async (taskItem) => {
+    const reason = prompt(`Masukkan alasan toleransi untuk tugas "${taskItem.title}":`);
+    if (!reason || !reason.trim()) return;
+
+    try {
+      const { error } = await supabase
+        .from('department_tasks')
+        .update({
+          has_tolerance: true,
+          tolerance_reason: reason.trim(),
+          tolerance_granted_by: user.id,
+          is_on_time: true
+        })
+        .eq('id', taskItem.id);
+
+      if (error) throw error;
+      alert("✓ Toleransi berhasil diberikan! Nilai tugas ini disesuaikan menjadi 100%.");
+      loadMasterData();
+    } catch (err) {
+      alert(`Gagal memberi toleransi: ${err.message}`);
+    }
+  };
+    
 
   // KONFIRMASI PENYELESAIAN TUGAS + PENILAIAN KPI MANAJER & RESTO
   const handleConfirmTaskCompletion = async (e) => {
@@ -971,15 +1038,29 @@ export default function AreaDashboard() {
   const taskAnalytics = useMemo(() => {
     const total = userVisibleTasks.length;
     if (total === 0) return { completionRate: 100, completedCount: 0, pendingCount: 0, overdueCount: 0 };
-    const completed = userVisibleTasks.filter(t => t.status === 'completed' && t.is_on_time !== false);
-    const pending = userVisibleTasks.filter(t => t.status === 'pending');
-    const overdue = userVisibleTasks.filter(t => (t.status === 'pending' && new Date(t.deadline) < new Date()) || t.is_on_time === false);
+
+    let sumScores = 0;
+    let completed = 0;
+    let pending = 0;
+    let overdue = 0;
+
+    userVisibleTasks.forEach(t => {
+      const score = calculateTaskScore(t);
+      if (score !== null) sumScores += score;
+      if (t.status === 'completed') completed++;
+      if (t.status === 'pending') {
+        pending++;
+        if (new Date(t.deadline) < new Date()) overdue++;
+      }
+    });
+
+    const avgRate = total > 0 ? Math.round(sumScores / total) : 100;
 
     return {
-      completionRate: Math.round((completed.length / total) * 100),
-      completedCount: completed.length,
-      pendingCount: pending.length,
-      overdueCount: overdue.length
+      completionRate: avgRate,
+      completedCount: completed,
+      pendingCount: pending,
+      overdueCount: overdue
     };
   }, [userVisibleTasks]);
 
@@ -3328,247 +3409,751 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
           </div>
         )}
 
-        {/* ================= MODAL TASK MANAGER: VALIDASI ROLE & PENILAIAN SM / RESTO ================= */}
-        {activeModal === 'task_manager' && (
-          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
-            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
-              
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <div>
-                  <h3 className="text-sm font-black text-slate-900">Task Manager Terpadu</h3>
-                  <p className="text-[10px] text-slate-400 font-medium">Instruksi, Reminder & SLA Jobdesk Area</p>
-                </div>
-                <button 
-                  onClick={() => setActiveModal(null)}
-                  className="p-2 bg-white hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
-                >
-                  <FiX className="text-sm" />
-                </button>
-              </div>
+        {/* ================= MODAL SLA TASK CONTROLLING (ULTRA MODERN MOBILE DASHBOARD) ================= */}
+        {activeModal === 'task_manager' && (() => {
+          // 1. Filter Outlets Sesuai Wilayah
+          const filteredOutletsList = outlets.filter(o => isOutletInRegion(o, slaFilterRegion));
 
-              <div className="px-4 pt-3 pb-2 bg-white border-b border-slate-100 flex gap-2">
-                <button
-                  onClick={() => setTaskViewTab('tasks')}
-                  className={`flex-1 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                    taskViewTab === 'tasks' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                  }`}
-                >
-                  Daftar Tugas ({userVisibleTasks.length})
-                </button>
-                <button
-                  onClick={() => setTaskViewTab('resto_sla')}
-                  className={`flex-1 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-                    taskViewTab === 'resto_sla' ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                  }`}
-                >
-                  Kepatuhan SLA Resto
-                </button>
-              </div>
+          // 2. Filter Tugas Berdasarkan Bulan yang Dipilih
+          const monthlyTasks = tasks.filter(t => {
+            const taskDate = t.created_at || t.deadline;
+            return taskDate && taskDate.substring(0, 7) === selectedMonth;
+          });
 
-              <div className="p-4 overflow-y-auto space-y-4">
-                <div className="bg-slate-900 text-white p-4 rounded-2xl flex items-center justify-between shadow-md">
-                  <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Kepatuhan SLA Area</span>
-                    <p className="text-xs text-slate-300 font-medium mt-0.5">
-                      {taskAnalytics.completedCount} Selesai • {taskAnalytics.overdueCount} Overdue
-                    </p>
+          // 3. Kalkulasi Performa Manajer (Terfilter Bulan, Wilayah, & Resto)
+          const allManagersPerformance = profiles
+            .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
+            .map(manager => {
+              const managerOutlet = outlets.find(o => o.id === manager.outlet_id);
+              const isMatchRegion = isOutletInRegion(managerOutlet, slaFilterRegion);
+              const isMatchOutlet = slaFilterOutletId === 'ALL' || manager.outlet_id === slaFilterOutletId;
+
+              const userTasks = monthlyTasks.filter(t => t.target_user_id === manager.id || (!t.target_user_id && t.outlet_id === manager.outlet_id));
+              let totalScoreSum = 0;
+              let evaluatedCount = 0;
+              let onTimeCount = 0;
+              let sameDayOverdue = 0;
+              let multiDayOverdue = 0;
+              let uncompletedCount = 0;
+
+              userTasks.forEach(task => {
+                const score = calculateTaskScore(task);
+                if (score !== null) {
+                  totalScoreSum += score;
+                  evaluatedCount += 1;
+                  if (score >= 80) onTimeCount++;
+                  else if (score === 50) sameDayOverdue++;
+                  else if (score === 25) multiDayOverdue++;
+                  else if (score === 0) uncompletedCount++;
+                }
+              });
+
+              const avgScore = evaluatedCount > 0 ? Math.round(totalScoreSum / evaluatedCount) : 100;
+
+              return {
+                id: manager.id,
+                name: manager.full_name,
+                avatar: manager.avatar,
+                role: manager.role,
+                outletId: manager.outlet_id,
+                outletName: managerOutlet?.name || 'Cabang Resto',
+                outletCode: managerOutlet?.code || '-',
+                totalTasks: userTasks.length,
+                avgScore,
+                onTimeCount,
+                sameDayOverdue,
+                multiDayOverdue,
+                uncompletedCount,
+                tasks: userTasks,
+                isIncludedInFilter: isMatchRegion && isMatchOutlet
+              };
+            })
+            .sort((a, b) => b.avgScore - a.avgScore);
+
+          const displayedManagers = allManagersPerformance.filter(m => m.isIncludedInFilter);
+          const currentLoggedInManager = allManagersPerformance.find(m => m.id === currentProfile?.id);
+          const currentManagerRank = allManagersPerformance.findIndex(m => m.id === currentProfile?.id) + 1;
+
+          // 4. Kalkulasi Performa SLA Tim per Resto
+          const restoPerformanceList = filteredOutletsList.map(resto => {
+            const restoTasks = monthlyTasks.filter(t => t.outlet_id === resto.id);
+            let sumScores = 0;
+            let count = 0;
+            let onTime = 0;
+            let overdue = 0;
+
+            restoTasks.forEach(t => {
+              const score = calculateTaskScore(t);
+              if (score !== null) {
+                sumScores += score;
+                count++;
+                if (score >= 80) onTime++;
+                else overdue++;
+              }
+            });
+
+            const avgSla = count > 0 ? Math.round(sumScores / count) : 100;
+            return {
+              id: resto.id,
+              name: resto.name,
+              code: resto.code,
+              avgSla,
+              totalTasks: restoTasks.length,
+              onTime,
+              overdue
+            };
+          }).sort((a, b) => b.avgSla - a.avgSla);
+
+          // Resto Terpilih saat ini untuk Card Detail
+          const currentSelectedRestoInfo = outlets.find(o => o.id === slaFilterOutletId) || filteredOutletsList[0];
+          const selectedRestoPerf = restoPerformanceList.find(r => r.id === currentSelectedRestoInfo?.id) || { avgSla: 100, onTime: 0, overdue: 0, totalTasks: 0 };
+
+          // 5. Data Titik Grafik Tren Harian (Simulasi 7 Hari Kerja Terakhir)
+          const trendPoints = [
+            { day: 'Sen', score: Math.min(100, Math.max(40, selectedRestoPerf.avgSla - 8)) },
+            { day: 'Sel', score: Math.min(100, Math.max(50, selectedRestoPerf.avgSla - 2)) },
+            { day: 'Rab', score: Math.min(100, Math.max(30, selectedRestoPerf.avgSla - 15)) },
+            { day: 'Kam', score: Math.min(100, Math.max(55, selectedRestoPerf.avgSla + 3)) },
+            { day: 'Jum', score: Math.min(100, Math.max(60, selectedRestoPerf.avgSla - 5)) },
+            { day: 'Sab', score: Math.min(100, Math.max(70, selectedRestoPerf.avgSla + 2)) },
+            { day: 'Min', score: selectedRestoPerf.avgSla }
+          ];
+
+          // Buat string path SVG grafik kurva
+          const chartWidth = 320;
+          const chartHeight = 85;
+          const svgPoints = trendPoints.map((pt, i) => {
+            const x = (i / (trendPoints.length - 1)) * (chartWidth - 20) + 10;
+            const y = chartHeight - ((pt.score / 100) * (chartHeight - 20)) - 10;
+            return `${x},${y}`;
+          }).join(' ');
+
+          const totalRegionalAvg = displayedManagers.length > 0
+            ? Math.round(displayedManagers.reduce((acc, c) => acc + c.avgScore, 0) / displayedManagers.length)
+            : 100;
+
+          return (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex justify-center items-center animate-in fade-in duration-200">
+              <div className="w-full max-w-md bg-[#F8FAFC] h-full sm:h-[95vh] sm:rounded-3xl flex flex-col shadow-2xl relative overflow-hidden border-x border-slate-200">
+                
+                {/* TOP APP BAR & FILTER BULAN */}
+                <div className="px-4 pt-3.5 pb-2.5 bg-white border-b border-slate-100 flex flex-col gap-2 shrink-0 shadow-2xs z-20">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => setActiveModal(null)}
+                        className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-700 transition-colors cursor-pointer border border-slate-200/80 shadow-2xs"
+                      >
+                        <FiArrowLeft className="text-base" />
+                      </button>
+                      <div>
+                        <h2 className="text-xs font-black text-slate-900 tracking-tight leading-tight flex items-center gap-1.5">
+                          <span>SLA Project Controlling</span>
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                        </h2>
+                        <p className="text-[9px] text-indigo-600 font-bold uppercase tracking-wider">
+                          {currentProfile?.role === 'area_manager' ? 'Monitoring Multi-Resto AM' : 'Dashboard Kepatuhan Manajer'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* PEMILIH BULAN (CEK RIWAYAT PERIODE) */}
+                    <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-1 rounded-xl shadow-2xs">
+                      <FiCalendar className="text-indigo-600 text-xs" />
+                      <input
+                        type="month"
+                        value={selectedMonth}
+                        onChange={(e) => setSelectedMonth(e.target.value)}
+                        className="bg-transparent text-[10px] font-black text-slate-800 outline-none cursor-pointer w-20"
+                        title="Pilih Bulan Evaluasi"
+                      />
+                    </div>
                   </div>
-                  <span className="text-3xl font-black font-mono text-emerald-400">
-                    {taskAnalytics.completionRate}%
-                  </span>
+
+                  {/* FILTER WILAYAH & RESTO (KHUSUS AREA MANAGER) */}
+                  {currentProfile?.role === 'area_manager' && (
+                    <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                      <select
+                        value={slaFilterRegion}
+                        onChange={(e) => {
+                          setSlaFilterRegion(e.target.value);
+                          setSlaFilterOutletId('ALL');
+                        }}
+                        className="bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs"
+                      >
+                        <option value="ALL">🌐 Semua Wilayah</option>
+                        <option value="KALSEL_1">📍 Wilayah Kalsel 1</option>
+                        <option value="KALTIM">📍 Wilayah Kaltim</option>
+                      </select>
+
+                      <select
+                        value={slaFilterOutletId}
+                        onChange={(e) => setSlaFilterOutletId(e.target.value)}
+                        className="bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs truncate"
+                      >
+                        <option value="ALL">Semua Resto</option>
+                        {filteredOutletsList.map(o => (
+                          <option key={o.id} value={o.id}>{o.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* SUB TAB SELECTOR */}
+                  <div className="flex gap-1 bg-slate-100 p-0.5 rounded-xl border border-slate-200/80">
+                    <button
+                      type="button"
+                      onClick={() => setSlaActiveTab('ranking')}
+                      className={`flex-1 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        slaActiveTab === 'ranking' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      👑 Manajer ({displayedManagers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaActiveTab('resto_compare')}
+                      className={`flex-1 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        slaActiveTab === 'resto_compare' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      📈 Tren & Resto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaActiveTab('tasks')}
+                      className={`flex-1 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer ${
+                        slaActiveTab === 'tasks' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      📋 Tiket Tugas
+                    </button>
+                  </div>
                 </div>
 
-                {taskViewTab === 'resto_sla' && (
-                  <div className="space-y-2">
-                    <p className="text-[11px] text-slate-500 font-medium px-1">Persentase ketepatan waktu per resto:</p>
-                    {outletScoreRankings.map(resto => {
-                      const stats = resto.taskStats;
-                      const isLelet = stats.overdue > 0 || stats.rate < 75;
+                {/* SCROLLABLE BODY */}
+                <div className="flex-1 overflow-y-auto px-4 py-3.5 space-y-3.5 pb-20">
 
-                      return (
-                        <div key={resto.id} className="p-3 bg-white border border-slate-200 rounded-2xl flex items-center justify-between shadow-2xs">
-                          <div className="min-w-0">
-                            <p className="text-xs font-black text-slate-900 truncate">{resto.name}</p>
-                            <p className="text-[10px] text-slate-400 font-medium">SM: {resto.storeManagerName}</p>
-                            <p className="text-[9px] text-indigo-600 font-mono mt-0.5">
-                              {stats.completed} dari {stats.total} tugas selesai tepat waktu
+                  {/* ================= 1. TAB MANAJER (STORE DATA PERTAMA, BARU LIST MANAJER) ================= */}
+                  {slaActiveTab === 'ranking' && (
+                    <div className="space-y-3 animate-in fade-in duration-150">
+                      
+                      {/* CARD DATA RESTO / STORE AKTIF */}
+                      <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white rounded-3xl p-4 shadow-xl border border-indigo-500/25 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-36 h-36 bg-indigo-500/15 rounded-full blur-2xl pointer-events-none"></div>
+
+                        <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-indigo-300 flex items-center gap-1.5">
+                            <FiLayers /> Data Store & Kepatuhan Cabang
+                          </span>
+                          <span className="text-[8px] font-mono font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                            Periode: {selectedMonth}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <h3 className="text-sm font-black text-white truncate leading-tight">
+                              {slaFilterOutletId === 'ALL' ? 'Semua Resto Terpilih' : currentSelectedRestoInfo?.name}
+                            </h3>
+                            <p className="text-[10px] text-indigo-300 font-medium mt-0.5 truncate">
+                              Wilayah: {slaFilterRegion === 'KALSEL_1' ? 'Kalsel 1' : slaFilterRegion === 'KALTIM' ? 'Kaltim' : 'Kalsel & Kaltim'}
                             </p>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <span className={`text-xs font-mono font-black px-2 py-0.5 rounded-lg border ${
-                              stats.rate >= 85 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'
-                            }`}>
-                              {stats.rate}% SLA
-                            </span>
-                            {isLelet && (
-                              <span className="text-[8px] font-black text-rose-600 block mt-0.5 uppercase">⚠️ Lelet</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {taskViewTab === 'tasks' && (
-                  <>
-                    {currentProfile?.role === 'area_manager' && (
-                      <form onSubmit={handleCreateTask} className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 space-y-2.5">
-                        <span className="text-xs font-black uppercase text-indigo-700 flex items-center gap-1">
-                          <FiPlus /> Buat Tugas Baru
-                        </span>
-
-                        <input
-                          type="text"
-                          placeholder="Judul / Deskripsi Jobdesk"
-                          value={taskTitle}
-                          onChange={(e) => setTaskTitle(e.target.value)}
-                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-indigo-500 shadow-2xs"
-                          required
-                        />
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <select
-                            value={taskTargetType}
-                            onChange={(e) => setTaskTargetType(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 outline-none cursor-pointer"
-                          >
-                            <option value="ALL_SM">Semua SM</option>
-                            <option value="ALL_LEADERS">Semua Leader</option>
-                            <option value="STORE">Pilih Resto</option>
-                          </select>
-
-                          {taskTargetType === 'ALL_SM' ? (
-                            <div className="bg-slate-100 border border-dashed border-slate-300 rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-slate-400 flex items-center justify-center">
-                              Tugas Umum SM
+                            <div className="flex items-center gap-2 mt-2">
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                                {selectedRestoPerf.onTime} Tepat Waktu
+                              </span>
+                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
+                                {selectedRestoPerf.overdue} Overdue
+                              </span>
                             </div>
-                          ) : (
-                            <select
-                              value={taskDept}
-                              onChange={(e) => setTaskDept(e.target.value)}
-                              className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 outline-none cursor-pointer"
-                            >
-                              <option value="ordering">Dept: Ordering</option>
-                              <option value="mnr">Dept: M&R</option>
-                              <option value="payroll">Dept: Payroll</option>
-                              <option value="schedule">Dept: Schedule</option>
-                              <option value="marketing_cel">Dept: Marketing</option>
-                              <option value="kitchen">Dept: Kitchen</option>
-                            </select>
-                          )}
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-[9px] text-slate-400 uppercase block">Rerata Disiplin</span>
+                            <span className="text-3xl font-black font-mono text-emerald-400">
+                              {slaFilterOutletId === 'ALL' ? totalRegionalAvg : selectedRestoPerf.avgSla}%
+                            </span>
+                          </div>
                         </div>
 
-                        {taskTargetType === 'STORE' && (
-                          <select
-                            value={taskSelectedTargetId}
-                            onChange={(e) => setTaskSelectedTargetId(e.target.value)}
-                            className="w-full bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-700 outline-none cursor-pointer"
-                          >
-                            {outlets.map(o => (
-                              <option key={o.id} value={o.id}>{o.name}</option>
-                            ))}
-                          </select>
-                        )}
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <input
-                            type="datetime-local"
-                            value={taskDeadline}
-                            onChange={(e) => setTaskDeadline(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-medium outline-none cursor-pointer"
-                            required
+                        {/* Bar Proporsi Ketepatan */}
+                        <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden flex mt-3.5 shadow-inner">
+                          <div 
+                            className="bg-emerald-400 h-full transition-all duration-500" 
+                            style={{ width: `${slaFilterOutletId === 'ALL' ? totalRegionalAvg : selectedRestoPerf.avgSla}%` }} 
                           />
+                          <div 
+                            className="bg-rose-500 h-full transition-all duration-500" 
+                            style={{ width: `${Math.max(0, 100 - (slaFilterOutletId === 'ALL' ? totalRegionalAvg : selectedRestoPerf.avgSla))}%` }} 
+                          />
+                        </div>
+                      </div>
 
-                          <select
-                            value={taskPriority}
-                            onChange={(e) => setTaskPriority(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2 py-1.5 text-xs font-medium outline-none cursor-pointer"
-                          >
-                            <option value="normal">Normal</option>
-                            <option value="urgent">Urgent</option>
-                          </select>
+                      {/* DAFTAR MANAJER BERDASARKAN PERSENTASE KERAJINAN */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between px-1 pt-1">
+                          <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider flex items-center gap-1.5">
+                            <FiAward className="text-amber-500 text-xs" /> Ranking Kerajinan Manajer
+                          </span>
+                          <span className="text-[9px] font-mono text-slate-400 font-bold">
+                            Tepat / Kecepatan
+                          </span>
                         </div>
 
-                        <button
-                          type="submit"
-                          disabled={isSubmittingTask}
-                          className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs disabled:opacity-50"
-                        >
-                          <FiSend />
-                          <span>{isSubmittingTask ? 'Menerbitkan...' : 'Kirim Tugas'}</span>
-                        </button>
-                      </form>
-                    )}
+                        {displayedManagers.length === 0 ? (
+                          <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
+                            Tidak ada data manajer pada periode & filter ini.
+                          </div>
+                        ) : (
+                          displayedManagers.map((mgr, idx) => {
+                            const isTop1 = idx === 0;
+                            const isTop2 = idx === 1;
+                            const isTop3 = idx === 2;
+                            const isSelf = mgr.id === currentProfile?.id;
 
-                    <div className="space-y-2">
-                      <span className="text-[10px] font-black uppercase text-slate-400 px-1 block">Tiket Tugas Masuk</span>
-                      {userVisibleTasks.length === 0 ? (
-                        <div className="text-center py-8 space-y-1.5 bg-slate-50/60 rounded-2xl border border-dashed border-slate-200">
-                          <FiInbox className="mx-auto text-2xl text-slate-300" />
-                          <p className="text-xs font-bold text-slate-500">Tidak ada tugas tertunda untuk akun ini.</p>
+                            return (
+                              <div 
+                                key={mgr.id} 
+                                className={`p-3.5 rounded-2xl border transition-all space-y-2.5 shadow-2xs ${
+                                  isSelf ? 'ring-2 ring-indigo-500 bg-indigo-50/30 border-indigo-300' :
+                                  isTop1 ? 'bg-gradient-to-r from-amber-50/70 via-white to-amber-50/30 border-amber-300' : 
+                                  'bg-white border-slate-200/80 hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2.5">
+                                  <div className="flex items-center gap-2.5 min-w-0">
+                                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs shrink-0 ${
+                                      isTop1 ? 'bg-gradient-to-tr from-amber-400 to-amber-500 text-amber-950 shadow-xs ring-2 ring-amber-200' :
+                                      isTop2 ? 'bg-slate-200 text-slate-700' :
+                                      isTop3 ? 'bg-amber-100 text-amber-800' :
+                                      'bg-slate-100 text-slate-500'
+                                    }`}>
+                                      {isTop1 ? '👑' : `#${idx + 1}`}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5">
+                                        <h4 className="text-xs font-black text-slate-900 truncate">{mgr.name}</h4>
+                                        {isSelf && (
+                                          <span className="text-[7.5px] font-bold px-1.5 py-0.2 bg-indigo-600 text-white rounded">
+                                            Anda
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[9.5px] text-slate-500 font-medium truncate">
+                                        {mgr.outletName} • <span className="text-indigo-600 font-bold uppercase">{mgr.role}</span>
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-right shrink-0">
+                                    <span className={`text-xs font-black font-mono px-2.5 py-1 rounded-xl border ${
+                                      mgr.avgScore >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                      mgr.avgScore >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                      'bg-rose-50 text-rose-700 border-rose-200'
+                                    }`}>
+                                      {mgr.avgScore}% SLA
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Bar Rincian 4 Kategori */}
+                                <div className="grid grid-cols-4 gap-1 py-1.5 px-2 bg-slate-50 rounded-xl text-center font-mono text-[8px] border border-slate-100">
+                                  <div>
+                                    <span className="text-slate-400 block text-[6.5px] font-sans">Tepat</span>
+                                    <span className="font-bold text-emerald-700">{mgr.onTimeCount}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400 block text-[6.5px] font-sans">Over 1Hr</span>
+                                    <span className="font-bold text-amber-700">{mgr.sameDayOverdue}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400 block text-[6.5px] font-sans">&gt; 1Hr</span>
+                                    <span className="font-bold text-rose-700">{mgr.multiDayOverdue}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400 block text-[6.5px] font-sans">Mangkir</span>
+                                    <span className="font-bold text-slate-500">{mgr.uncompletedCount}</span>
+                                  </div>
+                                </div>
+
+                                {/* Opsi Beri Toleransi Khusus AM jika tugas terlambat */}
+                                {currentProfile?.role === 'area_manager' && mgr.tasks.some(t => calculateTaskScore(t) < 80 && !t.has_tolerance) && (
+                                  <div className="pt-1.5 border-t border-slate-100 space-y-1">
+                                    {mgr.tasks.filter(t => calculateTaskScore(t) < 80 && !t.has_tolerance).map(task => (
+                                      <div key={task.id} className="p-1.5 bg-rose-50/60 rounded-xl border border-rose-200 flex items-center justify-between gap-1.5">
+                                        <p className="text-[9.5px] font-bold text-slate-800 truncate">{task.title}</p>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleGrantTolerance(task)}
+                                          className="px-2 py-0.5 bg-white text-amber-800 border border-amber-300 rounded-lg text-[8px] font-black uppercase shrink-0 shadow-2xs cursor-pointer flex items-center gap-1"
+                                        >
+                                          <FiCheckCircle /> Toleransi 100%
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ================= 2. TAB RESTO (GRAFIK NAIK-TURUN & KOMPARASI SEMUA RESTO) ================= */}
+                  {slaActiveTab === 'resto_compare' && (
+                    <div className="space-y-3.5 animate-in fade-in duration-150">
+                      
+                      {/* GRAFIK NAIK-TURUN KINERJA PENGERJAAN TUGAS RESTO */}
+                      <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-4 shadow-xl border border-indigo-500/20 space-y-3">
+                        <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                          <div>
+                            <span className="text-[9px] font-black uppercase tracking-widest text-indigo-300 block">
+                              📈 Kurva Tren Fluktuasi Kepatuhan
+                            </span>
+                            <h4 className="text-xs font-bold text-white mt-0.5 truncate max-w-[200px]">
+                              {slaFilterOutletId === 'ALL' ? 'Tren Rata-Rata Area' : currentSelectedRestoInfo?.name}
+                            </h4>
+                          </div>
+                          <span className="text-xs font-mono font-black text-emerald-400 bg-white/10 px-2 py-0.5 rounded-lg">
+                            {selectedRestoPerf.avgSla}% Live
+                          </span>
                         </div>
-                      ) : (
-                        userVisibleTasks.map(t => {
-                          const resto = outlets.find(o => o.id === t.outlet_id);
-                          const isOverdue = new Date(t.deadline) < new Date() && t.status !== 'completed';
-                          const isDone = t.status === 'completed';
 
-                          const canCompleteTask = 
-                            currentProfile?.role === 'area_manager' ||
-                            (t.target_user_id ? t.target_user_id === currentProfile?.id : (t.outlet_id ? t.outlet_id === currentProfile?.outlet_id : true));
+                        {/* Visual SVG Line Trendline Chart */}
+                        <div className="py-1">
+                          <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="w-full h-24 overflow-visible">
+                            <defs>
+                              <linearGradient id="slaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stopColor="#34d399" stopOpacity="0.4" />
+                                <stop offset="100%" stopColor="#34d399" stopOpacity="0" />
+                              </linearGradient>
+                            </defs>
+
+                            {/* Garis Grid Horizontal Standar Minimum 85% */}
+                            <line 
+                              x1="10" 
+                              y1={chartHeight - ((85 / 100) * (chartHeight - 20)) - 10} 
+                              x2={chartWidth - 10} 
+                              y2={chartHeight - ((85 / 100) * (chartHeight - 20)) - 10} 
+                              stroke="#6366f1" 
+                              strokeDasharray="4,4" 
+                              strokeWidth="1" 
+                            />
+                            
+                            {/* Area Gradient Kurva */}
+                            <polygon
+                              fill="url(#slaGradient)"
+                              points={`10,${chartHeight - 5} ${svgPoints} ${chartWidth - 10},${chartHeight - 5}`}
+                            />
+
+                            {/* Garis Kurva Fluktuasi */}
+                            <polyline
+                              fill="none"
+                              stroke="#34d399"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              points={svgPoints}
+                            />
+
+                            {/* Titik Point Harian */}
+                            {trendPoints.map((pt, i) => {
+                              const x = (i / (trendPoints.length - 1)) * (chartWidth - 20) + 10;
+                              const y = chartHeight - ((pt.score / 100) * (chartHeight - 20)) - 10;
+                              return (
+                                <circle 
+                                  key={i} 
+                                  cx={x} 
+                                  cy={y} 
+                                  r="3" 
+                                  fill="#10b981" 
+                                  stroke="#ffffff" 
+                                  strokeWidth="1.5" 
+                                />
+                              );
+                            })}
+                          </svg>
+
+                          {/* Label Hari */}
+                          <div className="flex justify-between text-[8px] font-mono text-slate-400 px-1 pt-1 border-t border-white/5">
+                            {trendPoints.map((pt, i) => (
+                              <span key={i}>{pt.day}</span>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1 text-[9px] font-bold text-slate-300 border-t border-white/10">
+                          <span>Status Dominan:</span>
+                          <span className={selectedRestoPerf.overdue === 0 ? 'text-emerald-300' : 'text-amber-300'}>
+                            {selectedRestoPerf.overdue === 0 ? '✓ Disiplin Tepat Waktu' : `⚠️ Terdapat ${selectedRestoPerf.overdue} Tugas Overdue`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* DAFTAR PERBANDINGAN PERSENTASE DENGAN SEMUA RESTO LAIN */}
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center justify-between px-1">
+                          <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider block">
+                            Perbandingan Kerajinan Antar-Resto ({restoPerformanceList.length} Cabang)
+                          </span>
+                          <span className="text-[8px] font-mono font-bold text-slate-400">
+                            Distribusi %
+                          </span>
+                        </div>
+
+                        {restoPerformanceList.map((resto, idx) => {
+                          const isTop1 = idx === 0;
+                          const isCurrentActive = resto.id === slaFilterOutletId;
 
                           return (
-                            <div key={t.id} className={`p-3 rounded-2xl border space-y-1.5 shadow-2xs ${isOverdue ? 'bg-rose-50/70 border-rose-300' : 'bg-white border-slate-200'}`}>
+                            <div 
+                              key={resto.id} 
+                              onClick={() => {
+                                if (currentProfile?.role === 'area_manager') {
+                                  setSlaFilterOutletId(resto.id);
+                                }
+                              }}
+                              className={`p-3 rounded-2xl border transition-all cursor-pointer space-y-2 shadow-2xs ${
+                                isCurrentActive ? 'bg-indigo-50/70 border-indigo-400 ring-1 ring-indigo-400' :
+                                isTop1 ? 'bg-amber-50/40 border-amber-300' : 
+                                'bg-white border-slate-200/90 hover:border-slate-300'
+                              }`}
+                            >
                               <div className="flex items-center justify-between gap-2">
-                                <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
-                                  {t.department} • {resto ? resto.code : 'SEMUA SM'}
-                                </span>
-                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
-                                  isDone ? 'bg-emerald-100 text-emerald-800' :
-                                  isOverdue ? 'bg-rose-600 text-white animate-pulse' : 'bg-amber-100 text-amber-800'
-                                }`}>
-                                  {isDone ? '✓ Selesai' : isOverdue ? 'Overdue (-10 Pts)' : 'Pending'}
-                                </span>
-                              </div>
-
-                              <div>
-                                <h5 className="text-xs font-black text-slate-900">{t.title}</h5>
-                                <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                                  Deadline: {new Date(t.deadline).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                                </p>
-                              </div>
-
-                              {!isDone && (
-                                canCompleteTask ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setTaskToConfirm(t);
-                                      setActiveModal('confirm_task');
-                                    }}
-                                    className="w-full mt-1 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-[11px] font-black flex items-center justify-center gap-1 cursor-pointer"
-                                  >
-                                    <FiCheck />
-                                    <span>Konfirmasi Selesai & Kirim Foto</span>
-                                  </button>
-                                ) : (
-                                  <div className="p-1.5 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-[10px] text-slate-400 text-center italic">
-                                    Menunggu konfirmasi penyelesaian oleh resto / manajer pelaksana.
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <span className={`w-6 h-6 rounded-lg font-mono font-black text-[9px] flex items-center justify-center shrink-0 ${
+                                    isTop1 ? 'bg-amber-400 text-amber-950 font-black' : 'bg-slate-100 text-slate-600'
+                                  }`}>
+                                    #{idx + 1}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <h5 className="text-xs font-black text-slate-900 truncate">{resto.name}</h5>
+                                    <p className="text-[9px] text-slate-400 font-mono">
+                                      {resto.onTime} Tepat • {resto.overdue} Telat ({resto.totalTasks} Total)
+                                    </p>
                                   </div>
-                                )
-                              )}
+                                </div>
+
+                                <span className={`text-xs font-black font-mono px-2.5 py-0.5 rounded-xl border shrink-0 ${
+                                  resto.avgSla >= 85 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                                  resto.avgSla >= 60 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                                  'bg-rose-50 text-rose-700 border-rose-200'
+                                }`}>
+                                  {resto.avgSla}% SLA
+                                </span>
+                              </div>
+
+                              {/* Progress Bar Perbandingan Visual */}
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex">
+                                <div 
+                                  className={`h-full transition-all duration-500 ${
+                                    resto.avgSla >= 85 ? 'bg-emerald-500' : resto.avgSla >= 60 ? 'bg-amber-500' : 'bg-rose-500'
+                                  }`} 
+                                  style={{ width: `${resto.avgSla}%` }} 
+                                />
+                              </div>
                             </div>
                           );
-                        })
-                      )}
+                        })}
+                      </div>
+
                     </div>
-                  </>
-                )}
+                  )}
+
+                  {/* ================= 3. TAB TIKET TUGAS ================= */}
+                  {slaActiveTab === 'tasks' && (
+                    <div className="space-y-3.5 animate-in fade-in duration-150">
+                      
+                      {/* FORM TERBITKAN TUGAS BARU (KHUSUS AREA MANAGER) */}
+                      {currentProfile?.role === 'area_manager' && (
+                        <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
+                          <span className="text-[10px] font-black uppercase text-indigo-700 flex items-center gap-1">
+                            <FiPlus className="text-xs" /> Terbitkan Tugas Baru
+                          </span>
+
+                          <form onSubmit={handleCreateTask} className="space-y-2">
+                            <input
+                              type="text"
+                              placeholder="Judul / Instruksi Proyek..."
+                              value={taskTitle}
+                              onChange={(e) => setTaskTitle(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold outline-none"
+                              required
+                            />
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <select
+                                value={taskScopeType}
+                                onChange={(e) => setTaskScopeType(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                              >
+                                <option value="ALL_SM">Semua SM</option>
+                                <option value="STORE">Pilih Resto</option>
+                                <option value="USER">Pilih Manajer</option>
+                                <option value="DEPT">Departemen</option>
+                              </select>
+
+                              <select
+                                value={taskPriority}
+                                onChange={(e) => setTaskPriority(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                              >
+                                <option value="normal">Normal</option>
+                                <option value="urgent">Mendesak</option>
+                              </select>
+                            </div>
+
+                            {taskScopeType === 'STORE' && (
+                              <select
+                                value={taskSelectedTargetId}
+                                onChange={(e) => setTaskSelectedTargetId(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                              >
+                                {outlets.map(o => (
+                                  <option key={o.id} value={o.id}>{o.name}</option>
+                                ))}
+                              </select>
+                            )}
+
+                            {taskScopeType === 'USER' && (
+                              <select
+                                value={taskTargetUserId}
+                                onChange={(e) => setTaskTargetUserId(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                                required
+                              >
+                                <option value="">-- Pilih Akun Manajer --</option>
+                                {profiles.filter(p => ['store_manager', 'ast_store_manager', 'floor_leader'].includes(p.role)).map(p => (
+                                  <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>
+                                ))}
+                              </select>
+                            )}
+
+                            {taskScopeType === 'DEPT' && (
+                              <select
+                                value={taskDept}
+                                onChange={(e) => setTaskDept(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                              >
+                                <option value="ordering">Dept: Ordering</option>
+                                <option value="mnr">Dept: M&R</option>
+                                <option value="payroll">Dept: Payroll</option>
+                                <option value="marketing_cel">Dept: Marketing & CEL</option>
+                                <option value="kitchen">Dept: Kitchen</option>
+                              </select>
+                            )}
+
+                            <input
+                              type="datetime-local"
+                              value={taskDeadline}
+                              onChange={(e) => setTaskDeadline(e.target.value)}
+                              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-medium outline-none"
+                              required
+                            />
+
+                            <button
+                              type="submit"
+                              disabled={isSubmittingTask}
+                              className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-xs cursor-pointer"
+                            >
+                              {isSubmittingTask ? 'Menerbitkan...' : 'Kirim Instruksi Tugas'}
+                            </button>
+                          </form>
+                        </div>
+                      )}
+
+                      {/* DAFTAR TIKET TUGAS BULANAN */}
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider px-1 block">
+                          Tiket Tugas Bulan {selectedMonth} ({monthlyTasks.length})
+                        </span>
+
+                        {monthlyTasks.length === 0 ? (
+                          <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
+                            Belum ada tugas pada bulan {selectedMonth}.
+                          </div>
+                        ) : (
+                          monthlyTasks.map(t => {
+                            const score = calculateTaskScore(t);
+                            const isDone = t.status === 'completed';
+                            const isOverdue = new Date(t.deadline) < new Date() && !isDone;
+
+                            return (
+                              <div key={t.id} className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                                <div className="flex items-center justify-between gap-1.5">
+                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.2 bg-slate-100 text-slate-700 rounded">
+                                    {t.department}
+                                  </span>
+                                  
+                                  <div className="flex items-center gap-1">
+                                    {score !== null && (
+                                      <span className={`text-[9px] font-black font-mono px-1.5 py-0.2 rounded ${
+                                        score >= 80 ? 'bg-emerald-100 text-emerald-800' :
+                                        score === 50 ? 'bg-amber-100 text-amber-800' :
+                                        score === 25 ? 'bg-rose-100 text-rose-800' :
+                                        'bg-slate-100 text-slate-500'
+                                      }`}>
+                                        Skor: {score}%
+                                      </span>
+                                    )}
+                                    {t.has_tolerance && (
+                                      <span className="text-[7.5px] font-bold bg-indigo-100 text-indigo-700 px-1 py-0.2 rounded">
+                                        Toleransi AM
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <h5 className="text-xs font-black text-slate-900 leading-snug">{t.title}</h5>
+                                  <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                                    Deadline: {new Date(t.deadline).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                </div>
+
+                                <div className="pt-1">
+                                  {currentProfile?.role === 'area_manager' && !t.has_tolerance && (isOverdue || (isDone && score < 80)) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleGrantTolerance(t)}
+                                      className="w-full mb-1 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[9px] font-bold cursor-pointer"
+                                    >
+                                      Beri Toleransi AM (100%)
+                                    </button>
+                                  )}
+
+                                  {!isDone && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setTaskToConfirm(t);
+                                        setActiveModal('confirm_task');
+                                      }}
+                                      className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 cursor-pointer"
+                                    >
+                                      <FiCheck /> Konfirmasi Selesai
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                    </div>
+                  )}
+
+                </div>
 
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* MODAL KONFIRMASI TUGAS */}
         {activeModal === 'confirm_task' && taskToConfirm && (
@@ -4063,7 +4648,7 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
           </button>
         </div>
 
-      </div>
-    </div>
+  </div>
+  </div>
   );
 }
