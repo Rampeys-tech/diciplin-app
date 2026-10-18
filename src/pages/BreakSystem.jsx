@@ -3035,11 +3035,11 @@ if (!isAreaManager && currentOutletId) {
             {isManager && (
               <button
                 onClick={() => setViewMode('area')}
-                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
+                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1 shrink-0"
                 title="Buka Dashboard Monitoring Area"
               >
                 <FiGlobe className="text-xs" />
-                <span>{selectedBranchId && selectedBranchId !== 'ALL' ? (outletsList.find(o => o.id === selectedBranchId)?.name || 'AREA') : 'MULTI-AREA'}</span>
+                <span>MULTI-AREA</span>
               </button>
             )}
 
