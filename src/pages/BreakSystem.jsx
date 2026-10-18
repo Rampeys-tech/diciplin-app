@@ -207,12 +207,28 @@ export default function BreakSystem() {
   // State Modal Fullscreen Image Preview
   const [previewFullImage, setPreviewFullImage] = useState(null);
 
+  // Daftar kode outlet resmi area kamu (Kaltim & Kalsel 1)
+  const INTERNAL_OUTLET_CODES = [
+    'BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO',
+    'BPPHAR', 'BPPSOE', 'BPPMUL', 'SMRYAM', 'SMRAHM', 'SMRKES', 'TRGAKH', 'SGTMAR', 'BONIMA'
+  ];
+
+  // Cek apakah akun berasal dari grup resto internal kamu
+  const userOutlet = outletsList.find(o => o.id === (profile?.outlet_id || user?.outlet_id));
+  const isInternalResto = Boolean(
+    profile?.is_internal === true ||
+    (userOutlet?.code && INTERNAL_OUTLET_CODES.includes(userOutlet.code.toUpperCase()))
+  );
+
   // Role Checker
   const roleLower = (profile?.role || '').toLowerCase();
   const placementLower = (profile?.station_placement || '').toLowerCase();
   const nameLower = (profile?.full_name || '').toLowerCase();
 
-  const isAreaManager = Boolean(roleLower === 'area_manager' || nameLower.includes('area manager'));
+  // Akses Area Dashboard HANYA untuk akun Area Manager internal
+  const isAreaManager = Boolean(
+    isInternalResto && (roleLower === 'area_manager' || nameLower.includes('area manager') || nameLower.includes('owner'))
+  );
   const isStoreManager = Boolean(roleLower === 'store_manager');
   const isAssistantManager = Boolean(roleLower === 'ast_store_manager');
   const isFloorLeader = Boolean(roleLower === 'floor_leader' || roleLower === 'floor_leader_orientation');
@@ -849,10 +865,27 @@ if (!isAreaManager && currentOutletId) {
 
         if (logsData && logsData.length > 0) {
           const activeBreaks = logsData.filter(l => Boolean(l.break_start_time) && !Boolean(l.break_end_time)).map((log, index) => {
-            const start = new Date(log.break_start_time);
-            const checkInHour = log.actual_in ? new Date(log.actual_in).getHours() : 0;
-            const allowedSec = (checkInHour === 22) ? 1800 : 3600; 
-            const elapsedSec = Math.floor((Date.now() - start.getTime()) / 1000);
+            // Amankan parsing string waktu untuk Safari iOS agar tidak menghasilkan NaN / Invalid Date
+            const cleanStartStr = typeof log.break_start_time === 'string' 
+              ? log.break_start_time.replace(' ', 'T') 
+              : log.break_start_time;
+            const start = new Date(cleanStartStr);
+            
+            // Deteksi shift malam 22:00
+            let isShiftMalam = false;
+            if (log.status_in && log.status_in.includes('Shift 22')) {
+              isShiftMalam = true;
+            } else if (log.actual_in) {
+              const cleanInStr = typeof log.actual_in === 'string' ? log.actual_in.replace(' ', 'T') : log.actual_in;
+              const inHour = new Date(cleanInStr).getHours();
+              if (inHour === 22) isShiftMalam = true;
+            }
+
+            // Standar wajib istirahat adalah 3.600 detik (60 menit), kecuali shift 22:00 (1.800 detik / 30 menit)
+            const allowedSec = isShiftMalam ? 1800 : 3600;
+            
+            const nowMs = Date.now();
+            const elapsedSec = Math.max(0, Math.floor((nowMs - start.getTime()) / 1000));
             const isOver = elapsedSec > allowedSec;
 
             let currentStation = stationMap[log.user_id] || 'Staff Duty';
@@ -2046,8 +2079,17 @@ if (!isAreaManager && currentOutletId) {
   const updateDurationsLocally = useCallback(() => {
     setLiveBreaks(prev => prev.map(crew => {
       if (!crew.rawRawStart) return crew;
-      const elapsedSec = Math.floor((Date.now() - crew.rawRawStart.getTime()) / 1000);
-      const allowedSec = crew.allowedSec || 3600;
+      
+      const nowMs = Date.now();
+      const startTimeMs = new Date(crew.rawRawStart).getTime();
+      
+      // Jika parsing gagal, jangan dipaksakan hitung minus
+      if (isNaN(startTimeMs)) return crew;
+
+      const elapsedSec = Math.max(0, Math.floor((nowMs - startTimeMs) / 1000));
+      
+      // Fallback mutlak: Jangan biarkan bernilai 0 / falsy. Wajib 3600 jika tidak ada nilai valid.
+      const allowedSec = (crew.allowedSec && Number(crew.allowedSec) > 0) ? Number(crew.allowedSec) : 3600;
       const isOver = elapsedSec > allowedSec;
       const timeLeftSec = allowedSec - elapsedSec;
       
@@ -3006,7 +3048,8 @@ if (!isAreaManager && currentOutletId) {
           </div>
           
           <div className="flex items-center gap-1.5">
-            {isManager && (
+            {/* Tombol MULTI-AREA HANYA muncul untuk kamu (Area Manager Resto Internal) */}
+            {isAreaManager && (
               <button
                 onClick={() => setViewMode('area')}
                 className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-black rounded-xl border border-indigo-200 uppercase tracking-wider transition-all active:scale-95 cursor-pointer flex items-center gap-1"
@@ -3069,15 +3112,15 @@ if (!isAreaManager && currentOutletId) {
             </div>
           </div>
         ) : (
-          /* Untuk Akun Manager Cabang Lain */
+          /* Tampilan Otomatis untuk Klien Luar / Store Manager Cabang */
           <div className="px-4 pt-3 pb-1">
             <div className="bg-white border border-slate-200/80 rounded-2xl p-2.5 shadow-2xs flex items-center justify-between text-xs font-bold text-slate-700">
               <div className="flex items-center gap-1.5">
                 <FiMapPin className="text-indigo-600 shrink-0" />
-                <span className="text-[10px] font-extrabold text-slate-400 uppercase">Penempatan:</span>
+                <span className="text-[10px] font-extrabold text-slate-400 uppercase">Outlet / Resto:</span>
               </div>
               <span className="text-indigo-700 font-black truncate max-w-[230px] text-right">
-                {profile?.station_placement || profile?.outlet_name || (outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name) || 'Gacoan Penempatan'}
+                {outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name || profile?.outlet_name || 'Resto Operasional'}
               </span>
             </div>
           </div>
