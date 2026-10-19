@@ -3103,7 +3103,7 @@ if (!isAreaManager && currentOutletId) {
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase">Penempatan:</span>
               </div>
               <span className="text-indigo-700 font-black truncate max-w-[230px] text-right">
-                {profile?.station_placement || profile?.outlet_name || (outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name) || 'Gacoan Penempatan'}
+                {(outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id))?.name) || profile?.outlet_name || profile?.station_placement || 'Gacoan Penempatan'}
               </span>
             </div>
           </div>
