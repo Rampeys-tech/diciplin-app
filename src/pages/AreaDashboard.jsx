@@ -287,6 +287,10 @@ export default function AreaDashboard() {
   const [slaFilterRegion, setSlaFilterRegion] = useState('ALL');
   const [slaFilterOutletId, setSlaFilterOutletId] = useState('ALL');
   const [slaActiveTab, setSlaActiveTab] = useState('ranking');
+
+  // State untuk Portofolio Rincian Tugas Manajer & Preview Foto Penuh
+  const [selectedManagerForTaskHistory, setSelectedManagerForTaskHistory] = useState(null);
+  const [taskProofModalImage, setTaskProofModalImage] = useState(null);
   const [equipStationFilter, setEquipStationFilter] = useState('ALL');
   const [equipSearchQuery, setEquipSearchQuery] = useState('');
   const [equipTabFilter, setEquipTabFilter] = useState('all');
@@ -843,7 +847,7 @@ export default function AreaDashboard() {
   };
     
 
-  // KONFIRMASI PENYELESAIAN TUGAS + PENILAIAN KPI MANAJER & RESTO
+  // KONFIRMASI PENYELESAIAN TUGAS + SIMPAN FOTO PERMANEN KE STORAGE
   const handleConfirmTaskCompletion = async (e) => {
     e.preventDefault();
     if (!taskToConfirm) return;
@@ -851,52 +855,53 @@ export default function AreaDashboard() {
 
     setIsConfirmingTask(true);
     try {
-      const photoUrl = URL.createObjectURL(proofImage);
+      // Unggah foto ke storage bucket Supabase agar Area Manager bisa melihatnya
+      const fileExt = proofImage.name.split('.').pop();
+      const filePath = `task_proofs/${user.id}-${Date.now()}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('attendance-proofs')
+        .upload(filePath, proofImage, {
+          contentType: proofImage.type || 'image/jpeg',
+          cacheControl: '31536000',
+          upsert: true
+        });
+
+      let publicPhotoUrl = null;
+      if (!uploadError) {
+        const { data: publicData } = supabase.storage
+          .from('attendance-proofs')
+          .getPublicUrl(filePath);
+        publicPhotoUrl = publicData?.publicUrl;
+      }
+
       const now = new Date();
       const deadline = new Date(taskToConfirm.deadline);
       const isCompletedOnTime = now <= deadline;
 
       const fullNotes = completionNotes 
-        ? `${completionNotes} | [Bukti: ${proofImage.name}]` 
-        : `[Bukti Terlampir: ${proofImage.name}]`;
+        ? `${completionNotes.trim()} | [Dikonfirmasi: ${now.toLocaleDateString('id-ID')}]` 
+        : `Selesai pada ${now.toLocaleTimeString('id-ID')} WITA`;
 
       const primaryPayload = {
         status: 'completed',
         completed_at: now.toISOString(),
         completed_by: user?.id,
-        proof_photo_url: photoUrl,
+        proof_photo_url: publicPhotoUrl,
         completion_notes: fullNotes,
         is_on_time: isCompletedOnTime
       };
 
-      const { error: primaryError } = await supabase
+      const { error: updateError } = await supabase
         .from('department_tasks')
         .update(primaryPayload)
         .eq('id', taskToConfirm.id);
 
-      if (primaryError) {
-        const safePayload = {
-          status: 'completed',
-          completed_at: now.toISOString(),
-          completed_by: user?.id,
-          completion_notes: fullNotes
-        };
-        await supabase
-          .from('department_tasks')
-          .update(safePayload)
-          .eq('id', taskToConfirm.id);
-      }
-
-      // Update Poin Manager
-      const pointsDelta = isCompletedOnTime ? 5 : -10;
-      await supabase
-        .from('user_profiles')
-        .update({ total_points: Math.max(0, (currentProfile?.total_points || 100) + pointsDelta) })
-        .eq('id', user.id);
+      if (updateError) throw updateError;
 
       alert(isCompletedOnTime 
-        ? "✓ Tugas selesai tepat waktu! Skor KPI Manajer & Kepatuhan Resto bertambah (+5 Poin)." 
-        : "⚠️ Tugas selesai melewati deadline. Penalti poin diterapkan (-10 Poin).");
+        ? "✓ Tugas berhasil dikonfirmasi tepat waktu! Dokumentasi fisik telah tersimpan." 
+        : "⚠️ Tugas dikonfirmasi melewati deadline.");
 
       setProofImage(null);
       setCompletionNotes('');
@@ -3716,10 +3721,11 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                             return (
                               <div 
                                 key={mgr.id} 
-                                className={`p-3.5 rounded-2xl border transition-all space-y-2.5 shadow-2xs ${
+                                onClick={() => setSelectedManagerForTaskHistory(mgr)}
+                                className={`p-3.5 rounded-2xl border transition-all space-y-2.5 shadow-2xs cursor-pointer hover:border-indigo-400 active:scale-[0.99] ${
                                   isSelf ? 'ring-2 ring-indigo-500 bg-indigo-50/30 border-indigo-300' :
                                   isTop1 ? 'bg-gradient-to-r from-amber-50/70 via-white to-amber-50/30 border-amber-300' : 
-                                  'bg-white border-slate-200/80 hover:border-slate-300'
+                                  'bg-white border-slate-200/80 hover:bg-slate-50'
                                 }`}
                               >
                                 <div className="flex items-center justify-between gap-2.5">
@@ -4154,6 +4160,216 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             </div>
           );
         })()}
+
+        {/* ================= MODAL AUDIT HISTORI TUGAS & BUKTI FOTO MANAJER ================= */}
+        {selectedManagerForTaskHistory && (
+          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+            <div className="bg-[#FAFBFD] w-full max-w-md max-h-[92vh] rounded-3xl flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+              
+              <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 shadow-2xs">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-700 font-black flex items-center justify-center text-xs border border-indigo-100 shrink-0">
+                    {selectedManagerForTaskHistory.avatar ? (
+                      <img src={selectedManagerForTaskHistory.avatar} alt="Avatar" className="w-full h-full object-cover rounded-2xl" />
+                    ) : (
+                      selectedManagerForTaskHistory.name.substring(0, 2).toUpperCase()
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-black text-slate-900 truncate leading-tight">
+                      {selectedManagerForTaskHistory.name}
+                    </h3>
+                    <p className="text-[9px] text-indigo-600 font-bold uppercase truncate">
+                      {selectedManagerForTaskHistory.outletName} • {selectedManagerForTaskHistory.role}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[10px] font-mono font-black px-2.5 py-1 rounded-xl border ${
+                    selectedManagerForTaskHistory.avgScore >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                    selectedManagerForTaskHistory.avgScore >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                    'bg-rose-50 text-rose-700 border-rose-200'
+                  }`}>
+                    {selectedManagerForTaskHistory.avgScore}% SLA
+                  </span>
+                  <button 
+                    type="button"
+                    onClick={() => setSelectedManagerForTaskHistory(null)}
+                    className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-xl cursor-pointer"
+                  >
+                    <FiX className="text-base" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 bg-white border-b border-slate-100 grid grid-cols-4 gap-1 text-center font-mono text-[9px]">
+                <div className="p-1.5 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-100">
+                  <span className="block text-[7px] font-sans text-slate-400 uppercase">Tepat</span>
+                  <span className="font-black text-xs">{selectedManagerForTaskHistory.onTimeCount}</span>
+                </div>
+                <div className="p-1.5 bg-amber-50 text-amber-800 rounded-xl border border-amber-100">
+                  <span className="block text-[7px] font-sans text-slate-400 uppercase">Over 1 Hr</span>
+                  <span className="font-black text-xs">{selectedManagerForTaskHistory.sameDayOverdue}</span>
+                </div>
+                <div className="p-1.5 bg-rose-50 text-rose-800 rounded-xl border border-rose-100">
+                  <span className="block text-[7px] font-sans text-slate-400 uppercase">&gt; 1 Hr</span>
+                  <span className="font-black text-xs">{selectedManagerForTaskHistory.multiDayOverdue}</span>
+                </div>
+                <div className="p-1.5 bg-slate-100 text-slate-600 rounded-xl border border-slate-200">
+                  <span className="block text-[7px] font-sans text-slate-400 uppercase">Mangkir</span>
+                  <span className="font-black text-xs">{selectedManagerForTaskHistory.uncompletedCount}</span>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                    Log Tugas & Bukti Validasi ({selectedManagerForTaskHistory.tasks.length} Jobdesk)
+                  </span>
+                  <span className="text-[9px] font-mono text-slate-400">Periode: {selectedMonth}</span>
+                </div>
+
+                {selectedManagerForTaskHistory.tasks.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-400 font-bold bg-white rounded-2xl border border-dashed border-slate-200">
+                    Tidak ada tugas yang ditugaskan ke manajer ini pada bulan {selectedMonth}.
+                  </div>
+                ) : (
+                  selectedManagerForTaskHistory.tasks.map(t => {
+                    const score = calculateTaskScore(t);
+                    const isDone = t.status === 'completed';
+                    const isOverdue = new Date(t.deadline) < new Date() && !isDone;
+                    
+                    const deadlineFormatted = new Date(t.deadline).toLocaleDateString('id-ID', {
+                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                    });
+                    const completedFormatted = t.completed_at ? new Date(t.completed_at).toLocaleDateString('id-ID', {
+                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                    }) : null;
+
+                    return (
+                      <div key={t.id} className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
+                            {t.department}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            {score !== null && (
+                              <span className={`text-[10px] font-black font-mono px-2 py-0.5 rounded-md ${
+                                score >= 80 ? 'bg-emerald-100 text-emerald-800' :
+                                score === 50 ? 'bg-amber-100 text-amber-800' :
+                                score === 25 ? 'bg-rose-100 text-rose-800' :
+                                'bg-slate-100 text-slate-500'
+                              }`}>
+                                Skor: {score}%
+                              </span>
+                            )}
+                            {t.has_tolerance && (
+                              <span className="text-[8px] font-bold bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">
+                                Toleransi AM
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <h4 className="text-xs font-black text-slate-900 leading-snug">{t.title}</h4>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] font-mono">
+                            <span className="text-slate-400">Deadline: <strong className="text-slate-700">{deadlineFormatted}</strong></span>
+                            {completedFormatted && (
+                              <span className="text-emerald-700">Selesai: <strong className="text-emerald-800">{completedFormatted} WITA</strong></span>
+                            )}
+                            {isOverdue && (
+                              <span className="text-rose-600 font-bold">⚠️ Mangkir / Lewat Batas Waktu</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {t.completion_notes && (
+                          <p className="text-[9.5px] text-slate-600 bg-slate-50 p-2 rounded-xl border border-slate-100 leading-relaxed font-medium">
+                            📝 {t.completion_notes}
+                          </p>
+                        )}
+
+                        {t.proof_photo_url ? (
+                          <div className="space-y-1 pt-1">
+                            <span className="text-[8.5px] font-black uppercase tracking-wider text-slate-400 block">
+                              Bukti Foto Pekerjaan (Klik Perbesar):
+                            </span>
+                            <div 
+                              onClick={() => setTaskProofModalImage(t.proof_photo_url)}
+                              className="relative group rounded-xl overflow-hidden border border-slate-200 cursor-pointer aspect-video bg-slate-100 shadow-2xs"
+                            >
+                              <img 
+                                src={t.proof_photo_url} 
+                                alt="Bukti Tugas" 
+                                className="w-full h-full object-cover transition-transform group-hover:scale-105" 
+                              />
+                              <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-[10px] font-black transition-opacity">
+                                🔍 Lihat Foto Penuh
+                              </div>
+                            </div>
+                          </div>
+                        ) : isDone ? (
+                          <div className="text-[9px] text-slate-400 italic bg-slate-50 p-2 rounded-xl border border-dashed border-slate-200">
+                            Pekerjaan diselesaikan tanpa lampiran foto.
+                          </div>
+                        ) : null}
+
+                        {currentProfile?.role === 'area_manager' && !t.has_tolerance && (isOverdue || (isDone && score < 80)) && (
+                          <div className="pt-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleGrantTolerance(t)}
+                              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-[9px] font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <FiCheckCircle /> Beri Toleransi AM (Jadikan 100%)
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="p-3 bg-white border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setSelectedManagerForTaskHistory(null)}
+                  className="w-full py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl cursor-pointer"
+                >
+                  Tutup Portofolio Tugas
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* MODAL PREVIEW FOTO BUKTI DOKUMENTASI FULL SCREEN */}
+        {taskProofModalImage && (
+          <div 
+            onClick={() => setTaskProofModalImage(null)}
+            className="fixed inset-0 bg-black/95 z-[60] flex flex-col items-center justify-center p-4 animate-in fade-in duration-200 cursor-pointer"
+          >
+            <div className="w-full max-w-md flex justify-between items-center text-white mb-2">
+              <span className="text-xs font-black uppercase tracking-wider">Validasi Foto Bukti Pekerjaan</span>
+              <button 
+                type="button" 
+                onClick={() => setTaskProofModalImage(null)}
+                className="p-1.5 bg-slate-800 text-white rounded-full hover:bg-slate-700"
+              >
+                <FiX className="text-base" />
+              </button>
+            </div>
+            <img 
+              src={taskProofModalImage} 
+              alt="Foto Bukti Penuh" 
+              className="max-w-full max-h-[82vh] object-contain rounded-2xl border border-white/20 shadow-2xl" 
+            />
+          </div>
+        )}
 
         {/* MODAL KONFIRMASI TUGAS */}
         {activeModal === 'confirm_task' && taskToConfirm && (
