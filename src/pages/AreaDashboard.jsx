@@ -403,6 +403,8 @@ export default function AreaDashboard() {
         if (!isSuper) {
           if (data.outlet_id) {
             setSelectedDevOutlet(data.outlet_id);
+            // Kunci default resto ke restonya sendiri saat login
+            setSlaFilterOutletId(data.outlet_id);
           }
           // Ambil data outlet untuk mendeteksi wilayah resto manajer
           const { data: outData } = await supabase
@@ -413,7 +415,10 @@ export default function AreaDashboard() {
 
           if (outData) {
             const isKalsel = isOutletInRegion(outData, 'KALSEL_1');
-            setSelectedRegionFilter(isKalsel ? 'KALSEL_1' : 'KALTIM');
+            const userRegion = isKalsel ? 'KALSEL_1' : 'KALTIM';
+            setSelectedRegionFilter(userRegion);
+            // Kunci wilayah SLA agar tidak bercampur dengan wilayah lain
+            setSlaFilterRegion(userRegion);
           }
         }
       }
@@ -3576,8 +3581,8 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                     </div>
                   </div>
 
-                  {/* FILTER WILAYAH & RESTO (KHUSUS AREA MANAGER) */}
-                  {currentProfile?.role === 'area_manager' && (
+                  {/* FILTER WILAYAH & RESTO */}
+                  {currentProfile?.role === 'area_manager' ? (
                     <div className="grid grid-cols-2 gap-1.5 pt-0.5">
                       <select
                         value={slaFilterRegion}
@@ -3598,6 +3603,24 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                         className="bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs truncate"
                       >
                         <option value="ALL">Semua Resto</option>
+                        {filteredOutletsList.map(o => (
+                          <option key={o.id} value={o.id}>{o.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    /* Tampilan untuk Manajer Resto: Wilayah terkunci sesuai areanya, bisa filter antar resto di areanya */
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <span className="text-[9px] font-black px-2.5 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl whitespace-nowrap shrink-0">
+                        📍 {slaFilterRegion === 'KALSEL_1' ? 'Wilayah Kalsel 1' : 'Wilayah Kaltim'}
+                      </span>
+
+                      <select
+                        value={slaFilterOutletId}
+                        onChange={(e) => setSlaFilterOutletId(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs truncate"
+                      >
+                        <option value="ALL">Semua Resto di {slaFilterRegion === 'KALSEL_1' ? 'Kalsel 1' : 'Kaltim'}</option>
                         {filteredOutletsList.map(o => (
                           <option key={o.id} value={o.id}>{o.name}</option>
                         ))}
