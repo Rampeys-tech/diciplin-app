@@ -85,7 +85,8 @@ const CREW_STATION_OPTIONS = [
   'Quality Control',
   'Stocker',
   'Cel',
-  'Dishwasher'
+  'Dishwasher',
+  'IPS (Kebersihan)'
 ];
 
 const LOGS_PAGE_SIZE = 15;
@@ -680,33 +681,33 @@ if (!isAreaManager && currentOutletId) {
 
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       
-      // 1. Cari dulu sesi kerja aktif hari ini yang belum clock out
-      let { data: activeLogs } = await supabase
+      const { data: userRecentLogs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
         .eq('user_id', user.id)
-        .not('actual_in', 'is', null)
-        .is('actual_out', null)
         .gte('actual_in', past24Hours)
         .order('actual_in', { ascending: false })
-        .limit(1);
+        .limit(5);
 
-      let currentLog = activeLogs?.[0];
+      let currentLog = userRecentLogs?.find(l => !l.actual_out || l.actual_out === '' || l.actual_out === 'null');
 
-      // 2. Jika tidak ada sesi aktif, baru ambil riwayat presensi terakhir
-      if (!currentLog) {
-        const { data: latestLogs } = await supabase
+      if (!currentLog && userRecentLogs && userRecentLogs.length > 0) {
+        currentLog = userRecentLogs[0];
+      } else if (!currentLog) {
+        const { data: fallbackLogs } = await supabase
           .from('attendance_logs')
           .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false })
           .limit(1);
-        currentLog = latestLogs?.[0];
+        currentLog = fallbackLogs?.[0];
       }
 
       const nowMs = Date.now();
 
-      if (currentLog && currentLog.actual_in && !currentLog.actual_out) {
+      const isActualOutFilled = Boolean(currentLog?.actual_out && currentLog.actual_out !== '' && currentLog.actual_out !== 'null');
+
+      if (currentLog && currentLog.actual_in && !isActualOutFilled) {
         const inTime = new Date(currentLog.actual_in);
         const inTimeMs = inTime.getTime();
         let checkInHour = inTime.getHours();
@@ -762,7 +763,7 @@ if (!isAreaManager && currentOutletId) {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } else if (currentLog && currentLog.actual_in && currentLog.actual_out) {
+      } else if (currentLog && currentLog.actual_in && isActualOutFilled) {
         const outTimeMs = new Date(currentLog.actual_out).getTime();
         const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
 
@@ -4968,6 +4969,7 @@ if (!isAreaManager && currentOutletId) {
                         </optgroup>
                         <optgroup label="Staff Lapangan">
                           <option value="crew">Crew Reguler</option>
+                          <option value="ips">IPS (Staff Kebersihan)</option>
                         </optgroup>
                       </>
                     )}
