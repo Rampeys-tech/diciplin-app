@@ -678,14 +678,32 @@ if (!isAreaManager && currentOutletId) {
         }
       }
 
-      const { data: logs } = await supabase
+      const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      
+      // 1. Cari dulu sesi kerja aktif hari ini yang belum clock out
+      let { data: activeLogs } = await supabase
         .from('attendance_logs')
-        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at') 
+        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
         .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
+        .not('actual_in', 'is', null)
+        .is('actual_out', null)
+        .gte('actual_in', past24Hours)
+        .order('actual_in', { ascending: false })
         .limit(1);
 
-      const currentLog = logs?.[0];
+      let currentLog = activeLogs?.[0];
+
+      // 2. Jika tidak ada sesi aktif, baru ambil riwayat presensi terakhir
+      if (!currentLog) {
+        const { data: latestLogs } = await supabase
+          .from('attendance_logs')
+          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        currentLog = latestLogs?.[0];
+      }
+
       const nowMs = Date.now();
 
       if (currentLog && currentLog.actual_in && !currentLog.actual_out) {
@@ -2957,7 +2975,7 @@ if (!isAreaManager && currentOutletId) {
           <div className="flex items-center gap-2">
             <span className="p-1.5 bg-indigo-50 text-indigo-600 rounded-xl"><FiGlobe className="text-base" /></span>
             <div>
-              <p className="text-xs font-black text-slate-900 leading-none">Monitoring Multi-Resto Kaltim</p>
+              <p className="text-xs font-black text-slate-900 leading-none">Monitoring Multi-Resto</p>
               <p className="text-[9px] text-slate-400 font-bold uppercase mt-0.5">Area Manager Executive Control</p>
             </div>
           </div>
@@ -3103,7 +3121,7 @@ if (!isAreaManager && currentOutletId) {
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase">Penempatan:</span>
               </div>
               <span className="text-indigo-700 font-black truncate max-w-[230px] text-right">
-                {(outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id))?.name) || profile?.outlet_name || profile?.station_placement || 'Gacoan Penempatan'}
+                {profile?.station_placement || profile?.outlet_name || (outletsList.find(b => b.id === (profile?.outlet_id || user?.outlet_id))?.name) || 'Gacoan Penempatan'}
               </span>
             </div>
           </div>
