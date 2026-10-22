@@ -332,8 +332,8 @@ export default function AreaDashboard() {
   const [taskDeadline, setTaskDeadline] = useState('');
   const [taskPriority, setTaskPriority] = useState('normal');
   // Target Scope Baru untuk Task Assignment
-  const [taskScopeType, setTaskScopeType] = useState('ALL_SM'); // 'ALL_SM' | 'AREA' | 'STORE' | 'DEPT' | 'USER'
-  const [taskTargetRegion, setTaskTargetRegion] = useState('KALTIM');
+  const [taskScopeType, setTaskScopeType] = useState('KALSEL_SM'); // Default praktis
+  const [taskTargetRegion, setTaskTargetRegion] = useState('KALSEL_1');
   const [taskTargetUserId, setTaskTargetUserId] = useState('');
 
   // Fungsi Hitung Skor SLA (80-100%, 50%, 25%, 0%, atau 100% toleransi)
@@ -588,17 +588,23 @@ export default function AreaDashboard() {
     const isSuper = ['superadmin', 'area_manager', 'owner'].includes((currentProfile.role || '').toLowerCase()) || currentProfile.is_internal;
     if (isSuper) return tasks;
 
+    const myOutlet = outlets.find(o => o.id === currentProfile.outlet_id);
+    const isMyOutletKalsel = isOutletInRegion(myOutlet, 'KALSEL_1');
+
     return tasks.filter(t => {
-      // 1. Target spesifik user ID
+      // 1. Target spesifik wilayah (Kalsel 1)
+      if (t.target_region === 'KALSEL_1' && !isMyOutletKalsel) return false;
+      if (t.target_region === 'KALTIM' && isMyOutletKalsel) return false;
+
+      // 2. Target spesifik user ID
       if (t.target_user_id) return t.target_user_id === currentProfile.id;
-      // 2. Target spesifik resto/outlet
+
+      // 3. Target spesifik resto/outlet
       if (t.outlet_id && t.outlet_id !== currentProfile.outlet_id) return false;
-      // 3. Target departemen
-      if (t.department && t.department !== 'general_management' && t.department !== currentProfile.department && t.department !== currentProfile.station_placement) {
-        // jika ditugaskan spesifik ke dept tertentu
-      }
+
       // 4. Target role SM
       if (t.target_role === 'store_manager' && currentProfile.role !== 'store_manager') return false;
+
       return true;
     });
   }, [tasks, currentProfile]);
@@ -800,23 +806,65 @@ export default function AreaDashboard() {
 
     setIsSubmittingTask(true);
     try {
-      const payload = {
-        title: taskTitle.trim(),
-        deadline: new Date(taskDeadline).toISOString(),
-        priority: taskPriority,
-        department: taskScopeType === 'DEPT' ? taskDept : 'general_management',
-        target_role: taskScopeType === 'ALL_SM' ? 'store_manager' : null,
-        outlet_id: taskScopeType === 'STORE' ? (taskSelectedTargetId || outlets[0]?.id) : null,
-        target_user_id: taskScopeType === 'USER' ? taskTargetUserId : null,
-        created_by: user?.id,
-        status: 'pending',
-        has_tolerance: false
-      };
+      const kalselOutlets = outlets.filter(o => isOutletInRegion(o, 'KALSEL_1'));
 
-      const { error } = await supabase.from('department_tasks').insert([payload]);
-      if (error) throw error;
+      // 1. Target Hanya untuk Seluruh Store Manager (SM) Kalsel 1
+      if (taskScopeType === 'KALSEL_SM') {
+        const payloads = kalselOutlets.map(out => ({
+          title: taskTitle.trim(),
+          deadline: new Date(taskDeadline).toISOString(),
+          priority: taskPriority,
+          department: 'general_management',
+          target_role: 'store_manager',
+          target_region: 'KALSEL_1',
+          outlet_id: out.id,
+          target_user_id: null,
+          created_by: user?.id,
+          status: 'pending',
+          has_tolerance: false
+        }));
+        const { error } = await supabase.from('department_tasks').insert(payloads);
+        if (error) throw error;
+      }
+      // 2. Target Berdasarkan Departemen di Seluruh Kalsel 1
+      else if (taskScopeType === 'DEPT') {
+        const payloads = kalselOutlets.map(out => ({
+          title: taskTitle.trim(),
+          deadline: new Date(taskDeadline).toISOString(),
+          priority: taskPriority,
+          department: taskDept,
+          target_role: null,
+          target_region: 'KALSEL_1',
+          outlet_id: out.id,
+          target_user_id: null,
+          created_by: user?.id,
+          status: 'pending',
+          has_tolerance: false
+        }));
+        const { error } = await supabase.from('department_tasks').insert(payloads);
+        if (error) throw error;
+      }
+      // 3. Target Spesifik ke 1 Manajer Tertentu di Kalsel 1
+      else if (taskScopeType === 'USER') {
+        const targetManager = profiles.find(p => p.id === taskTargetUserId);
+        const payload = {
+          title: taskTitle.trim(),
+          deadline: new Date(taskDeadline).toISOString(),
+          priority: taskPriority,
+          department: 'general_management',
+          target_role: null,
+          target_region: 'KALSEL_1',
+          outlet_id: targetManager?.outlet_id || null,
+          target_user_id: taskTargetUserId,
+          created_by: user?.id,
+          status: 'pending',
+          has_tolerance: false
+        };
+        const { error } = await supabase.from('department_tasks').insert([payload]);
+        if (error) throw error;
+      }
 
-      alert("✓ Jobdesk tugas berhasil diterbitkan sesuai sasaran akun!");
+      alert("✓ Jobdesk tugas berhasil diterbitkan sesuai sasaran wilayah & peran!");
       setTaskTitle('');
       setTaskDeadline('');
       loadMasterData();
@@ -1305,11 +1353,10 @@ export default function AreaDashboard() {
       });
 
       const overallScore = Math.round(
-        (attendanceScore * 0.15) +
-        (breakDisciplineScore * 0.20) +
+        (attendanceScore * 0.25) +
+        (breakDisciplineScore * 0.25) +
         (taskComplianceRate * 0.25) +
-        (deviationScore * 0.25) +
-        (cacpPercentage * 0.15)
+        (cacpPercentage * 0.25)
       );
 
       const storeManager = restoCrew.find(p => p.role === 'store_manager');
@@ -1394,12 +1441,17 @@ export default function AreaDashboard() {
       const outletInfo = outletScoreRankings.find(o => o.id === person.outlet_id);
       const restoHealth = outletInfo?.healthScore || 90;
 
-      const penalty = (lateMinutes * 0.5) + (overbreakCount * 5);
-      const compositeScore = Math.max(30, Math.round(
-        ((personalPoints - penalty) * 0.4) +
-        (taskRate * 0.3) +
-        (restoHealth * 0.3)
-      ));
+      const mgrAttendanceScore = Math.max(0, 100 - (lateMinutes * 2));
+      const mgrBreakScore = Math.max(0, 100 - (overbreakCount * 10));
+      const mgrTaskScore = taskRate;
+      const mgrCacpScore = outletInfo?.cacpData?.overallPercentage || 100;
+
+      const compositeScore = Math.round(
+        (mgrAttendanceScore * 0.25) +
+        (mgrBreakScore * 0.25) +
+        (mgrTaskScore * 0.25) +
+        (mgrCacpScore * 0.25)
+      );
 
       const formatRole = (role) => {
         switch (role) {
@@ -1524,9 +1576,9 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                 }}
                 className="w-full bg-slate-50 border border-slate-200/80 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 outline-none cursor-pointer shadow-2xs"
               >
-                <option value="ALL">🌐 Semua Wilayah (Kaltim & Kalsel 1)</option>
-                <option value="KALSEL_1">📍 Wilayah Kalsel 1 (5 Resto)</option>
-                <option value="KALTIM">📍 Wilayah Kaltim (9 Resto)</option>
+                <option value="ALL">🌐 Semua Wilayah (Semua Resto)</option>
+                <option value="KALSEL_1">📍 Wilayah Kalsel 1</option>
+                <option value="KALTIM">📍 Wilayah 2</option>
               </select>
             </div>
           )}
@@ -1704,23 +1756,28 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
               <div className="w-px h-14 bg-white/15 shrink-0"></div>
 
-              <div className="space-y-2 flex-1 min-w-0 text-left">
+             <div className="space-y-1.5 flex-1 min-w-0 text-left">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-indigo-400 shrink-0"></span>
+                  <span className="text-xs font-mono font-bold text-indigo-300">{top1Outlet?.metrics?.attendance || 100}%</span>
+                  <span className="text-[10px] text-slate-300 font-medium truncate">Kehadiran Kru</span>
+                </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
                   <span className="text-xs font-mono font-bold text-emerald-300">{top1Outlet?.metrics?.breakDiscipline || 100}%</span>
-                  <span className="text-[11px] text-slate-300 font-medium truncate">Break & Shift</span>
+                  <span className="text-[10px] text-slate-300 font-medium truncate">Disiplin Break</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-blue-400 shrink-0"></span>
-                  <span className="text-xs font-mono font-bold text-blue-300">{top1Outlet?.metrics?.deviation || 95}%</span>
-                  <span className="text-[11px] text-slate-300 font-medium truncate">Audit Deviasi BOM</span>
+                  <span className="text-xs font-mono font-bold text-blue-300">{top1Outlet?.metrics?.taskCompliance || 100}%</span>
+                  <span className="text-[10px] text-slate-300 font-medium truncate">SLA Tugas</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-purple-400 shrink-0"></span>
                   <span className="text-xs font-mono font-bold text-purple-300">{top1Outlet?.cacpData?.overallPercentage || 100}%</span>
-                  <span className="text-[11px] text-slate-300 font-medium truncate">Kepatuhan CACP</span>
+                  <span className="text-[10px] text-slate-300 font-medium truncate">Audit CACP</span>
                 </div>
-              </div>
+              </div> 
             </div>
 
             <div className="mt-5 pt-3 border-t border-white/10 flex items-center justify-center gap-1.5 text-[10px] font-bold text-amber-300/90 group-hover:text-amber-300">
@@ -3421,21 +3478,27 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
         {/* ================= MODAL SLA TASK CONTROLLING (ULTRA MODERN MOBILE DASHBOARD) ================= */}
         {activeModal === 'task_manager' && (() => {
-          // 1. Filter Outlets Sesuai Wilayah
-          const filteredOutletsList = outlets.filter(o => isOutletInRegion(o, slaFilterRegion));
+          // 1. Filter Outlets Khusus Kalsel 1 Saja (Kaltim Tersembunyi)
+          const filteredOutletsList = outlets.filter(o => isOutletInRegion(o, 'KALSEL_1'));
 
-          // 2. Filter Tugas Berdasarkan Bulan yang Dipilih
+          // 2. Filter Tugas Berdasarkan Bulan yang Dipilih & Hanya Area Kalsel 1
           const monthlyTasks = tasks.filter(t => {
             const taskDate = t.created_at || t.deadline;
-            return taskDate && taskDate.substring(0, 7) === selectedMonth;
+            const matchMonth = taskDate && taskDate.substring(0, 7) === selectedMonth;
+            const taskOutlet = outlets.find(o => o.id === t.outlet_id);
+            const isKalselTask = !t.outlet_id || isOutletInRegion(taskOutlet, 'KALSEL_1');
+            return matchMonth && isKalselTask;
           });
 
-          // 3. Kalkulasi Performa Manajer (Terfilter Bulan, Wilayah, & Resto)
+          // 3. Kalkulasi Performa Manajer (Murni Manajer di Kalsel 1 Saja)
           const allManagersPerformance = profiles
             .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
+            .filter(manager => {
+              const managerOutlet = outlets.find(o => o.id === manager.outlet_id);
+              return isOutletInRegion(managerOutlet, 'KALSEL_1');
+            })
             .map(manager => {
               const managerOutlet = outlets.find(o => o.id === manager.outlet_id);
-              const isMatchRegion = isOutletInRegion(managerOutlet, slaFilterRegion);
               const isMatchOutlet = slaFilterOutletId === 'ALL' || manager.outlet_id === slaFilterOutletId;
 
               const userTasks = monthlyTasks.filter(t => t.target_user_id === manager.id || (!t.target_user_id && t.outlet_id === manager.outlet_id));
@@ -3581,52 +3644,23 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                     </div>
                   </div>
 
-                  {/* FILTER WILAYAH & RESTO */}
-                  {currentProfile?.role === 'area_manager' ? (
-                    <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-                      <select
-                        value={slaFilterRegion}
-                        onChange={(e) => {
-                          setSlaFilterRegion(e.target.value);
-                          setSlaFilterOutletId('ALL');
-                        }}
-                        className="bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs"
-                      >
-                        <option value="ALL">🌐 Semua Wilayah</option>
-                        <option value="KALSEL_1">📍 Wilayah Kalsel 1</option>
-                        <option value="KALTIM">📍 Wilayah Kaltim</option>
-                      </select>
-
-                      <select
-                        value={slaFilterOutletId}
-                        onChange={(e) => setSlaFilterOutletId(e.target.value)}
-                        className="bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs truncate"
-                      >
-                        <option value="ALL">Semua Resto</option>
-                        {filteredOutletsList.map(o => (
-                          <option key={o.id} value={o.id}>{o.name}</option>
-                        ))}
-                      </select>
+                  {/* FILTER WILAYAH KHUSUS KALSEL 1 */}
+                  <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                    <div className="bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-black rounded-xl px-2.5 py-1.5 flex items-center justify-center gap-1 shadow-2xs">
+                      <span>📍 Wilayah Kalsel 1</span>
                     </div>
-                  ) : (
-                    /* Tampilan untuk Manajer Resto: Wilayah terkunci sesuai areanya, bisa filter antar resto di areanya */
-                    <div className="flex items-center gap-1.5 pt-0.5">
-                      <span className="text-[9px] font-black px-2.5 py-1.5 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl whitespace-nowrap shrink-0">
-                        📍 {slaFilterRegion === 'KALSEL_1' ? 'Wilayah Kalsel 1' : 'Wilayah Kaltim'}
-                      </span>
 
-                      <select
-                        value={slaFilterOutletId}
-                        onChange={(e) => setSlaFilterOutletId(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs truncate"
-                      >
-                        <option value="ALL">Semua Resto di {slaFilterRegion === 'KALSEL_1' ? 'Kalsel 1' : 'Kaltim'}</option>
-                        {filteredOutletsList.map(o => (
-                          <option key={o.id} value={o.id}>{o.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                    <select
+                      value={slaFilterOutletId}
+                      onChange={(e) => setSlaFilterOutletId(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 text-slate-800 text-[10px] font-black rounded-xl px-2 py-1.5 outline-none cursor-pointer shadow-2xs truncate"
+                    >
+                      <option value="ALL">Semua Resto Kalsel 1</option>
+                      {outlets.filter(o => isOutletInRegion(o, 'KALSEL_1')).map(o => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </select>
+                  </div>
 
                   {/* SUB TAB SELECTOR */}
                   <div className="flex gap-1 bg-slate-100 p-0.5 rounded-xl border border-slate-200/80">
@@ -4018,47 +4052,45 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                               <select
                                 value={taskScopeType}
                                 onChange={(e) => setTaskScopeType(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
                               >
-                                <option value="ALL_SM">Semua SM</option>
-                                <option value="STORE">Pilih Resto</option>
-                                <option value="USER">Pilih Manajer</option>
-                                <option value="DEPT">Departemen</option>
+                                <option value="KALSEL_SM">👑 Khusus SM Kalsel 1</option>
+                                <option value="DEPT">📁 Khusus Departemen</option>
+                                <option value="USER">👤 Khusus Manajer Tertentu</option>
                               </select>
 
                               <select
                                 value={taskPriority}
                                 onChange={(e) => setTaskPriority(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
                               >
                                 <option value="normal">Normal</option>
                                 <option value="urgent">Mendesak</option>
                               </select>
                             </div>
 
-                            {taskScopeType === 'STORE' && (
-                              <select
-                                value={taskSelectedTargetId}
-                                onChange={(e) => setTaskSelectedTargetId(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
-                              >
-                                {outlets.map(o => (
-                                  <option key={o.id} value={o.id}>{o.name}</option>
-                                ))}
-                              </select>
-                            )}
-
                             {taskScopeType === 'USER' && (
                               <select
                                 value={taskTargetUserId}
                                 onChange={(e) => setTaskTargetUserId(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none"
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
                                 required
                               >
-                                <option value="">-- Pilih Akun Manajer --</option>
-                                {profiles.filter(p => ['store_manager', 'ast_store_manager', 'floor_leader'].includes(p.role)).map(p => (
-                                  <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>
-                                ))}
+                                <option value="">-- Pilih Manajer Kalsel 1 --</option>
+                                {profiles
+                                  .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
+                                  .filter(p => {
+                                    const out = outlets.find(o => o.id === p.outlet_id);
+                                    return isOutletInRegion(out, 'KALSEL_1');
+                                  })
+                                  .map(p => {
+                                    const out = outlets.find(o => o.id === p.outlet_id);
+                                    return (
+                                      <option key={p.id} value={p.id}>
+                                        {p.full_name} — {out?.name || 'Kalsel'} ({p.role ? p.role.replace(/_/g, ' ').toUpperCase() : ''})
+                                      </option>
+                                    );
+                                  })}
                               </select>
                             )}
 
