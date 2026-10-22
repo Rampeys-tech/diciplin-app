@@ -477,6 +477,15 @@ export default function BreakSystem() {
       setIsFetchingProfiles(false);
     }
   }, [isAreaManager, profile?.outlet_id, selectedBranchId]);
+  // Saring kru agar hanya menampilkan personil yang bertugas di resto yang bersangkutan
+  const activeStoreCrewList = useMemo(() => {
+    const targetOutletId = !isAreaManager 
+      ? (profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id)
+      : (selectedBranchId !== 'ALL' ? selectedBranchId : null);
+
+    if (!targetOutletId) return allProfiles;
+    return allProfiles.filter(p => p.outlet_id === targetOutletId);
+  }, [allProfiles, isAreaManager, profile?.outlet_id, user, selectedBranchId]);
 
   // ================= SINKRONISASI IC SHIFT AKTIF =================
   const fetchActiveShiftStats = useCallback(async () => {
@@ -681,22 +690,14 @@ if (!isAreaManager && currentOutletId) {
 
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       
-      // Ambil seluruh log user 24 jam terakhir
-      const { data: userRecentLogs } = await supabase
-        .from('attendance_logs')
-        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
-        .eq('user_id', user.id)
-        .gte('actual_in', past24Hours)
-        .order('created_at', { ascending: false });
-
-      // 1. Cari log kerja aktif yang belum clock out
+     // 1. Cari log kerja aktif yang belum clock out
       let currentLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
 
-      // 2. Jika tidak ada log aktif, ambil log terakhir HANYA jika bukan hasil auto-close sistem
+      // 2. Jika tidak ada sesi gantung, jangan pernah memasang log yang ditutup paksa oleh auto-close sistem
       if (!currentLog && userRecentLogs && userRecentLogs.length > 0) {
         const latest = userRecentLogs[0];
-        const isAutoClosed = latest?.status_out && latest.status_out.includes('Lupa Absen Pulang');
-        if (!isAutoClosed) {
+        const isSystemAutoClosed = latest?.status_out && (latest.status_out.includes('Lupa Absen') || latest.status_out.includes('> 3 Jam') || latest.status_out.includes('>3 Jam'));
+        if (!isSystemAutoClosed) {
           currentLog = latest;
         }
       }
@@ -763,7 +764,7 @@ if (!isAreaManager && currentOutletId) {
      } else if (currentLog && currentLog.actual_in && isActualOutFilled) {
         const outTimeMs = new Date(currentLog.actual_out).getTime();
         const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
-        const isAutoClosed = currentLog.status_out && currentLog.status_out.includes('Lupa Absen Pulang');
+        const isAutoClosed = currentLog.status_out && (currentLog.status_out.includes('Lupa Absen') || currentLog.status_out.includes('> 3 Jam') || currentLog.status_out.includes('>3 Jam'));
 
         // Bebaskan tombol jika sesi selesai lewat 4 jam ATAU sesi ditutup otomatis oleh sistem
         if (diffHours >= 4 || isAutoClosed) {
@@ -3322,12 +3323,12 @@ if (!isAreaManager && currentOutletId) {
                             value={selectedCrewId} 
                             onChange={(e) => setSelectedCrewId(e.target.value)} 
                             onClick={() => { if (allProfiles.length === 0) fetchAllProfilesList(); }}
-                            className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium"
+                            className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium cursor-pointer"
                           >
                             <option value="" className="text-slate-900">
-                              {allProfiles.length === 0 ? 'Memuat Staff...' : '-- Pilih Staff --'}
+                              {activeStoreCrewList.length === 0 ? '-- Tidak Ada Kru di Resto Ini --' : '-- Pilih Staff Resto --'}
                             </option>
-                            {allProfiles.map(p => (
+                            {activeStoreCrewList.map(p => (
                               <option key={p.id} value={p.id} className="text-slate-900">
                                 {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
                               </option>
@@ -4434,8 +4435,10 @@ if (!isAreaManager && currentOutletId) {
                     required
                     className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl px-3 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500 cursor-pointer"
                   >
-                    <option value="">-- Pilih Kru --</option>
-                    {allProfiles.map(p => (
+                    <option value="">
+                      {activeStoreCrewList.length === 0 ? '-- Tidak Ada Kru di Resto Ini --' : '-- Pilih Kru Resto --'}
+                    </option>
+                    {activeStoreCrewList.map(p => (
                       <option key={p.id} value={p.id}>
                         {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
                       </option>
