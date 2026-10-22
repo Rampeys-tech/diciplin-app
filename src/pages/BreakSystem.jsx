@@ -681,29 +681,24 @@ if (!isAreaManager && currentOutletId) {
 
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       
-      // 1. Prioritaskan ambil sesi user yang sedang aktif (masuk hari ini dan belum checkout)
+      // Ambil seluruh log user 24 jam terakhir
       const { data: userRecentLogs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
         .eq('user_id', user.id)
         .gte('actual_in', past24Hours)
-        .order('actual_in', { ascending: false })
-        .limit(10);
+        .order('created_at', { ascending: false });
 
-      // Sesi aktif adalah log yang actual_out-nya masih kosong
+      // 1. Cari log kerja aktif yang belum clock out
       let currentLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
 
-      // 2. Jika memang user belum pernah absen masuk dalam 24 jam terakhir, baru ambil riwayat terakhir
+      // 2. Jika tidak ada log aktif, ambil log terakhir HANYA jika bukan hasil auto-close sistem
       if (!currentLog && userRecentLogs && userRecentLogs.length > 0) {
-        currentLog = userRecentLogs[0];
-      } else if (!currentLog) {
-        const { data: fallbackLogs } = await supabase
-          .from('attendance_logs')
-          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        currentLog = fallbackLogs?.[0];
+        const latest = userRecentLogs[0];
+        const isAutoClosed = latest?.status_out && latest.status_out.includes('Lupa Absen Pulang');
+        if (!isAutoClosed) {
+          currentLog = latest;
+        }
       }
       const nowMs = Date.now();
 
@@ -765,11 +760,13 @@ if (!isAreaManager && currentOutletId) {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } else if (currentLog && currentLog.actual_in && isActualOutFilled) {
+     } else if (currentLog && currentLog.actual_in && isActualOutFilled) {
         const outTimeMs = new Date(currentLog.actual_out).getTime();
         const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
+        const isAutoClosed = currentLog.status_out && currentLog.status_out.includes('Lupa Absen Pulang');
 
-        if (diffHours >= 4) {
+        // Bebaskan tombol jika sesi selesai lewat 4 jam ATAU sesi ditutup otomatis oleh sistem
+        if (diffHours >= 4 || isAutoClosed) {
           setActiveLogId(null);
           setHasCheckedIn(false);
           setHasCheckedOut(false);
@@ -784,7 +781,7 @@ if (!isAreaManager && currentOutletId) {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } else {
+      }  else {
         setHasCheckedIn(false);
         setHasCheckedOut(false);
         setCheckInTime(null);
