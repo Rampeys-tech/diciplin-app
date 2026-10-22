@@ -681,16 +681,19 @@ if (!isAreaManager && currentOutletId) {
 
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       
+      // 1. Prioritaskan ambil sesi user yang sedang aktif (masuk hari ini dan belum checkout)
       const { data: userRecentLogs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
         .eq('user_id', user.id)
         .gte('actual_in', past24Hours)
         .order('actual_in', { ascending: false })
-        .limit(5);
+        .limit(10);
 
-      let currentLog = userRecentLogs?.find(l => !l.actual_out || l.actual_out === '' || l.actual_out === 'null');
+      // Sesi aktif adalah log yang actual_out-nya masih kosong
+      let currentLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
 
+      // 2. Jika memang user belum pernah absen masuk dalam 24 jam terakhir, baru ambil riwayat terakhir
       if (!currentLog && userRecentLogs && userRecentLogs.length > 0) {
         currentLog = userRecentLogs[0];
       } else if (!currentLog) {
@@ -702,7 +705,6 @@ if (!isAreaManager && currentOutletId) {
           .limit(1);
         currentLog = fallbackLogs?.[0];
       }
-
       const nowMs = Date.now();
 
       const isActualOutFilled = Boolean(currentLog?.actual_out && currentLog.actual_out !== '' && currentLog.actual_out !== 'null');
