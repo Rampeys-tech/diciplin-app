@@ -592,9 +592,12 @@ export default function AreaDashboard() {
     const isMyOutletKalsel = isOutletInRegion(myOutlet, 'KALSEL_1');
 
     return tasks.filter(t => {
-      // 1. Target spesifik wilayah (Kalsel 1)
-      if (t.target_region === 'KALSEL_1' && !isMyOutletKalsel) return false;
-      if (t.target_region === 'KALTIM' && isMyOutletKalsel) return false;
+      // 1. Target spesifik wilayah
+      if (t.outlet_id) {
+        const taskOutlet = outlets.find(o => o.id === t.outlet_id);
+        const isTaskInKalsel = isOutletInRegion(taskOutlet, 'KALSEL_1');
+        if (isTaskInKalsel !== isMyOutletKalsel) return false;
+      }
 
       // 2. Target spesifik user ID
       if (t.target_user_id) return t.target_user_id === currentProfile.id;
@@ -816,7 +819,6 @@ export default function AreaDashboard() {
           priority: taskPriority,
           department: 'general_management',
           target_role: 'store_manager',
-          target_region: 'KALSEL_1',
           outlet_id: out.id,
           target_user_id: null,
           created_by: user?.id,
@@ -834,7 +836,6 @@ export default function AreaDashboard() {
           priority: taskPriority,
           department: taskDept,
           target_role: null,
-          target_region: 'KALSEL_1',
           outlet_id: out.id,
           target_user_id: null,
           created_by: user?.id,
@@ -853,7 +854,6 @@ export default function AreaDashboard() {
           priority: taskPriority,
           department: 'general_management',
           target_role: null,
-          target_region: 'KALSEL_1',
           outlet_id: targetManager?.outlet_id || null,
           target_user_id: taskTargetUserId,
           created_by: user?.id,
