@@ -290,6 +290,7 @@ export default function AreaDashboard() {
 
   // State untuk Portofolio Rincian Tugas Manajer & Preview Foto Penuh
   const [selectedManagerForTaskHistory, setSelectedManagerForTaskHistory] = useState(null);
+  const [selectedRestoForSlaDetail, setSelectedRestoForSlaDetail] = useState(null);
   const [taskProofModalImage, setTaskProofModalImage] = useState(null);
   const [equipStationFilter, setEquipStationFilter] = useState('ALL');
   const [equipSearchQuery, setEquipSearchQuery] = useState('');
@@ -3474,7 +3475,7 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             return matchMonth && isKalselTask;
           });
 
-          // 3. Kalkulasi Performa Manajer (Murni Manajer di Kalsel 1 Saja)
+          // 3. Kalkulasi Performa Manajer (Prioritas: Sudah Selesai, Tepat & Paling Cepat)
           const allManagersPerformance = profiles
             .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
             .filter(manager => {
@@ -3487,17 +3488,17 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
               const isMatchOutlet = slaFilterOutletId === 'ALL' || manager.outlet_id === slaFilterOutletId;
 
               const userTasks = monthlyTasks.filter(t => {
-                if (t.target_user_id) {
-                  return t.target_user_id === manager.id;
-                }
+                if (t.target_user_id) return t.target_user_id === manager.id;
                 return t.outlet_id === manager.outlet_id && t.target_role === manager.role;
               });
+
               let totalScoreSum = 0;
               let evaluatedCount = 0;
               let onTimeCount = 0;
               let sameDayOverdue = 0;
               let multiDayOverdue = 0;
               let uncompletedCount = 0;
+              let speedBonusTotal = 0;
 
               userTasks.forEach(task => {
                 const score = calculateTaskScore(task);
@@ -3509,9 +3510,25 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                   else if (score === 25) multiDayOverdue++;
                   else if (score === 0) uncompletedCount++;
                 }
+
+                // Kalkulasi efisiensi kecepatan waktu selesai (time saved)
+                if (task.status === 'completed' && task.completed_at) {
+                  const created = new Date(task.created_at).getTime();
+                  const deadline = new Date(task.deadline).getTime();
+                  const completed = new Date(task.completed_at).getTime();
+                  if (completed <= deadline) {
+                    const durasiTotal = Math.max(1, deadline - created);
+                    const waktuHemat = Math.max(0, deadline - completed);
+                    speedBonusTotal += (waktuHemat / durasiTotal) * 100;
+                  }
+                }
               });
 
-              const avgScore = evaluatedCount > 0 ? Math.round(totalScoreSum / evaluatedCount) : 100;
+              // Jika punya tugas tapi belum selesai sama sekali, jangan beri nilai 100%
+              const completedCount = onTimeCount + sameDayOverdue + multiDayOverdue;
+              const avgScore = evaluatedCount > 0 
+                ? Math.round(totalScoreSum / evaluatedCount) 
+                : (userTasks.length > 0 ? 0 : 100);
 
               return {
                 id: manager.id,
@@ -3522,16 +3539,29 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                 outletName: managerOutlet?.name || 'Cabang Resto',
                 outletCode: managerOutlet?.code || '-',
                 totalTasks: userTasks.length,
+                completedTasksCount: completedCount,
                 avgScore,
                 onTimeCount,
                 sameDayOverdue,
                 multiDayOverdue,
                 uncompletedCount,
+                speedBonus: speedBonusTotal,
                 tasks: userTasks,
                 isIncludedInFilter: isMatchRegion && isMatchOutlet
               };
             })
-            .sort((a, b) => b.avgScore - a.avgScore);
+            .sort((a, b) => {
+              // 1. Manajer yang sudah menyelesaikan tugas wajib naik ke atas
+              if (b.completedTasksCount !== a.completedTasksCount) {
+                return b.completedTasksCount - a.completedTasksCount;
+              }
+              // 2. Berdasarkan skor kepatuhan SLA tertinggi
+              if (b.avgScore !== a.avgScore) {
+                return b.avgScore - a.avgScore;
+              }
+              // 3. Berdasarkan kecepatan waktu pengerjaan (yang tercepat jadi #1)
+              return b.speedBonus - a.speedBonus;
+            });
 
           const displayedManagers = allManagersPerformance.filter(m => m.isIncludedInFilter);
           const currentLoggedInManager = allManagersPerformance.find(m => m.id === currentProfile?.id);
@@ -3959,18 +3989,14 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                         </div>
 
                         {restoPerformanceList.map((resto, idx) => {
-                          const isTop1 = idx === 0;
-                          const isCurrentActive = resto.id === slaFilterOutletId;
+  const isTop1 = idx === 0;
+  const isCurrentActive = resto.id === slaFilterOutletId;
 
-                          return (
-                            <div 
-                              key={resto.id} 
-                              onClick={() => {
-                                if (currentProfile?.role === 'area_manager') {
-                                  setSlaFilterOutletId(resto.id);
-                                }
-                              }}
-                              className={`p-3 rounded-2xl border transition-all cursor-pointer space-y-2 shadow-2xs ${
+  return (
+    <div 
+      key={resto.id} 
+      onClick={() => setSelectedRestoForSlaDetail(resto)}
+      className={`p-3 rounded-2xl border transition-all cursor-pointer space-y-2 shadow-2xs hover:scale-[1.01] ${
                                 isCurrentActive ? 'bg-indigo-50/70 border-indigo-400 ring-1 ring-indigo-400' :
                                 isTop1 ? 'bg-amber-50/40 border-amber-300' : 
                                 'bg-white border-slate-200/90 hover:border-slate-300'
@@ -4433,7 +4459,221 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             </div>
           </div>
         )}
+{/* ================= MODAL DETAIL RIWAYAT & DISIPLIN RESTO ================= */}
+        {selectedRestoForSlaDetail && (() => {
+          // Ambil seluruh tugas bulanan khusus cabang resto ini
+          const restoTasks = tasks.filter(t => {
+            const taskDate = t.created_at || t.deadline;
+            const matchMonth = taskDate && taskDate.substring(0, 7) === selectedMonth;
+            return matchMonth && t.outlet_id === selectedRestoForSlaDetail.id;
+          });
 
+          // Ambil manajer yang bertugas di cabang resto ini
+          const restoManagers = profiles
+            .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
+            .filter(p => p.outlet_id === selectedRestoForSlaDetail.id)
+            .map(mgr => {
+              const myTasks = restoTasks.filter(t => t.target_user_id === mgr.id);
+              let onTime = 0;
+              let overdue = 0;
+              let scores = [];
+
+              myTasks.forEach(t => {
+                const s = calculateTaskScore(t);
+                if (s !== null) {
+                  scores.push(s);
+                  if (s >= 80) onTime++;
+                  else overdue++;
+                }
+              });
+
+              const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 100;
+              return {
+                ...mgr,
+                taskCount: myTasks.length,
+                onTime,
+                overdue,
+                avgSla: avg
+              };
+            });
+
+          // Analisis Manager Terrajin & Manager yang Perlu Perhatian
+          const completedManagers = restoManagers.filter(m => m.taskCount > 0);
+          const topManager = [...completedManagers].sort((a, b) => b.avgSla - a.avgSla || b.onTime - a.onTime)[0];
+          const overdueManager = [...completedManagers].sort((a, b) => b.overdue - a.overdue || a.avgSla - b.avgSla)[0];
+
+          return (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md max-h-[92vh] rounded-3xl flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+                
+                {/* Header Modal */}
+                <div className="px-5 py-3.5 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 shadow-2xs">
+                  <div>
+                    <span className="text-[9px] font-black uppercase tracking-wider text-indigo-600 block">
+                      Rapor Riwayat Kinerja Cabang
+                    </span>
+                    <h3 className="text-sm font-black text-slate-900 truncate max-w-[240px]">
+                      {selectedRestoForSlaDetail.name}
+                    </h3>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setSelectedRestoForSlaDetail(null)}
+                    className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-xl cursor-pointer"
+                  >
+                    <FiX className="text-base" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+                  
+                  {/* Kartu Ringkasan SLA Resto */}
+                  <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white p-4 rounded-2xl shadow-md border border-indigo-500/20 flex items-center justify-between">
+                    <div>
+                      <span className="text-[9px] text-indigo-300 uppercase font-black tracking-widest block">
+                        Rerata Keberhasilan Cabang
+                      </span>
+                      <p className="text-3xl font-black font-mono text-emerald-400 mt-0.5">
+                        {selectedRestoForSlaDetail.avgSla}%
+                      </p>
+                      <p className="text-[9.5px] text-slate-300 font-mono mt-1">
+                        Total {restoTasks.length} Tugas • {selectedRestoForSlaDetail.onTime} Tepat Waktu
+                      </p>
+                    </div>
+
+                    <div className="text-right space-y-1 font-mono text-[10px]">
+                      <div className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-lg">
+                        ✓ {selectedRestoForSlaDetail.onTime} Sukses Tepat
+                      </div>
+                      <div className="px-2.5 py-1 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-lg">
+                        ⚠️ {selectedRestoForSlaDetail.overdue} Terlambat / Over
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Komparasi: Manajer Terrajin vs Sering Over */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    
+                    {/* Terrajin */}
+                    <div className="bg-white p-3 rounded-2xl border border-emerald-200 shadow-2xs space-y-1.5">
+                      <div className="flex items-center gap-1.5 text-emerald-700">
+                        <span className="text-xs">👑</span>
+                        <span className="text-[9px] font-black uppercase tracking-wider">Manajer Terrajin</span>
+                      </div>
+                      {topManager ? (
+                        <div>
+                          <p className="text-xs font-black text-slate-900 truncate">{topManager.full_name}</p>
+                          <span className="text-[8.5px] font-bold text-indigo-600 block uppercase">
+                            {topManager.role.replace(/_/g, ' ')}
+                          </span>
+                          <span className="text-[9px] font-mono font-black text-emerald-600 mt-1 block">
+                            {topManager.avgSla}% SLA ({topManager.onTime} Tepat)
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 italic">Belum ada tugas selesai</p>
+                      )}
+                    </div>
+
+                    {/* Sering Over */}
+                    <div className="bg-white p-3 rounded-2xl border border-rose-200 shadow-2xs space-y-1.5">
+                      <div className="flex items-center gap-1.5 text-rose-700">
+                        <span className="text-xs">⚠️</span>
+                        <span className="text-[9px] font-black uppercase tracking-wider">Evaluasi Over</span>
+                      </div>
+                      {overdueManager && overdueManager.overdue > 0 ? (
+                        <div>
+                          <p className="text-xs font-black text-slate-900 truncate">{overdueManager.full_name}</p>
+                          <span className="text-[8.5px] font-bold text-rose-600 block uppercase">
+                            {overdueManager.role.replace(/_/g, ' ')}
+                          </span>
+                          <span className="text-[9px] font-mono font-black text-rose-600 mt-1 block">
+                            {overdueManager.overdue} Kali Over SLA
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-emerald-600 font-bold mt-1">✓ Tidak ada manajer over</p>
+                      )}
+                    </div>
+
+                  </div>
+
+                  {/* Riwayat Tugas yang Dikerjakan di Resto Tersebut */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] font-black uppercase text-slate-600 tracking-wider">
+                        Log Riwayat Tugas Cabang ({restoTasks.length})
+                      </span>
+                      <span className="text-[9px] text-slate-400 font-mono">Bulan {selectedMonth}</span>
+                    </div>
+
+                    {restoTasks.length === 0 ? (
+                      <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
+                        Belum ada tugas yang ditugaskan ke cabang ini.
+                      </div>
+                    ) : (
+                      restoTasks.map(t => {
+                        const targetUser = profiles.find(p => p.id === t.target_user_id);
+                        const isDone = t.status === 'completed';
+                        const score = calculateTaskScore(t);
+
+                        return (
+                          <div key={t.id} className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md truncate max-w-[210px]">
+                                👤 {targetUser ? targetUser.full_name : t.department}
+                              </span>
+                              <span className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded ${
+                                score >= 80 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              }`}>
+                                {isDone ? `${score}% SLA` : 'Pending'}
+                              </span>
+                            </div>
+
+                            <p className="text-xs font-black text-slate-900 leading-snug">{t.title}</p>
+                            
+                            <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono pt-0.5">
+                              <span>Deadline: {new Date(t.deadline).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}</span>
+                              {t.proof_photo_url && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (t.proof_photo_url.toLowerCase().endsWith('.pdf')) {
+                                      window.open(t.proof_photo_url, '_blank');
+                                    } else {
+                                      setTaskProofModalImage(t.proof_photo_url);
+                                    }
+                                  }}
+                                  className="text-indigo-600 font-bold underline"
+                                >
+                                  Bukti Hasil ↗
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                </div>
+
+                {/* Footer Modal */}
+                <div className="p-3 bg-white border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRestoForSlaDetail(null)}
+                    className="w-full py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl cursor-pointer hover:bg-slate-800 transition-colors"
+                  >
+                    Tutup Rapor Cabang
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          );
+        })()}
+        
         {/* MODAL PREVIEW FOTO BUKTI DOKUMENTASI FULL SCREEN */}
         {taskProofModalImage && (
           <div 
@@ -4488,18 +4728,29 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                 </div>
 
                 <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-2xl space-y-1.5">
-                  <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                    <FiCamera className="text-emerald-700" /> Foto Hasil Pekerjaan (Wajib)
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
+                      <FiUploadCloud className="text-emerald-700" /> Bukti Pengerjaan (Wajib)
+                    </span>
+                    <span className="text-[9px] font-bold text-emerald-800 bg-white px-2 py-0.5 rounded border border-emerald-200">
+                      Foto / Screenshot / PDF
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    Bisa foto kamera langsung, screenshot dari galeri HP, atau file dokumen PDF.
+                  </p>
                   <input
                     type="file"
-                    accept="image/*"
-                    capture="environment"
+                    accept="image/*,application/pdf"
                     onChange={(e) => setProofImage(e.target.files[0])}
-                    className="text-xs text-slate-600 file:mr-2 file:py-1 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 cursor-pointer w-full"
+                    className="text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 cursor-pointer w-full"
                     required
                   />
-                  {proofImage && <p className="text-[10px] text-emerald-700 font-bold truncate">✓ Terpilih: {proofImage.name}</p>}
+                  {proofImage && (
+                    <p className="text-[10px] text-emerald-700 font-bold truncate">
+                      ✓ Berkas siap: {proofImage.name}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-1">
