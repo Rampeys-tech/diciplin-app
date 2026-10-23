@@ -527,13 +527,11 @@ if (!isAreaManager && currentOutletId) {
 
         for (const log of activeLogs) {
           const inTimeMs = new Date(log.actual_in).getTime();
-          const inHour = new Date(log.actual_in).getHours();
-          const targetHours = (inHour === 22) ? 8 : 9;
-          const maxAllowedSessionMs = (targetHours + 3) * 60 * 60 * 1000;
           const elapsedMs = nowMs - inTimeMs;
+          const maxAllowedSessionMs = 15 * 60 * 60 * 1000;
 
           if (elapsedMs > maxAllowedSessionMs) {
-            const outTimestamp = new Date(inTimeMs + targetHours * 3600 * 1000).toISOString();
+            const outTimestamp = new Date(inTimeMs + 9 * 3600 * 1000).toISOString();
 
             supabase
               .from('attendance_logs')
@@ -545,27 +543,6 @@ if (!isAreaManager && currentOutletId) {
               })
               .eq('id', log.id)
               .then(() => {});
-
-            supabase
-              .from('operational_violations')
-              .insert({
-                crew_id: log.user_id,
-                violation_type: 'Terlambat Absen Pulang > 3 Jam',
-                notes: 'Sistem otomatis menutup shift karena tidak clock out lebih dari 3 jam.',
-                penalty_points: 10,
-                outlet_id: log.outlet_id
-              }).then(() => {});
-
-            const targetCrewProf = profileMap[log.user_id];
-            if (targetCrewProf) {
-              const curPts = targetCrewProf.total_points !== null && targetCrewProf.total_points !== undefined ? Number(targetCrewProf.total_points) : 100;
-              const nextPts = Math.max(0, curPts - 10);
-              supabase
-                .from('user_profiles')
-                .update({ total_points: nextPts })
-                .eq('id', log.user_id)
-                .then(() => {});
-            }
 
             continue;
           }
@@ -724,9 +701,9 @@ if (!isAreaManager && currentOutletId) {
           } catch(e) {}
         }
 
-        const isShift22 = (checkInHour === 22);
-        const targetHours = isShift22 ? 8 : 9;
-        const maxSessionMs = (targetHours + 3) * 60 * 60 * 1000;
+        JavaScript
+        const targetHours = (checkInHour === 22) ? 8 : 9;
+        const maxSessionMs = 15 * 60 * 60 * 1000;
 
         if ((nowMs - inTimeMs) > maxSessionMs) {
           await supabase.from('attendance_logs').update({
