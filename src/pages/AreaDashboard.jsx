@@ -3499,6 +3499,7 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             })
             .map(manager => {
               const managerOutlet = outlets.find(o => o.id === manager.outlet_id);
+              const isMatchRegion = isOutletInRegion(managerOutlet, 'KALSEL_1');
               const isMatchOutlet = slaFilterOutletId === 'ALL' || manager.outlet_id === slaFilterOutletId;
 
               const userTasks = monthlyTasks.filter(t => t.target_user_id === manager.id || (!t.target_user_id && t.outlet_id === manager.outlet_id));
