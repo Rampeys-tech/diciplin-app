@@ -336,34 +336,31 @@ export default function AreaDashboard() {
   const [taskTargetRegion, setTaskTargetRegion] = useState('KALSEL_1');
   const [taskTargetUserId, setTaskTargetUserId] = useState('');
 
-  // Fungsi Hitung Skor SLA (80-100%, 50%, 25%, 0%, atau 100% toleransi)
+  // Fungsi Hitung Skor SLA Real (100% tepat waktu, 80% toleransi hari sama, 50% lewat hari)
   const calculateTaskScore = (task) => {
     if (task.has_tolerance) return 100;
 
     if (task.status !== 'completed') {
       const isOverdue = new Date(task.deadline) < new Date();
-      return isOverdue ? 0 : null; // null jika waktu masih berjalan
+      return isOverdue ? 0 : null;
     }
 
-    const createdTime = new Date(task.created_at).getTime();
-    const deadlineTime = new Date(task.deadline).getTime();
+    if (task.is_on_time === true) return 100;
+
     const completedTime = new Date(task.completed_at || task.created_at).getTime();
+    const deadlineTime = new Date(task.deadline).getTime();
 
-    // Selesai Tepat Waktu / Lebih Cepat
     if (completedTime <= deadlineTime) {
-      const totalDur = Math.max(1, deadlineTime - createdTime);
-      const timeSaved = Math.max(0, deadlineTime - completedTime);
-      return Math.round(80 + ((timeSaved / totalDur) * 20)); // Rentang 80 - 100%
+      return 100;
     }
 
-    // Over Deadline: Cek apakah hari yang sama atau beda hari
     const deadlineDate = new Date(task.deadline).toDateString();
     const completedDate = new Date(completedTime).toDateString();
 
     if (deadlineDate === completedDate) {
-      return 50; // Over deadline di hari yang sama
+      return 80;
     } else {
-      return 25; // Over deadline lewat hari
+      return 50;
     }
   };
   const [isSubmittingTask, setIsSubmittingTask] = useState(false);
@@ -582,31 +579,27 @@ export default function AreaDashboard() {
     };
   }, [opexList]);
 
-  // FILTER TUGAS SESUAI TARGET AKUN / RESTO / WILAYAH / DEPARTEMEN
+  // FILTER TUGAS SESUAI TARGET AKUN / RESTO / WILAYAH / JABATAN
   const userVisibleTasks = useMemo(() => {
     if (!currentProfile) return [];
     const isSuper = ['superadmin', 'area_manager', 'owner'].includes((currentProfile.role || '').toLowerCase()) || currentProfile.is_internal;
     if (isSuper) return tasks;
 
-    const myOutlet = outlets.find(o => o.id === currentProfile.outlet_id);
-    const isMyOutletKalsel = isOutletInRegion(myOutlet, 'KALSEL_1');
-
     return tasks.filter(t => {
-      // 1. Target spesifik wilayah
-      if (t.outlet_id) {
-        const taskOutlet = outlets.find(o => o.id === t.outlet_id);
-        const isTaskInKalsel = isOutletInRegion(taskOutlet, 'KALSEL_1');
-        if (isTaskInKalsel !== isMyOutletKalsel) return false;
+      // 1. Jika tugas spesifik ke satu user
+      if (t.target_user_id) {
+        return t.target_user_id === currentProfile.id;
       }
 
-      // 2. Target spesifik user ID
-      if (t.target_user_id) return t.target_user_id === currentProfile.id;
+      // 2. Jika ada pembatasan target role/jabatan
+      if (t.target_role && t.target_role !== currentProfile.role) {
+        return false;
+      }
 
-      // 3. Target spesifik resto/outlet
-      if (t.outlet_id && t.outlet_id !== currentProfile.outlet_id) return false;
-
-      // 4. Target role SM
-      if (t.target_role === 'store_manager' && currentProfile.role !== 'store_manager') return false;
+      // 3. Cek kesesuaian outlet
+      if (t.outlet_id && t.outlet_id !== currentProfile.outlet_id) {
+        return false;
+      }
 
       return true;
     });
@@ -809,62 +802,53 @@ export default function AreaDashboard() {
 
     setIsSubmittingTask(true);
     try {
-      const kalselOutlets = outlets.filter(o => isOutletInRegion(o, 'KALSEL_1'));
+      // Saring seluruh akun manajer di wilayah Kalsel 1
+      const kalselManagers = profiles.filter(p => {
+        const isManagerRole = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role);
+        const personOutlet = outlets.find(o => o.id === p.outlet_id);
+        const matchRegion = isOutletInRegion(personOutlet, 'KALSEL_1');
+        return isManagerRole && matchRegion;
+      });
 
-      // 1. Target Hanya untuk Seluruh Store Manager (SM) Kalsel 1
-      if (taskScopeType === 'KALSEL_SM') {
-        const payloads = kalselOutlets.map(out => ({
-          title: taskTitle.trim(),
-          deadline: new Date(taskDeadline).toISOString(),
-          priority: taskPriority,
-          department: 'general_management',
-          target_role: 'store_manager',
-          outlet_id: out.id,
-          target_user_id: null,
-          created_by: user?.id,
-          status: 'pending',
-          has_tolerance: false
-        }));
-        const { error } = await supabase.from('department_tasks').insert(payloads);
-        if (error) throw error;
-      }
-      // 2. Target Berdasarkan Departemen di Seluruh Kalsel 1
-      else if (taskScopeType === 'DEPT') {
-        const payloads = kalselOutlets.map(out => ({
-          title: taskTitle.trim(),
-          deadline: new Date(taskDeadline).toISOString(),
-          priority: taskPriority,
-          department: taskDept,
-          target_role: null,
-          outlet_id: out.id,
-          target_user_id: null,
-          created_by: user?.id,
-          status: 'pending',
-          has_tolerance: false
-        }));
-        const { error } = await supabase.from('department_tasks').insert(payloads);
-        if (error) throw error;
-      }
-      // 3. Target Spesifik ke 1 Manajer Tertentu di Kalsel 1
-      else if (taskScopeType === 'USER') {
-        const targetManager = profiles.find(p => p.id === taskTargetUserId);
-        const payload = {
-          title: taskTitle.trim(),
-          deadline: new Date(taskDeadline).toISOString(),
-          priority: taskPriority,
-          department: 'general_management',
-          target_role: null,
-          outlet_id: targetManager?.outlet_id || null,
-          target_user_id: taskTargetUserId,
-          created_by: user?.id,
-          status: 'pending',
-          has_tolerance: false
-        };
-        const { error } = await supabase.from('department_tasks').insert([payload]);
-        if (error) throw error;
+      let targetProfiles = [];
+
+      if (taskScopeType === 'ALL_MANAGERS') {
+        targetProfiles = kalselManagers;
+      } else if (taskScopeType === 'STORE_MANAGER' || taskScopeType === 'KALSEL_SM') {
+        targetProfiles = kalselManagers.filter(p => p.role === 'store_manager');
+      } else if (taskScopeType === 'AST_STORE_MANAGER') {
+        targetProfiles = kalselManagers.filter(p => p.role === 'ast_store_manager');
+      } else if (taskScopeType === 'FLOOR_LEADER') {
+        targetProfiles = kalselManagers.filter(p => ['floor_leader', 'floor_leader_orientation'].includes(p.role));
+      } else if (taskScopeType === 'USER') {
+        const singleTarget = profiles.find(p => p.id === taskTargetUserId);
+        if (singleTarget) targetProfiles = [singleTarget];
       }
 
-      alert("✓ Jobdesk tugas berhasil diterbitkan sesuai sasaran wilayah & peran!");
+      if (targetProfiles.length === 0) {
+        alert("Tidak ada manajer yang cocok dengan jabatan yang dipilih!");
+        setIsSubmittingTask(false);
+        return;
+      }
+
+      // Kunci tugas langsung ke user_id dan simpan nama manajer di kolom department
+      const payloads = targetProfiles.map(mgr => ({
+        title: taskTitle.trim(),
+        deadline: new Date(taskDeadline).toISOString(),
+        priority: taskPriority,
+        department: mgr.full_name || 'Tugas Manager',
+        target_role: mgr.role,
+        outlet_id: mgr.outlet_id,
+        target_user_id: mgr.id,
+        created_by: user?.id,
+        status: 'pending',
+        has_tolerance: false
+      }));
+
+      const { error } = await supabase.from('department_tasks').insert(payloads);
+      if (error) throw error;
+
+      alert(`✓ Tugas berhasil dikirim ke ${targetProfiles.length} manajer!`);
       setTaskTitle('');
       setTaskDeadline('');
       loadMasterData();
@@ -3502,7 +3486,12 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
               const isMatchRegion = isOutletInRegion(managerOutlet, 'KALSEL_1');
               const isMatchOutlet = slaFilterOutletId === 'ALL' || manager.outlet_id === slaFilterOutletId;
 
-              const userTasks = monthlyTasks.filter(t => t.target_user_id === manager.id || (!t.target_user_id && t.outlet_id === manager.outlet_id));
+              const userTasks = monthlyTasks.filter(t => {
+                if (t.target_user_id) {
+                  return t.target_user_id === manager.id;
+                }
+                return t.outlet_id === manager.outlet_id && t.target_role === manager.role;
+              });
               let totalScoreSum = 0;
               let evaluatedCount = 0;
               let onTimeCount = 0;
@@ -4051,14 +4040,16 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
                             <div className="grid grid-cols-2 gap-2">
                               <select
-                                value={taskScopeType}
-                                onChange={(e) => setTaskScopeType(e.target.value)}
-                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
-                              >
-                                <option value="KALSEL_SM">👑 Khusus SM Kalsel 1</option>
-                                <option value="DEPT">📁 Khusus Departemen</option>
-                                <option value="USER">👤 Khusus Manajer Tertentu</option>
-                              </select>
+  value={taskScopeType}
+  onChange={(e) => setTaskScopeType(e.target.value)}
+  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
+>
+  <option value="STORE_MANAGER">👑 Khusus Store Manager (SM)</option>
+  <option value="AST_STORE_MANAGER">🥈 Khusus Asst. Manager (ASM)</option>
+  <option value="FLOOR_LEADER">🥉 Khusus Floor Leader (FL/FLO)</option>
+  <option value="ALL_MANAGERS">👥 Seluruh Manager (SM, ASM, FL)</option>
+  <option value="USER">👤 Khusus 1 Orang Tertentu</option>
+</select>
 
                               <select
                                 value={taskPriority}
@@ -4147,9 +4138,26 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                             return (
                               <div key={t.id} className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
                                 <div className="flex items-center justify-between gap-1.5">
-                                  <span className="text-[8px] font-black uppercase px-1.5 py-0.2 bg-slate-100 text-slate-700 rounded">
-                                    {t.department}
-                                  </span>
+                                  {(() => {
+  const targetPerson = profiles.find(p => p.id === t.target_user_id);
+  const targetOutlet = outlets.find(o => o.id === t.outlet_id);
+  const roleLabel = targetPerson?.role === 'store_manager' ? 'SM' :
+                    targetPerson?.role === 'ast_store_manager' ? 'ASM' :
+                    targetPerson?.role === 'floor_leader' ? 'FL' : '';
+
+  return (
+    <div className="flex items-center gap-1.5 max-w-[220px]">
+      <span className="text-[9px] font-black px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 rounded-md truncate">
+        👤 {targetPerson ? `${targetPerson.full_name} (${roleLabel})` : (t.department || 'Tugas')}
+      </span>
+      {targetOutlet && (
+        <span className="text-[8.5px] font-bold text-slate-400 truncate">
+          • {targetOutlet.code || targetOutlet.name}
+        </span>
+      )}
+    </div>
+  );
+})()}
                                   
                                   <div className="flex items-center gap-1">
                                     {score !== null && (
@@ -4177,18 +4185,34 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                   </p>
                                 </div>
 
-                                <div className="pt-1">
+                                <div className="pt-1 space-y-1">
+                                  {/* Tampilkan foto hasil jika sudah diselesaikan manager */}
+                                  {isDone && t.proof_photo_url && (
+                                    <div className="flex items-center justify-between p-2 bg-emerald-50/70 border border-emerald-200 rounded-xl">
+                                      <span className="text-[9px] font-bold text-emerald-800">✓ Bukti Hasil Telah Diupload</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setTaskProofModalImage(t.proof_photo_url)}
+                                        className="text-[9px] font-black text-indigo-600 underline cursor-pointer"
+                                      >
+                                        Lihat Foto
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {/* Tombol toleransi AM jika terlambat */}
                                   {currentProfile?.role === 'area_manager' && !t.has_tolerance && (isOverdue || (isDone && score < 80)) && (
                                     <button
                                       type="button"
                                       onClick={() => handleGrantTolerance(t)}
-                                      className="w-full mb-1 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg text-[9px] font-bold cursor-pointer"
+                                      className="w-full mb-1 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 rounded-lg text-[9px] font-bold cursor-pointer"
                                     >
-                                      Beri Toleransi AM (100%)
+                                      Beri Toleransi AM (Jadikan 100%)
                                     </button>
                                   )}
 
-                                  {!isDone && (
+                                  {/* Tombol upload konfirmasi HANYA muncul jika akun yang login adalah manajer penerima tugas */}
+                                  {!isDone && currentProfile?.id === t.target_user_id && (
                                     <button
                                       type="button"
                                       onClick={() => {
@@ -4197,8 +4221,15 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                       }}
                                       className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1 cursor-pointer"
                                     >
-                                      <FiCheck /> Konfirmasi Selesai
+                                      <FiCamera /> Selesaikan & Upload Bukti Tugas
                                     </button>
+                                  )}
+
+                                  {/* Tampilan di akun Area Manager jika tugas belum selesai */}
+                                  {!isDone && currentProfile?.role === 'area_manager' && (
+                                    <div className="text-center py-1.5 text-[9px] font-bold text-amber-700 bg-amber-50 rounded-xl border border-amber-200">
+                                      ⏳ Menunggu Pengerjaan oleh Manajer Bersangkutan
+                                    </div>
                                   )}
                                 </div>
                               </div>
