@@ -300,6 +300,7 @@ export default function BreakSystem() {
   const [allProfiles, setAllProfiles] = useState([]);
   const [, setIsFetchingProfiles] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState('');
+  const [selectedIzinStationFilter, setSelectedIzinStationFilter] = useState('ALL');
   const [selectedIzinType, setSelectedIzinType] = useState('toilet'); 
   const [customIzinMinutes, setCustomIzinMinutes] = useState('10');
   const [isSubmittingIzin, setIsSubmittingIzin] = useState(false);
@@ -527,11 +528,13 @@ if (!isAreaManager && currentOutletId) {
 
         for (const log of activeLogs) {
           const inTimeMs = new Date(log.actual_in).getTime();
+          const inHour = new Date(log.actual_in).getHours();
+          const targetHours = (inHour === 22) ? 8 : 9;
+          const maxAllowedSessionMs = (targetHours + 3) * 60 * 60 * 1000;
           const elapsedMs = nowMs - inTimeMs;
-          const maxAllowedSessionMs = 15 * 60 * 60 * 1000;
 
           if (elapsedMs > maxAllowedSessionMs) {
-            const outTimestamp = new Date(inTimeMs + 9 * 3600 * 1000).toISOString();
+            const outTimestamp = new Date(inTimeMs + targetHours * 3600 * 1000).toISOString();
 
             supabase
               .from('attendance_logs')
@@ -543,6 +546,27 @@ if (!isAreaManager && currentOutletId) {
               })
               .eq('id', log.id)
               .then(() => {});
+
+            supabase
+              .from('operational_violations')
+              .insert({
+                crew_id: log.user_id,
+                violation_type: 'Terlambat Absen Pulang > 3 Jam',
+                notes: 'Sistem otomatis menutup shift karena tidak clock out lebih dari 3 jam.',
+                penalty_points: 10,
+                outlet_id: log.outlet_id
+              }).then(() => {});
+
+            const targetCrewProf = profileMap[log.user_id];
+            if (targetCrewProf) {
+              const curPts = targetCrewProf.total_points !== null && targetCrewProf.total_points !== undefined ? Number(targetCrewProf.total_points) : 100;
+              const nextPts = Math.max(0, curPts - 10);
+              supabase
+                .from('user_profiles')
+                .update({ total_points: nextPts })
+                .eq('id', log.user_id)
+                .then(() => {});
+            }
 
             continue;
           }
@@ -657,8 +681,34 @@ if (!isAreaManager && currentOutletId) {
       }
 
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const nowMs = Date.now();
       
-      // 1. Prioritaskan ambil sesi user yang sedang aktif (masuk hari ini dan belum checkout)
+      // 1. Cek apakah ada sesi gantung/tersangkut dari hari kemarin (lebih dari 16 jam lalu belum checkout)
+      const { data: hangingLogs } = await supabase
+        .from('attendance_logs')
+        .select('id, actual_in, break_start_time, break_end_time')
+        .eq('user_id', user.id)
+        .is('actual_out', null)
+        .order('actual_in', { ascending: false })
+        .limit(3);
+
+      if (hangingLogs && hangingLogs.length > 0) {
+        for (const hLog of hangingLogs) {
+          const hInMs = new Date(hLog.actual_in).getTime();
+          // Jika sesi sudah berumur lebih dari 16 jam, otomatis tutup sesi agar hari ini bebas digunakan
+          if ((nowMs - hInMs) > (16 * 60 * 60 * 1000)) {
+            const autoOutTime = new Date(hInMs + 9 * 3600 * 1000).toISOString();
+            await supabase.from('attendance_logs').update({
+              actual_out: autoOutTime,
+              break_end_time: hLog.break_start_time && !hLog.break_end_time ? autoOutTime : hLog.break_end_time,
+              status_out: 'Auto-Closed Sistem (Sesi Kemarin)',
+              discipline_status: 'Shift Selesai Otomatis'
+            }).eq('id', hLog.id);
+          }
+        }
+      }
+
+      // 2. Ambil log kehadiran kru yang aktif hari ini
       const { data: userRecentLogs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
@@ -667,22 +717,8 @@ if (!isAreaManager && currentOutletId) {
         .order('actual_in', { ascending: false })
         .limit(10);
 
-      // Sesi aktif adalah log yang actual_out-nya masih kosong
+      // Sesi aktif HANYA log yang actual_out-nya masih kosong
       let currentLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
-
-      // 2. Jika memang user belum pernah absen masuk dalam 24 jam terakhir, baru ambil riwayat terakhir
-      if (!currentLog && userRecentLogs && userRecentLogs.length > 0) {
-        currentLog = userRecentLogs[0];
-      } else if (!currentLog) {
-        const { data: fallbackLogs } = await supabase
-          .from('attendance_logs')
-          .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
-          .eq('user_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        currentLog = fallbackLogs?.[0];
-      }
-      const nowMs = Date.now();
 
       const isActualOutFilled = Boolean(currentLog?.actual_out && currentLog.actual_out !== '' && currentLog.actual_out !== 'null');
 
@@ -701,8 +737,8 @@ if (!isAreaManager && currentOutletId) {
           } catch(e) {}
         }
 
-        JavaScript
-        const targetHours = (checkInHour === 22) ? 8 : 9;
+        const isShift22 = (checkInHour === 22);
+        const targetHours = isShift22 ? 8 : 9;
         const maxSessionMs = 15 * 60 * 60 * 1000;
 
         if ((nowMs - inTimeMs) > maxSessionMs) {
@@ -742,31 +778,30 @@ if (!isAreaManager && currentOutletId) {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } else if (currentLog && currentLog.actual_in && isActualOutFilled) {
-        const outTimeMs = new Date(currentLog.actual_out).getTime();
-        const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
-
-        if (diffHours >= 4) {
-          setActiveLogId(null);
-          setHasCheckedIn(false);
-          setHasCheckedOut(false);
-          setCheckInTime(null);
-          setIsOnBreak(false);
-          setBreakStartTime(null);
-        } else {
-          setActiveLogId(currentLog.id);
-          setHasCheckedIn(true);
-          setHasCheckedOut(true);
-          setCheckInTime(new Date(currentLog.actual_in));
-          setIsOnBreak(false);
-          setBreakStartTime(null);
-        }
       } else {
+        // Cek jika kru baru saja selesai checkout dalam rentang toleransi 4 jam terakhir
+        const recentOutLog = userRecentLogs?.find(l => l.actual_out && String(l.actual_out).trim() !== '' && String(l.actual_out).toLowerCase() !== 'null');
+        if (recentOutLog) {
+          const outTimeMs = new Date(recentOutLog.actual_out).getTime();
+          const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
+
+          if (diffHours < 4) {
+            setActiveLogId(recentOutLog.id);
+            setHasCheckedIn(true);
+            setHasCheckedOut(true);
+            setCheckInTime(new Date(recentOutLog.actual_in));
+            setIsOnBreak(false);
+            setBreakStartTime(null);
+            return;
+          }
+        }
+
+        // Jika benar-benar belum absen atau sudah lewat 4 jam dari checkout, tombol kembali ke Absen Masuk
+        setActiveLogId(null);
         setHasCheckedIn(false);
         setHasCheckedOut(false);
         setCheckInTime(null);
         setIsOnBreak(false);
-        setActiveLogId(null);
         setBreakStartTime(null);
       }
     } catch (err) {
@@ -2387,34 +2422,70 @@ if (!isAreaManager && currentOutletId) {
         const userLng = position.coords.longitude;
         setUserLocation({ lat: userLat, lng: userLng });
 
-        let targetLat = DEFAULT_TARGET_LAT;
-        let targetLng = DEFAULT_TARGET_LNG;
-        let allowedRadius = DEFAULT_MAX_RADIUS;
-        let outletName = 'Outlet';
+        const isTeknisi = (profile?.role || '').toLowerCase() === 'teknisi' || (profile?.station_placement || '').toLowerCase().includes('teknisi');
+        let allowedOutlets = [];
 
         try {
-          if (profile?.outlet_id) {
-            const { data: outletData } = await supabase
-              .from('outlets')
-              .select('latitude, longitude, radius_meter, name')
-              .eq('id', profile.outlet_id)
-              .maybeSingle();
+          // Kumpulkan ID resto yang diizinkan untuk kru / teknisi ini
+          const outletIds = [profile?.outlet_id];
+          if (isTeknisi && profile?.secondary_outlet_id) {
+            outletIds.push(profile.secondary_outlet_id);
+          }
 
-            if (outletData && outletData.latitude && outletData.longitude) {
-              targetLat = parseFloat(outletData.latitude);
-              targetLng = parseFloat(outletData.longitude);
-              allowedRadius = parseFloat(outletData.radius_meter) || DEFAULT_MAX_RADIUS;
-              outletName = outletData.name;
+          const validIds = outletIds.filter(Boolean);
+
+          if (validIds.length > 0) {
+            const { data: outletsData } = await supabase
+              .from('outlets')
+              .select('id, latitude, longitude, radius_meter, name')
+              .in('id', validIds);
+
+            if (outletsData && outletsData.length > 0) {
+              allowedOutlets = outletsData.map(o => ({
+                id: o.id,
+                name: o.name,
+                lat: parseFloat(o.latitude),
+                lng: parseFloat(o.longitude),
+                radius: parseFloat(o.radius_meter) || DEFAULT_MAX_RADIUS
+              }));
             }
           }
         } catch (dbError) {
           console.log("Fallback geofence dinamis:", dbError);
         }
 
-        const distance = getDistanceFromLatLonInMeters(userLat, userLng, targetLat, targetLng);
+        // Jika tidak ada data resto di database, gunakan fallback default
+        if (allowedOutlets.length === 0) {
+          allowedOutlets = [{
+            name: 'Outlet',
+            lat: DEFAULT_TARGET_LAT,
+            lng: DEFAULT_TARGET_LNG,
+            radius: DEFAULT_MAX_RADIUS
+          }];
+        }
 
-        if (distance > allowedRadius) {
-          alert(`❌ AKSES DITOLAK: Anda terdeteksi berada ${Math.round(distance)} meter di luar radius geofence ${outletName} (${allowedRadius}m). Presensi dikunci.`);
+        // Cek apakah posisi user masuk di salah satu resto yang diizinkan
+        let isInRange = false;
+        let matchedOutlet = null;
+        let nearestDistance = Infinity;
+        let nearestName = allowedOutlets[0]?.name || 'Outlet';
+
+        for (const outlet of allowedOutlets) {
+          const dist = getDistanceFromLatLonInMeters(userLat, userLng, outlet.lat, outlet.lng);
+          if (dist < nearestDistance) {
+            nearestDistance = dist;
+            nearestName = outlet.name;
+          }
+          if (dist <= outlet.radius) {
+            isInRange = true;
+            matchedOutlet = outlet;
+            break;
+          }
+        }
+
+        if (!isInRange) {
+          const restoListStr = allowedOutlets.map(o => o.name).join(' atau ');
+          alert(`❌ AKSES DITOLAK: Anda terdeteksi berada ${Math.round(nearestDistance)} meter di luar radius area ${restoListStr}. Presensi dikunci.`);
           setIsVerifyingLocation(false);
           return;
         }
@@ -2576,20 +2647,20 @@ if (!isAreaManager && currentOutletId) {
         }
 
       } else if (cameraMode === 'START_BREAK') {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const { data: latestActiveLog } = await supabase
+        const past24hStart = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: activeLogStart } = await supabase
           .from('attendance_logs')
           .select('id, actual_in, status_in')
           .eq('user_id', user.id)
           .is('actual_out', null)
-          .gte('actual_in', past24Hours)
+          .gte('actual_in', past24hStart)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        const targetLogId = latestActiveLog?.id || activeLogId;
+        const logIdStart = activeLogStart?.id || activeLogId;
 
-        if (targetLogId) {
+        if (logIdStart) {
           await supabase
             .from('attendance_logs')
             .update({
@@ -2598,15 +2669,15 @@ if (!isAreaManager && currentOutletId) {
               image_url: publicUrl,
               discipline_status: 'Sedang Istirahat'
             })
-            .eq('id', targetLogId);
+            .eq('id', logIdStart);
 
           let checkInHr = 0;
-          const refTime = latestActiveLog?.actual_in ? new Date(latestActiveLog.actual_in) : (checkInTime || new Date());
+          const refTime = activeLogStart?.actual_in ? new Date(activeLogStart.actual_in) : (checkInTime || new Date());
           checkInHr = refTime.getHours();
           
-          if (latestActiveLog?.status_in && latestActiveLog.status_in.includes('Shift ')) {
+          if (activeLogStart?.status_in && activeLogStart.status_in.includes('Shift ')) {
             try {
-              const parsed = parseInt(latestActiveLog.status_in.split('Shift ')[1].split(':')[0]);
+              const parsed = parseInt(activeLogStart.status_in.split('Shift ')[1].split(':')[0]);
               if (!isNaN(parsed)) checkInHr = parsed;
             } catch(e) {}
           }
@@ -2624,29 +2695,34 @@ if (!isAreaManager && currentOutletId) {
           setHasNotifiedOverbreak(false);
           setBreakStartTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
         }
+
       } else if (cameraMode === 'END_BREAK') {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const { data: latestActiveLog } = await supabase
+        const past24hEnd = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: activeLogEnd } = await supabase
           .from('attendance_logs')
           .select('id, break_start_time, actual_in, status_in')
           .eq('user_id', user.id)
           .is('actual_out', null)
-          .gte('actual_in', past24Hours)
+          .not('break_start_time', 'is', null)
+          .is('break_end_time', null)
+          .gte('actual_in', past24hEnd)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        const targetLogId = latestActiveLog?.id || activeLogId;
+        const logIdEnd = activeLogEnd?.id || activeLogId;
 
-        if (targetLogId && latestActiveLog?.break_start_time) {
-          const startTimeMs = new Date(latestActiveLog.break_start_time).getTime();
+        if (logIdEnd) {
+          const startTimeMs = activeLogEnd?.break_start_time 
+            ? new Date(activeLogEnd.break_start_time).getTime() 
+            : (Date.now() - 3600000);
           const endTimeMs = new Date().getTime();
           const elapsedMins = Math.floor((endTimeMs - startTimeMs) / 60000);
           
-          let checkInHour = latestActiveLog.actual_in ? new Date(latestActiveLog.actual_in).getHours() : 0;
-          if (latestActiveLog?.status_in && latestActiveLog.status_in.includes('Shift ')) {
+          let checkInHour = activeLogEnd?.actual_in ? new Date(activeLogEnd.actual_in).getHours() : 0;
+          if (activeLogEnd?.status_in && activeLogEnd.status_in.includes('Shift ')) {
             try {
-              const parsed = parseInt(latestActiveLog.status_in.split('Shift ')[1].split(':')[0]);
+              const parsed = parseInt(activeLogEnd.status_in.split('Shift ')[1].split(':')[0]);
               if (!isNaN(parsed)) checkInHour = parsed;
             } catch(e) {}
           }
@@ -2675,7 +2751,7 @@ if (!isAreaManager && currentOutletId) {
               financial_loss_amount: financialLoss,
               points_calculated: true
             })
-            .eq('id', targetLogId);
+            .eq('id', logIdEnd);
 
           if (updateError) throw updateError;
 
@@ -2695,33 +2771,35 @@ if (!isAreaManager && currentOutletId) {
               .eq('id', user.id);
           }
 
+          announcedOverbreakCrew.current.delete(logIdEnd);
           localStorage.removeItem('resto_break_start_time');
           localStorage.removeItem('resto_break_max_duration');
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
+
       } else if (cameraMode === 'OUT') {
-        const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-        const { data: latestActiveLog } = await supabase
+        const past24hOut = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: activeLogOut } = await supabase
           .from('attendance_logs')
           .select('id, actual_in, status_in, outlet_id')
           .eq('user_id', user.id)
           .is('actual_out', null)
-          .gte('actual_in', past24Hours)
+          .gte('actual_in', past24hOut)
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        const targetLogId = latestActiveLog?.id || activeLogId;
+        const logIdOut = activeLogOut?.id || activeLogId;
 
-        if (targetLogId && latestActiveLog?.actual_in) {
-          const inDate = new Date(latestActiveLog.actual_in);
+        if (logIdOut && activeLogOut?.actual_in) {
+          const inDate = new Date(activeLogOut.actual_in);
           const workedHours = (now.getTime() - inDate.getTime()) / (1000 * 60 * 60);
 
           let checkInHour = inDate.getHours();
-          if (latestActiveLog.status_in && latestActiveLog.status_in.includes('Shift ')) {
+          if (activeLogOut.status_in && activeLogOut.status_in.includes('Shift ')) {
             try {
-              const parsed = parseInt(latestActiveLog.status_in.split('Shift ')[1].split(':')[0]);
+              const parsed = parseInt(activeLogOut.status_in.split('Shift ')[1].split(':')[0]);
               if (!isNaN(parsed)) checkInHour = parsed;
             } catch(e) {}
           }
@@ -2744,7 +2822,7 @@ if (!isAreaManager && currentOutletId) {
               violation_type: 'Terlambat Absen Pulang > 3 Jam',
               notes: `Clock out terlambat lebih dari 3 jam dari jam shift seharusnya (${workedHours.toFixed(1)} jam kerja).`,
               penalty_points: 10,
-              outlet_id: latestActiveLog.outlet_id
+              outlet_id: activeLogOut.outlet_id
             });
           } else if (workedHours < targetRequiredHours) {
             const missingMinutes = Math.floor((targetRequiredHours * 60) - (workedHours * 60));
@@ -2760,7 +2838,7 @@ if (!isAreaManager && currentOutletId) {
             discipline_status: disciplineStatusOut,
             penalty_points: penaltyPoints,
             financial_loss_amount: financialLoss
-          }).eq('id', targetLogId);
+          }).eq('id', logIdOut);
 
           if (penaltyPoints > 0) {
             const { data: currentProf } = await supabase
@@ -3245,6 +3323,7 @@ if (!isAreaManager && currentOutletId) {
                     );
                   })}
                 </div>
+
               </div>
             </div>
 
@@ -3295,6 +3374,26 @@ if (!isAreaManager && currentOutletId) {
                       </div>
                     </div>
                     <form onSubmit={handleGrantIzin} className="space-y-2.5">
+                      {/* FILTER STATION IZIN */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[9px] font-extrabold text-indigo-400 uppercase flex items-center gap-1">
+                          <FiFilter /> Filter Station Kru
+                        </label>
+                        <select 
+                          value={selectedIzinStationFilter}
+                          onChange={(e) => {
+                            setSelectedIzinStationFilter(e.target.value);
+                            setSelectedCrewId('');
+                          }}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium cursor-pointer"
+                        >
+                          <option value="ALL">🌐 Semua Station</option>
+                          {CREW_STATION_OPTIONS.concat(['Teknisi']).map(st => (
+                            <option key={st} value={st}>{st}</option>
+                          ))}
+                        </select>
+                      </div>
+
                       <div className="grid grid-cols-2 gap-2">
                         <div className="flex flex-col gap-1">
                           <label className="text-[9px] font-extrabold text-slate-400 uppercase">Pilih Anggota Crew</label>
@@ -3302,16 +3401,22 @@ if (!isAreaManager && currentOutletId) {
                             value={selectedCrewId} 
                             onChange={(e) => setSelectedCrewId(e.target.value)} 
                             onClick={() => { if (allProfiles.length === 0) fetchAllProfilesList(); }}
-                            className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium"
+                            className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white outline-none focus:border-indigo-500 font-medium cursor-pointer"
                           >
                             <option value="" className="text-slate-900">
                               {allProfiles.length === 0 ? 'Memuat Staff...' : '-- Pilih Staff --'}
                             </option>
-                            {allProfiles.map(p => (
-                              <option key={p.id} value={p.id} className="text-slate-900">
-                                {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
-                              </option>
-                            ))}
+                            {allProfiles
+                              .filter(p => {
+                                if (selectedIzinStationFilter === 'ALL') return true;
+                                const place = (p.station_placement || p.role || '').toLowerCase();
+                                return place.includes(selectedIzinStationFilter.toLowerCase().replace('station ', ''));
+                              })
+                              .map(p => (
+                                <option key={p.id} value={p.id} className="text-slate-900">
+                                  {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
+                                </option>
+                              ))}
                           </select>
                         </div>
 
@@ -4405,22 +4510,52 @@ if (!isAreaManager && currentOutletId) {
               </div>
 
               <form onSubmit={handleSubmitOperationalViolation} className="space-y-3">
-                {/* PILIH KRU */}
-                <div className="space-y-1">
-                  <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Pilih Kru yang Bersangkutan</label>
-                  <select
-                    value={reportTargetCrewId}
-                    onChange={(e) => setReportTargetCrewId(e.target.value)}
-                    required
-                    className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl px-3 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500 cursor-pointer"
-                  >
-                    <option value="">-- Pilih Kru --</option>
-                    {allProfiles.map(p => (
-                      <option key={p.id} value={p.id}>
-                        {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
-                      </option>
-                    ))}
-                  </select>
+                {/* FILTER STATION & PILIH KRU */}
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-indigo-600 uppercase tracking-wider flex items-center gap-1">
+                      <FiFilter /> 1. Filter Sesuai Station Kru
+                    </label>
+                    <select
+                      value={selectedStationFilter}
+                      onChange={(e) => {
+                        setSelectedStationFilter(e.target.value);
+                        setReportTargetCrewId('');
+                      }}
+                      className="w-full h-9 bg-indigo-50/60 border border-indigo-200 text-indigo-900 font-bold text-xs rounded-xl px-3 outline-none cursor-pointer"
+                    >
+                      <option value="ALL">🌐 Tampilkan Semua Station</option>
+                      {CREW_STATION_OPTIONS.map((st) => (
+                        <option key={st} value={st}>{st}</option>
+                      ))}
+                      <option value="Manager">Manager Duty</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider">
+                      2. Pilih Kru yang Bersangkutan
+                    </label>
+                    <select
+                      value={reportTargetCrewId}
+                      onChange={(e) => setReportTargetCrewId(e.target.value)}
+                      required
+                      className="w-full h-10 bg-slate-50 border border-slate-200 rounded-xl px-3 text-xs font-semibold text-slate-900 outline-none focus:border-indigo-500 cursor-pointer"
+                    >
+                      <option value="">-- Pilih Kru --</option>
+                      {allProfiles
+                        .filter(p => {
+                          if (selectedStationFilter === 'ALL') return true;
+                          const st = (p.station_placement || p.role || '').toLowerCase();
+                          return st.includes(selectedStationFilter.toLowerCase().replace('station ', ''));
+                        })
+                        .map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.full_name} {p.station_placement ? `(${p.station_placement})` : ''}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
                 </div>
 
                 {/* 2. TANGGAL KEJADIAN TINDAKAN */}
@@ -4771,69 +4906,79 @@ if (!isAreaManager && currentOutletId) {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {activeLogData.map((log) => (
-                      <div key={log.id} className="bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs space-y-2.5">
-                        <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900">{log.crewName}</h4>
-                            <p className="text-[9px] text-slate-400 font-medium">{new Date(log.created_at).toLocaleDateString('id-ID', {day:'numeric', month:'long', year:'numeric', timeZone: 'Asia/Makassar'})}</p>
-                          </div>
-                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md uppercase border ${log.isOverBreak ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
-                            {log.formattedDuration}
+                    {Object.entries(
+                      activeLogData.reduce((acc, log) => {
+                        const dateKey = new Date(log.created_at).toLocaleDateString('id-ID', {
+                          weekday: 'long',
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric',
+                          timeZone: 'Asia/Makassar'
+                        });
+                        if (!acc[dateKey]) acc[dateKey] = [];
+                        acc[dateKey].push(log);
+                        return acc;
+                      }, {})
+                    ).map(([dateLabel, logsGroup]) => (
+                      <div key={dateLabel} className="space-y-2.5">
+                        <div className="sticky top-12 z-10 bg-slate-200/90 backdrop-blur-xs py-1 px-3 rounded-lg border border-slate-300 text-center">
+                          <span className="text-[10px] font-black text-slate-800 uppercase tracking-wider">
+                            📅 {dateLabel}
                           </span>
                         </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
-                              <span className="text-[8px] font-black font-mono text-indigo-600 bg-indigo-50 px-1 py-0.2 rounded border border-indigo-100">
-                                {log.formattedStartTime}
+                        {logsGroup.map((log) => (
+                          <div key={log.id} className="bg-white border border-slate-200/70 rounded-2xl p-3.5 shadow-xs space-y-2.5">
+                            <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                              <div>
+                                <h4 className="text-xs font-bold text-slate-900">{log.crewName}</h4>
+                                <p className="text-[9px] text-slate-400 font-medium">{new Date(log.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' })} WITA</p>
+                              </div>
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-md uppercase border ${log.isOverBreak ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-100 text-emerald-700 border-emerald-200'}`}>
+                                {log.formattedDuration}
                               </span>
                             </div>
-                            {log.image_url ? (
-                              <div 
-                                onClick={() => setPreviewFullImage(log.image_url)}
-                                className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100 cursor-pointer"
-                              >
-                                <img 
-                                  src={log.image_url} 
-                                  loading="lazy" 
-                                  decoding="async" 
-                                  className="w-full h-full object-cover" 
-                                  alt="Mulai" 
-                                />
-                              </div>
-                            ) : (
-                              <div className="w-full aspect-[4/5] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">Foto Telah Diarsip</div>
-                            )}
-                          </div>
 
-                          <div className="space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
-                              <span className={`text-[8px] font-black font-mono px-1 py-0.2 rounded border ${log.formattedEndTime === 'In Progress' ? 'text-amber-600 bg-amber-50 border-amber-100' : 'text-emerald-700 bg-emerald-50 border-emerald-100'}`}>
-                                {log.formattedEndTime}
-                              </span>
-                            </div>
-                            {log.after_break_image_url ? (
-                              <div 
-                                onClick={() => setPreviewFullImage(log.after_break_image_url)}
-                                className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100 cursor-pointer"
-                              >
-                                <img 
-                                  src={log.after_break_image_url} 
-                                  loading="lazy" 
-                                  decoding="async" 
-                                  className="w-full h-full object-cover" 
-                                  alt="Selesai" 
-                                />
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Mulai</span>
+                                  <span className="text-[8px] font-black font-mono text-indigo-600 bg-indigo-50 px-1 py-0.2 rounded border border-indigo-100">
+                                    {log.formattedStartTime}
+                                  </span>
+                                </div>
+                                {log.image_url ? (
+                                  <div 
+                                    onClick={() => setPreviewFullImage(log.image_url)}
+                                    className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100 cursor-pointer"
+                                  >
+                                    <img src={log.image_url} loading="lazy" decoding="async" className="w-full h-full object-cover" alt="Mulai" />
+                                  </div>
+                                ) : (
+                                  <div className="w-full aspect-[4/5] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">Foto Telah Diarsip</div>
+                                )}
                               </div>
-                            ) : (
-                              <div className="w-full aspect-[4/5] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress / Diarsip</div>
-                            )}
+
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[8px] font-extrabold text-slate-400 uppercase tracking-wider block">Foto Selesai</span>
+                                  <span className={`text-[8px] font-black font-mono px-1 py-0.2 rounded border ${log.formattedEndTime === 'In Progress' ? 'text-amber-600 bg-amber-50 border-amber-100' : 'text-emerald-700 bg-emerald-50 border-emerald-100'}`}>
+                                    {log.formattedEndTime}
+                                  </span>
+                                </div>
+                                {log.after_break_image_url ? (
+                                  <div 
+                                    onClick={() => setPreviewFullImage(log.after_break_image_url)}
+                                    className="w-full aspect-[4/5] rounded-xl overflow-hidden border border-slate-100 shadow-xs bg-slate-100 cursor-pointer"
+                                  >
+                                    <img src={log.after_break_image_url} loading="lazy" decoding="async" className="w-full h-full object-cover" alt="Selesai" />
+                                  </div>
+                                ) : (
+                                  <div className="w-full aspect-[4/5] rounded-xl bg-slate-50 border border-dashed flex items-center justify-center text-[9px] text-slate-400 font-bold">In Progress / Diarsip</div>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                        </div>
+                        ))}
                       </div>
                     ))}
 
@@ -4945,6 +5090,7 @@ if (!isAreaManager && currentOutletId) {
                           <option value="quality_control">Quality Control (QC)</option>
                           <option value="stocker">Stocker</option>
                           <option value="cel">Crew Enthusiast Leader (CEL)</option>
+                          <option value="teknisi">Teknisi Multi-Resto 🔧</option>
                         </optgroup>
                         <optgroup label="Staff Lapangan">
                           <option value="crew">Crew Reguler</option>
