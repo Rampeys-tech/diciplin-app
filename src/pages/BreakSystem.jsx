@@ -86,7 +86,8 @@ const CREW_STATION_OPTIONS = [
   'Stocker',
   'Cel',
   'Dishwasher',
-  'IPS (Kebersihan)'
+  'IPS (Kebersihan)',
+  'Teknisi'
 ];
 
 const LOGS_PAGE_SIZE = 15;
@@ -172,6 +173,7 @@ export default function BreakSystem() {
   const [showShiftPicker, setShowShiftPicker] = useState(false);
   const [selectedShiftHour, setSelectedShiftHour] = useState(9);
   const [selectedStation, setSelectedStation] = useState('Station Noodle');
+  const [activeCheckInOutletId, setActiveCheckInOutletId] = useState(null);
 
   const [activeShiftStats, setActiveShiftStats] = useState({
     totalScheduledCrew: 0,
@@ -2479,6 +2481,7 @@ if (!isAreaManager && currentOutletId) {
           if (dist <= outlet.radius) {
             isInRange = true;
             matchedOutlet = outlet;
+            setActiveCheckInOutletId(outlet.id || profile?.outlet_id);
             break;
           }
         }
@@ -2592,7 +2595,7 @@ if (!isAreaManager && currentOutletId) {
 
       if (cameraMode === 'IN') {
         const fallbackCompanyId = profile?.company_id || user?.user_metadata?.company_id || null;
-        const currentOutletId = profile?.outlet_id || null;
+        const currentOutletId = activeCheckInOutletId || profile?.outlet_id || null;
         const scheduledTime = new Date();
         scheduledTime.setHours(selectedShiftHour, 0, 0, 0);
 
