@@ -291,6 +291,7 @@ export default function AreaDashboard() {
   // State untuk Portofolio Rincian Tugas Manajer & Preview Foto Penuh
   const [selectedManagerForTaskHistory, setSelectedManagerForTaskHistory] = useState(null);
   const [selectedRestoForSlaDetail, setSelectedRestoForSlaDetail] = useState(null);
+  const [selectedManagerForCacpHistory, setSelectedManagerForCacpHistory] = useState(null);
   const [taskProofModalImage, setTaskProofModalImage] = useState(null);
   const [equipStationFilter, setEquipStationFilter] = useState('ALL');
   const [equipSearchQuery, setEquipSearchQuery] = useState('');
@@ -308,6 +309,7 @@ export default function AreaDashboard() {
   const [isCacpAlarmActive, setIsCacpAlarmActive] = useState(false);
   const [alarmTriggerType, setAlarmTriggerType] = useState(null);
   const [isSubmittingConfirm, setIsSubmittingConfirm] = useState(false);
+  const [cacpLogs, setCacpLogs] = useState([]);
 
   const audioContextRef = useRef(null);
   const alarmIntervalRef = useRef(null);
@@ -490,7 +492,8 @@ export default function AreaDashboard() {
         { data: opexDbData },
         { data: equipDbData },
         { data: dailyTplData },
-        { data: dailySubData }
+        { data: dailySubData },
+        { data: cacpLogsData }
       ] = await Promise.all([
         supabase.from('outlets').select('*').order('code', { ascending: true }),
         supabase.from('user_profiles').select('id, full_name, avatar, role, total_points, outlet_id, station_placement'),
@@ -501,8 +504,11 @@ export default function AreaDashboard() {
         supabase.from('opex_budgets').select('*').eq('period_month', selectedMonth),
         supabase.from('controlling_equipment').select('*').limit(5000),
         supabase.from('daily_task_templates').select('*').eq('is_active', true),
-        supabase.from('daily_task_submissions').select('*')
+        supabase.from('daily_task_submissions').select('*'),
+        supabase.from('cacp_daily_logs').select('*')
       ]);
+
+      if (cacpLogsData) setCacpLogs(cacpLogsData);
 
       if (dailyTplData) setDailyTemplates(dailyTplData);
       if (dailySubData) setDailySubmissions(dailySubData);
@@ -657,7 +663,7 @@ export default function AreaDashboard() {
     return () => clearInterval(timer);
   }, [currentProfile, isManagerIC, hasConfirmedCacpToday, userVisibleTasks, startAudioAlarm]);
 
-  // KONFIRMASI CACP HARIAN
+  // KONFIRMASI CACP HARIAN (MURNI SIMPAN KE CACP RM & BUKA CLOCK-OUT, TIDAK MENGOTORI TIKET)
   const handleConfirmCacp = async () => {
     setIsSubmittingConfirm(true);
     try {
@@ -665,18 +671,19 @@ export default function AreaDashboard() {
       setHasConfirmedCacpToday(true);
       setAlarmTriggerType(null);
 
+      const todayDate = new Date().toISOString().split('T')[0];
       const payload = {
-        department: 'cacp_audit',
-        title: `CACP Harian: ${isManagerIC ? 'In-Charge (IC)' : 'Jadwal Libur (OFF)'}`,
-        deadline: new Date().toISOString(),
-        priority: 'urgent',
+        user_id: user?.id,
         outlet_id: currentProfile?.outlet_id || null,
-        created_by: user?.id,
-        status: 'completed',
-        completion_notes: `Manager mengonfirmasi pengisian CACP RM (${isManagerIC ? 'Selesai sebelum Clock-Out' : 'Diselesaikan saat OFF'}).`
+        log_date: todayDate,
+        shift_status: isManagerIC ? 'IC' : 'OFF',
+        confirmed_at: new Date().toISOString()
       };
 
-      await supabase.from('department_tasks').insert([payload]);
+      await supabase.from('cacp_daily_logs').upsert([payload], {
+        onConflict: 'user_id,log_date'
+      });
+
       alert("✓ Berhasil dikonfirmasi! Akses Clock-Out terbuka & alarm dimatikan.");
       loadMasterData();
     } catch (err) {
@@ -942,6 +949,37 @@ export default function AreaDashboard() {
       loadMasterData();
     } catch (err) {
       alert(`Gagal menghapus: ${err.message}`);
+    }
+  };
+
+  // LAPOR STATUS NON-EFEKTIF (OFF / SAKIT / IZIN / CUTI)
+  const handleReportDailyAbsence = async (templateItem, statusChoice) => {
+    const confirmAction = confirm(`Konfirmasi status hari ini sebagai: "${statusChoice}" untuk tugas "${templateItem.title}"?`);
+    if (!confirmAction) return;
+
+    try {
+      const todayDate = new Date().toISOString().split('T')[0];
+      const payload = {
+        template_id: templateItem.id,
+        user_id: user?.id,
+        outlet_id: currentProfile?.outlet_id,
+        submission_date: todayDate,
+        photo_urls: [],
+        notes: `Status Kehadiran: ${statusChoice}`,
+        status: statusChoice, // 'OFF', 'SAKIT', 'IZIN', 'CUTI'
+        submitted_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
+        .from('daily_task_submissions')
+        .upsert([payload], { onConflict: 'template_id,user_id,submission_date' });
+
+      if (error) throw error;
+
+      alert(`✓ Status ${statusChoice} berhasil disimpan! Anda dibebaskan dari tugas harian hari ini.`);
+      loadMasterData();
+    } catch (err) {
+      alert(`Gagal menyimpan status: ${err.message}`);
     }
   };
   // KONFIRMASI PENYELESAIAN TUGAS + SIMPAN FOTO KE STORAGE (MULTI-FOTO SUPPORT)
@@ -3377,14 +3415,15 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
         {/* MODAL AUDIT CACP */}
         {activeModal === 'cacp_control' && (
           <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
-            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
+            <div className="bg-[#FAFBFD] w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
               
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              {/* Header CACP dengan Pemilih Wilayah */}
+              <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white shadow-2xs">
                 <div className="flex items-center gap-2">
                   {selectedOutletForCacp && (
                     <button 
                       onClick={() => setSelectedOutletForCacp(null)}
-                      className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-600 mr-1"
+                      className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 mr-1 cursor-pointer"
                     >
                       <FiArrowLeft className="text-sm" />
                     </button>
@@ -3394,28 +3433,46 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                       {selectedOutletForCacp ? selectedOutletForCacp.name : 'Audit CACP (Project RM)'}
                     </h3>
                     <p className="text-[10px] text-slate-400 font-medium">
-                      Periode: {selectedMonth} ({totalDaysInSelectedMonth} Hari Kalender Penuh)
+                      Periode: {selectedMonth} ({totalDaysInSelectedMonth} Hari Kalender)
                     </p>
                   </div>
                 </div>
                 <button 
                   onClick={() => {
                     setSelectedOutletForCacp(null);
+                    setSelectedManagerForCacpHistory(null);
                     setActiveModal(null);
                   }}
-                  className="p-2 bg-white hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
+                  className="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
                 >
                   <FiX className="text-sm" />
                 </button>
               </div>
 
-              <div className="p-4 overflow-y-auto space-y-3.5">
+              {/* Selector Filter Wilayah Khusus CACP */}
+              {!selectedOutletForCacp && isSuperUser && (
+                <div className="px-4 py-2 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-black uppercase text-slate-500">Filter Wilayah:</span>
+                  <select
+                    value={selectedRegionFilter}
+                    onChange={(e) => setSelectedRegionFilter(e.target.value)}
+                    className="text-xs font-bold bg-white border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer shadow-2xs flex-1 max-w-[200px]"
+                  >
+                    <option value="KALSEL_1">📍 Wilayah Kalsel 1</option>
+                    <option value="KALTIM">📍 Wilayah Kaltim</option>
+                    <option value="ALL">🌐 Semua Wilayah</option>
+                  </select>
+                </div>
+              )}
+
+              <div className="p-4 overflow-y-auto space-y-3.5 flex-1">
                 {!selectedOutletForCacp && (
                   <>
+                    {/* Standar Target RM */}
                     <div className="p-3.5 bg-gradient-to-r from-purple-900 to-indigo-950 text-white rounded-2xl space-y-1.5 shadow-md">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-black uppercase text-purple-300 tracking-wider">
-                          Standar Persentase Bulanan RM
+                          Standar Kepatuhan RM
                         </span>
                         <span className="text-[9px] bg-purple-500/30 border border-purple-400/50 px-2 py-0.5 rounded-full font-bold">
                           Daily Mandatory
@@ -3423,45 +3480,97 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                       </div>
                       <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-[11px]">
                         <div className="bg-white/10 p-2 rounded-xl border border-white/10">
-                          <span className="text-[8px] text-slate-300 block font-sans uppercase">Store Manager (SM)</span>
+                          <span className="text-[8px] text-slate-300 block font-sans uppercase">Store Manager</span>
                           <span className="font-bold text-amber-300">Target ≥ 80%</span>
                           <p className="text-[8px] text-rose-300 font-sans mt-0.5">&lt; 80% = Demosi</p>
                         </div>
                         <div className="bg-white/10 p-2 rounded-xl border border-white/10">
-                          <span className="text-[8px] text-slate-300 block font-sans uppercase">Under SM (ASM/FL/FLO)</span>
+                          <span className="text-[8px] text-slate-300 block font-sans uppercase">Under SM</span>
                           <span className="font-bold text-emerald-300">Target ≥ 90%</span>
                           <p className="text-[8px] text-amber-200 font-sans mt-0.5">&lt; 90% = Gagal Promosi</p>
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-2xl space-y-2 shadow-2xs">
+                    {/* Tombol Isi Form RM */}
+                    <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-2xl flex items-center justify-between shadow-2xs">
+                      <div>
+                        <h4 className="text-xs font-black text-indigo-950">Daily Jobdesk CACP</h4>
+                        <p className="text-[10px] text-indigo-700">Wajib diisi saat on-shift maupun jadwal OFF</p>
+                      </div>
+                      <a
+                        href={CACP_GOOGLE_FORM_URL}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl flex items-center gap-1.5 shadow-xs shrink-0"
+                      >
+                        <span>Isi Form RM</span>
+                        <FiExternalLink className="text-xs" />
+                      </a>
+                    </div>
+
+                    {/* LOG PENGERJAAN CACP HARI INI (HANYA WILAYAH TERPILIH) */}
+                    <div className="p-3.5 bg-white border border-slate-200 rounded-2xl space-y-2 shadow-2xs">
                       <div className="flex items-center justify-between">
-                        <div>
-                          <h4 className="text-xs font-black text-indigo-950">Daily Jobdesk CACP</h4>
-                          <p className="text-[10px] text-indigo-700">Wajib diisi saat on-shift maupun jadwal OFF</p>
-                        </div>
-                        <a
-                          href={CACP_GOOGLE_FORM_URL}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black rounded-xl flex items-center gap-1.5 shadow-sm shrink-0"
-                        >
-                          <span>Isi Form RM</span>
-                          <FiExternalLink className="text-xs" />
-                        </a>
+                        <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                          Setoran CACP Hari Ini ({new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})
+                        </span>
+                        <span className="text-[9px] font-mono font-bold text-indigo-600">
+                          {cacpLogs.filter(l => {
+                            const matchToday = l.log_date === new Date().toISOString().split('T')[0];
+                            const out = outlets.find(o => o.id === l.outlet_id);
+                            return matchToday && isOutletInRegion(out, selectedRegionFilter);
+                          }).length} Manajer Submit
+                        </span>
+                      </div>
+
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pt-1">
+                        {profiles
+                          .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
+                          .filter(p => {
+                            const out = outlets.find(o => o.id === p.outlet_id);
+                            return isOutletInRegion(out, selectedRegionFilter);
+                          })
+                          .map(mgr => {
+                            const todayDate = new Date().toISOString().split('T')[0];
+                            const logItem = cacpLogs.find(l => l.user_id === mgr.id && l.log_date === todayDate);
+                            const isSubmitted = !!logItem;
+                            const mgrOutlet = outlets.find(o => o.id === mgr.outlet_id);
+
+                            return (
+                              <div 
+                                key={mgr.id} 
+                                onClick={() => setSelectedManagerForCacpHistory(mgr)}
+                                className="p-2.5 bg-slate-50 hover:bg-indigo-50/50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px] cursor-pointer transition-all"
+                              >
+                                <div className="min-w-0 flex-1 pr-2">
+                                  <p className="font-black text-slate-900 truncate">{mgr.full_name}</p>
+                                  <p className="text-[8.5px] text-slate-400 truncate">{mgrOutlet?.name || 'Cabang'}</p>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
+                                    isSubmitted ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                  }`}>
+                                    {isSubmitted ? `✓ Selesai (${logItem.shift_status})` : 'Belum Isi'}
+                                  </span>
+                                  <FiChevronRight className="text-slate-400 text-xs" />
+                                </div>
+                              </div>
+                            );
+                          })}
                       </div>
                     </div>
 
+                    {/* DAFTAR RESTO DENGAN PERSENTASE KEPATUHAN BULANAN */}
                     <div className="space-y-2">
                       <div className="flex items-center justify-between px-1">
-                        <span className="text-[11px] font-black uppercase text-slate-400 tracking-wider">
-                          Persentase Kepatuhan Resto Aktif
+                        <span className="text-[11px] font-black uppercase text-slate-500 tracking-wider">
+                          Persentase Resto Aktif ({selectedRegionFilter === 'KALSEL_1' ? 'Kalsel 1' : selectedRegionFilter === 'KALTIM' ? 'Kaltim' : 'Semua'})
                         </span>
-                        <span className="text-[9px] font-bold text-slate-400">Ketuk untuk rincian manager</span>
+                        <span className="text-[9px] font-bold text-slate-400">Klik resto untuk buka rincian</span>
                       </div>
 
-                      {outletScoreRankings.map(resto => {
+                      {outletScoreRankings.filter(o => isOutletInRegion(o, selectedRegionFilter)).map(resto => {
                         const isCritical = resto.cacpData.isCritical;
                         const isWarning = resto.cacpData.isWarning;
 
@@ -3470,8 +3579,8 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                             key={resto.id}
                             onClick={() => setSelectedOutletForCacp(resto)}
                             className={`p-3.5 rounded-2xl border transition-all cursor-pointer shadow-2xs space-y-2 hover:scale-[1.01] ${
-                              isCritical ? 'bg-rose-50/70 border-rose-300 hover:border-rose-400' :
-                              isWarning ? 'bg-amber-50/60 border-amber-300 hover:border-amber-400' :
+                              isCritical ? 'bg-rose-50/70 border-rose-300' :
+                              isWarning ? 'bg-amber-50/60 border-amber-300' :
                               'bg-white border-slate-200/90 hover:border-indigo-300'
                             }`}
                           >
@@ -3508,36 +3617,50 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                   </>
                 )}
 
+                {/* VIEW DETAIL CABANG RESTO */}
                 {selectedOutletForCacp && (
                   <div className="space-y-3.5">
-                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between">
+                    <div className="p-3 bg-white border border-slate-200 rounded-2xl flex items-center justify-between shadow-2xs">
                       <div>
-                        <span className="text-[10px] text-slate-400 uppercase font-bold">Periode Penilaian</span>
-                        <p className="text-xs font-black text-slate-900">{selectedMonth} ({totalDaysInSelectedMonth} Hari)</p>
+                        <span className="text-[10px] text-slate-400 uppercase font-bold">Rapor Kepatuhan Resto</span>
+                        <p className="text-xs font-black text-slate-900">{selectedOutletForCacp.name}</p>
                       </div>
-                      <span className="text-xs font-mono font-black px-2.5 py-1 bg-white rounded-xl border border-slate-200">
-                        Rata-Rata: {selectedOutletForCacp.cacpData.overallPercentage}%
+                      <span className="text-xs font-mono font-black px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-xl border border-indigo-200">
+                        {selectedOutletForCacp.cacpData.overallPercentage}% Rerata
                       </span>
                     </div>
 
-                    <div className="space-y-2.5">
-                      {selectedOutletForCacp.cacpData.managers.map(mgr => (
-                        <div key={mgr.id} className="p-3.5 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-2">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <h4 className="text-xs font-black text-slate-900">{mgr.name}</h4>
-                              <p className="text-[10px] text-indigo-700 font-bold">{mgr.roleLabel} • Min {mgr.threshold}%</p>
-                            </div>
-                            <div className="text-right">
+                    <div className="space-y-2">
+                      <span className="text-[10px] font-black uppercase text-slate-500 px-1 block">
+                        Daftar Manajer di Resto Ini (Klik untuk Riwayat Hari):
+                      </span>
+
+                      {selectedOutletForCacp.cacpData.managers.map(mgr => {
+                        const targetProfile = profiles.find(p => p.id === mgr.id);
+
+                        return (
+                          <div 
+                            key={mgr.id} 
+                            onClick={() => setSelectedManagerForCacpHistory(targetProfile || mgr)}
+                            className="p-3 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-1.5 cursor-pointer hover:border-indigo-400 transition-all"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h4 className="text-xs font-black text-slate-900">{mgr.name}</h4>
+                                <p className="text-[9.5px] text-indigo-700 font-bold">{mgr.roleLabel} • Target {mgr.threshold}%</p>
+                              </div>
                               <span className={`text-xs font-mono font-black px-2.5 py-1 rounded-xl border ${
                                 mgr.isPass ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'
                               }`}>
                                 {mgr.scoreCurrentMonth}%
                               </span>
                             </div>
+                            <span className="text-[8.5px] text-slate-400 font-bold block pt-0.5">
+                              📅 Klik untuk cek riwayat tanggal submit vs bolong →
+                            </span>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     <button
@@ -3548,16 +3671,16 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                     </button>
                   </div>
                 )}
-
               </div>
 
-              <div className="p-3 border-t border-slate-100 bg-slate-50">
+              <div className="p-3 border-t border-slate-200 bg-white">
                 <button
                   onClick={() => {
                     setSelectedOutletForCacp(null);
+                    setSelectedManagerForCacpHistory(null);
                     setActiveModal(null);
                   }}
-                  className="w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800 transition-colors"
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
                 >
                   Tutup Modul CACP
                 </button>
@@ -3567,18 +3690,133 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
           </div>
         )}
 
+        {/* MODAL RIWAYAT TANGGAL PENGERJAAN & BOLONG CACP MANAJER */}
+        {selectedManagerForCacpHistory && (() => {
+          const mgr = selectedManagerForCacpHistory;
+          const mgrOutlet = outlets.find(o => o.id === mgr.outlet_id);
+          const daysInMonth = totalDaysInSelectedMonth;
+
+          // Susun daftar seluruh hari dalam bulan yang dipilih (misal: 1 s.d 31)
+          const [yearStr, monthStr] = selectedMonth.split('-');
+          const daysList = Array.from({ length: daysInMonth }, (_, i) => {
+            const dayNum = i + 1;
+            const dayFormatted = String(dayNum).padStart(2, '0');
+            const dateStr = `${yearStr}-${monthStr}-${dayFormatted}`;
+            const logItem = cacpLogs.find(l => l.user_id === mgr.id && l.log_date === dateStr);
+            const isFuture = new Date(dateStr) > new Date();
+            return {
+              dateStr,
+              dayNum,
+              logItem,
+              isSubmitted: !!logItem,
+              isFuture
+            };
+          });
+
+          const totalSubmitted = daysList.filter(d => d.isSubmitted).length;
+          const totalPastDays = daysList.filter(d => !d.isFuture).length;
+          const totalMissed = Math.max(0, totalPastDays - totalSubmitted);
+          const compliancePct = totalPastDays > 0 ? Math.round((totalSubmitted / totalPastDays) * 100) : 100;
+
+          return (
+            <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md max-h-[90vh] rounded-3xl flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+                
+                {/* Header Modal */}
+                <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shadow-2xs">
+                  <div className="min-w-0 pr-2">
+                    <h3 className="text-xs font-black text-slate-900 truncate">{mgr.full_name || mgr.name}</h3>
+                    <p className="text-[9px] text-indigo-600 font-bold uppercase truncate">
+                      {mgrOutlet?.name || 'Cabang'} • {mgr.role}
+                    </p>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setSelectedManagerForCacpHistory(null)}
+                    className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-500"
+                  >
+                    <FiX className="text-base" />
+                  </button>
+                </div>
+
+                {/* Scorecard Kepatuhan */}
+                <div className="p-3 bg-white border-b border-slate-100 grid grid-cols-3 gap-2 text-center font-mono text-[9px]">
+                  <div className="p-2 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-100">
+                    <span className="block text-[7px] font-sans text-slate-400 uppercase">Sudah Submit</span>
+                    <span className="font-black text-sm">{totalSubmitted} Hari</span>
+                  </div>
+                  <div className="p-2 bg-rose-50 text-rose-800 rounded-xl border border-rose-100">
+                    <span className="block text-[7px] font-sans text-slate-400 uppercase">Tidak Submit</span>
+                    <span className="font-black text-sm">{totalMissed} Hari</span>
+                  </div>
+                  <div className="p-2 bg-indigo-50 text-indigo-800 rounded-xl border border-indigo-100">
+                    <span className="block text-[7px] font-sans text-slate-400 uppercase">Kepatuhan</span>
+                    <span className="font-black text-sm">{compliancePct}%</span>
+                  </div>
+                </div>
+
+                {/* Kalender Grid 1 s.d 31 */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                  <span className="text-[10px] font-black uppercase text-slate-600 tracking-wider block">
+                    Riwayat Harian Bulan {selectedMonth}:
+                  </span>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {daysList.map(item => (
+                      <div 
+                        key={item.dateStr}
+                        className={`p-2.5 rounded-xl border flex items-center justify-between text-[10px] ${
+                          item.isFuture ? 'bg-slate-50 border-slate-100 text-slate-400 opacity-60' :
+                          item.isSubmitted ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900' :
+                          'bg-rose-50/70 border-rose-200 text-rose-900'
+                        }`}
+                      >
+                        <div>
+                          <span className="font-black font-mono block">Tgl {item.dayNum}</span>
+                          <span className="text-[8px] opacity-75">{item.dateStr}</span>
+                        </div>
+
+                        <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
+                          item.isFuture ? 'bg-slate-200 text-slate-600' :
+                          item.isSubmitted ? 'bg-emerald-600 text-white' :
+                          'bg-rose-600 text-white'
+                        }`}>
+                          {item.isFuture ? 'Mendatang' : item.isSubmitted ? `✓ ${item.logItem?.shift_status || 'OK'}` : '✕ Bolong'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Footer Modal */}
+                <div className="p-3 bg-white border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedManagerForCacpHistory(null)}
+                    className="w-full py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    Tutup Riwayat Manajer
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          );
+        })()}
+
         {/* ================= MODAL SLA TASK CONTROLLING (ULTRA MODERN MOBILE DASHBOARD) ================= */}
         {activeModal === 'task_manager' && (() => {
           // 1. Filter Outlets Khusus Kalsel 1 Saja (Kaltim Tersembunyi)
           const filteredOutletsList = outlets.filter(o => isOutletInRegion(o, 'KALSEL_1'));
 
-          // 2. Filter Tugas Berdasarkan Bulan yang Dipilih & Hanya Area Kalsel 1
+          // 2. Filter Tugas Berdasarkan Bulan yang Dipilih & Hanya Area Kalsel 1 (Kecualikan CACP Total)
           const monthlyTasks = tasks.filter(t => {
             const taskDate = t.created_at || t.deadline;
             const matchMonth = taskDate && taskDate.substring(0, 7) === selectedMonth;
             const taskOutlet = outlets.find(o => o.id === t.outlet_id);
             const isKalselTask = !t.outlet_id || isOutletInRegion(taskOutlet, 'KALSEL_1');
-            return matchMonth && isKalselTask;
+            const isCacp = (t.department === 'cacp_audit') || (t.title || '').toUpperCase().includes('CACP');
+            return matchMonth && isKalselTask && !isCacp;
           });
 
           // 3. Kalkulasi Performa Manajer (Prioritas: Sudah Selesai, Tepat & Paling Cepat)
@@ -4340,9 +4578,11 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                                     </button>
                                                   )}
                                                   <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
-                                                    isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                                    !isDone ? 'bg-rose-100 text-rose-800' :
+                                                    sub.status === 'completed' ? 'bg-emerald-100 text-emerald-800' :
+                                                    'bg-blue-100 text-blue-800'
                                                   }`}>
-                                                    {isDone ? '✓ Sudah Submit' : 'Belum'}
+                                                    {!isDone ? 'Belum' : sub.status === 'completed' ? '✓ Sudah Submit' : sub.status}
                                                   </span>
                                                 </div>
                                               </div>
@@ -4409,34 +4649,65 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                       </div>
 
                                       {isCompletedToday ? (
-                                        <div className="p-2 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between">
-                                          <span className="text-[9.5px] font-bold text-emerald-800">
-                                            ✓ {mySubmission.photo_urls?.length || tpl.min_photos} Foto Bukti Terkirim
-                                          </span>
+                                        <div className={`p-2.5 rounded-xl border flex items-center justify-between ${
+                                          mySubmission.status === 'completed' 
+                                            ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
+                                            : 'bg-blue-50/80 border-blue-200 text-blue-900'
+                                        }`}>
+                                          <div>
+                                            <span className="text-[10px] font-black block">
+                                              {mySubmission.status === 'completed' 
+                                                ? `✓ Selesai (${mySubmission.photo_urls?.length || tpl.min_photos} Foto)` 
+                                                : `✓ Tercatat: ${mySubmission.status}`}
+                                            </span>
+                                            {mySubmission.notes && (
+                                              <span className="text-[8.5px] opacity-75">{mySubmission.notes}</span>
+                                            )}
+                                          </div>
+
                                           {mySubmission.photo_urls?.[0] && (
                                             <button
                                               type="button"
                                               onClick={() => setTaskProofModalImage(mySubmission.photo_urls[0])}
                                               className="text-[9px] font-black text-indigo-600 underline cursor-pointer"
                                             >
-                                              Lihat Foto Bukti
+                                              Lihat Foto
                                             </button>
                                           )}
                                         </div>
                                       ) : (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setTaskToConfirm({
-                                              ...tpl,
-                                              deadline: `${todayDate}T${tpl.deadline_time || '21:00:00'}`
-                                            });
-                                            setActiveModal('confirm_task');
-                                          }}
-                                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                                        >
-                                          <FiCamera /> Ambil & Upload {tpl.min_photos} Foto Bukti
-                                        </button>
+                                        <div className="space-y-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setTaskToConfirm({
+                                                ...tpl,
+                                                deadline: `${todayDate}T${tpl.deadline_time || '21:00:00'}`
+                                              });
+                                              setActiveModal('confirm_task');
+                                            }}
+                                            className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                                          >
+                                            <FiCamera /> Ambil & Upload {tpl.min_photos} Foto Bukti
+                                          </button>
+
+                                          {/* PILIHAN JIKA TIDAK MASUK SHIFT */}
+                                          <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1">
+                                            <span className="text-[8px] font-black text-slate-400 uppercase tracking-tight">Tidak Bertugas?</span>
+                                            <div className="flex gap-1">
+                                              {['OFF', 'SAKIT', 'IZIN', 'CUTI'].map((st) => (
+                                                <button
+                                                  key={st}
+                                                  type="button"
+                                                  onClick={() => handleReportDailyAbsence(tpl, st)}
+                                                  className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[8.5px] font-black cursor-pointer transition-colors border border-slate-200"
+                                                >
+                                                  {st}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        </div>
                                       )}
                                     </div>
                                   );
@@ -4566,16 +4837,22 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                               <div key={t.id} className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
                                 <div className="flex items-center justify-between gap-1.5">
                                   {(() => {
-                                    const targetPerson = profiles.find(p => p.id === t.target_user_id);
+                                    // Ambil profil dari target_user_id atau pembuat tugas jika target kosong
+                                    const targetPerson = profiles.find(p => p.id === (t.target_user_id || t.created_by));
                                     const targetOutlet = outlets.find(o => o.id === t.outlet_id);
                                     const roleLabel = targetPerson?.role === 'store_manager' ? 'SM' :
                                                       targetPerson?.role === 'ast_store_manager' ? 'ASM' :
                                                       targetPerson?.role === 'floor_leader' ? 'FL' : '';
 
+                                    // Format nama: jika targetPerson ditemukan gunakan namanya, jika tidak jangan tampilkan cacp_audit
+                                    const displayName = targetPerson 
+                                      ? `${targetPerson.full_name} (${roleLabel})` 
+                                      : (t.department === 'cacp_audit' ? 'Manajer In-Charge' : t.department || 'Tugas');
+
                                     return (
                                       <div className="flex items-center gap-1.5 max-w-[230px]">
                                         <span className="text-[9px] font-black px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 rounded-md truncate">
-                                          👤 {targetPerson ? `${targetPerson.full_name} (${roleLabel})` : (t.department || 'Tugas')}
+                                          👤 {displayName}
                                         </span>
                                         {targetOutlet && (
                                           <span className="text-[8.5px] font-bold text-slate-600 truncate">
