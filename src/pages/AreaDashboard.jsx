@@ -3914,30 +3914,6 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                 }
               });
 
-              userTasks.forEach(task => {
-                const score = calculateTaskScore(task);
-                if (score !== null) {
-                  totalScoreSum += score;
-                  evaluatedCount += 1;
-                  if (score >= 80) onTimeCount++;
-                  else if (score === 50) sameDayOverdue++;
-                  else if (score === 25) multiDayOverdue++;
-                  else if (score === 0) uncompletedCount++;
-                }
-
-                // Kalkulasi efisiensi kecepatan waktu selesai (time saved)
-                if (task.status === 'completed' && task.completed_at) {
-                  const created = new Date(task.created_at).getTime();
-                  const deadline = new Date(task.deadline).getTime();
-                  const completed = new Date(task.completed_at).getTime();
-                  if (completed <= deadline) {
-                    const durasiTotal = Math.max(1, deadline - created);
-                    const waktuHemat = Math.max(0, deadline - completed);
-                    speedBonusTotal += (waktuHemat / durasiTotal) * 100;
-                  }
-                }
-              });
-
               // Jika punya tugas tapi belum selesai sama sekali, jangan beri nilai 100%
               const completedCount = onTimeCount + sameDayOverdue + multiDayOverdue;
               const avgScore = evaluatedCount > 0 
@@ -4918,17 +4894,20 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                                         </p>
                                                       </div>
 
-                                                      <div className="flex items-center gap-1.5 shrink-0">
+                                                      <div className="flex items-center gap-2 shrink-0 relative z-20">
                                                         {sub.photo_urls && sub.photo_urls.length > 0 && (
                                                           <button
                                                             type="button"
-                                                            onClick={() => setMultiPhotoGallery({
-                                                              title: `${tpl.title} — ${item.full_name}`,
-                                                              photos: sub.photo_urls
-                                                            })}
-                                                            className="text-[8.5px] font-bold text-indigo-600 underline cursor-pointer"
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              setMultiPhotoGallery({
+                                                                title: `${tpl.title} — ${item.full_name}`,
+                                                                photos: sub.photo_urls
+                                                              });
+                                                            }}
+                                                            className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[9px] font-black cursor-pointer shadow-2xs"
                                                           >
-                                                            Lihat {sub.photo_urls.length} Foto
+                                                            🔍 Lihat {sub.photo_urls.length} Foto
                                                           </button>
                                                         )}
                                                         <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
@@ -5842,6 +5821,59 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             </div>
           );
         })()}
+        {/* MODAL GALERI MULTI-FOTO DOKUMENTASI (LAYER TERTINGGI Z-100) */}
+        {multiPhotoGallery && (
+          <div className="fixed inset-0 bg-slate-950/90 z-[100] backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-md max-h-[90vh] rounded-3xl flex flex-col shadow-2xl overflow-hidden border border-slate-200">
+              <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0">
+                <div className="min-w-0 pr-2">
+                  <h4 className="text-xs font-black text-slate-900 truncate leading-tight">
+                    {multiPhotoGallery.title}
+                  </h4>
+                  <p className="text-[9.5px] text-indigo-600 font-bold">
+                    Total {multiPhotoGallery.photos.length} Foto Bukti Terlampir
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMultiPhotoGallery(null)}
+                  className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-xl cursor-pointer"
+                >
+                  <FiX className="text-base" />
+                </button>
+              </div>
+
+              {/* Grid Foto Dokumentasi */}
+              <div className="p-4 overflow-y-auto grid grid-cols-2 gap-2.5">
+                {multiPhotoGallery.photos.map((url, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => setTaskProofModalImage(url)}
+                    className="group relative aspect-square rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 cursor-pointer shadow-2xs hover:scale-[1.02] transition-all"
+                  >
+                    <img src={url} alt={`Bukti ${idx + 1}`} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-[10px] font-black">
+                      🔍 Perbesar Foto #{idx + 1}
+                    </div>
+                    <span className="absolute bottom-1.5 left-1.5 bg-black/70 text-white text-[8px] font-mono font-bold px-1.5 py-0.5 rounded-md">
+                      #{idx + 1}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3 bg-white border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setMultiPhotoGallery(null)}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors"
+                >
+                  Tutup Galeri Bukti
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* MODAL PREVIEW FOTO BUKTI DOKUMENTASI FULL SCREEN */}
         {taskProofModalImage && (
           <div 
@@ -5918,11 +5950,10 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                     Ambil foto fisik langsung dengan kamera HP. Tombol submit terkunci jika jumlah foto belum mencukupi.
                   </p>
 
-                  {/* Input Foto dengan dukungan Kamera & Multi-Selection */}
+                  {/* Input Foto dengan Dukungan Kamera & Galeri HP */}
                   <input
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     multiple
                     onChange={(e) => {
                       const files = Array.from(e.target.files || []);
