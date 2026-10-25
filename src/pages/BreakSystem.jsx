@@ -684,33 +684,8 @@ if (!isAreaManager && currentOutletId) {
 
       const past24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const nowMs = Date.now();
-      
-      // 1. Cek apakah ada sesi gantung/tersangkut dari hari kemarin (lebih dari 16 jam lalu belum checkout)
-      const { data: hangingLogs } = await supabase
-        .from('attendance_logs')
-        .select('id, actual_in, break_start_time, break_end_time')
-        .eq('user_id', user.id)
-        .is('actual_out', null)
-        .order('actual_in', { ascending: false })
-        .limit(3);
 
-      if (hangingLogs && hangingLogs.length > 0) {
-        for (const hLog of hangingLogs) {
-          const hInMs = new Date(hLog.actual_in).getTime();
-          // Jika sesi sudah berumur lebih dari 16 jam, otomatis tutup sesi agar hari ini bebas digunakan
-          if ((nowMs - hInMs) > (16 * 60 * 60 * 1000)) {
-            const autoOutTime = new Date(hInMs + 9 * 3600 * 1000).toISOString();
-            await supabase.from('attendance_logs').update({
-              actual_out: autoOutTime,
-              break_end_time: hLog.break_start_time && !hLog.break_end_time ? autoOutTime : hLog.break_end_time,
-              status_out: 'Auto-Closed Sistem (Sesi Kemarin)',
-              discipline_status: 'Shift Selesai Otomatis'
-            }).eq('id', hLog.id);
-          }
-        }
-      }
-
-      // 2. Ambil log kehadiran kru yang aktif hari ini
+      // 1. Ambil seluruh log user dalam 24 jam terakhir
       const { data: userRecentLogs } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
@@ -719,19 +694,18 @@ if (!isAreaManager && currentOutletId) {
         .order('actual_in', { ascending: false })
         .limit(10);
 
-      // Sesi aktif HANYA log yang actual_out-nya masih kosong
-      let currentLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
+      // Cari apakah ada sesi aktif yang BENAR-BENAR belum checkout
+      const activeRunningLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
 
-      const isActualOutFilled = Boolean(currentLog?.actual_out && currentLog.actual_out !== '' && currentLog.actual_out !== 'null');
-
-      if (currentLog && currentLog.actual_in && !isActualOutFilled) {
-        const inTime = new Date(currentLog.actual_in);
+      if (activeRunningLog && activeRunningLog.actual_in) {
+        // --- KRU SEDANG AKTIF BEKERJA (Bukan sudah pulang) ---
+        const inTime = new Date(activeRunningLog.actual_in);
         const inTimeMs = inTime.getTime();
         let checkInHour = inTime.getHours();
 
-        if (currentLog.status_in && currentLog.status_in.includes('Shift ')) {
+        if (activeRunningLog.status_in && activeRunningLog.status_in.includes('Shift ')) {
           try {
-            const parsedHour = parseInt(currentLog.status_in.split('Shift ')[1].split(':')[0]);
+            const parsedHour = parseInt(activeRunningLog.status_in.split('Shift ')[1].split(':')[0]);
             if (!isNaN(parsedHour)) {
               setSelectedShiftHour(parsedHour);
               checkInHour = parsedHour;
@@ -741,39 +715,22 @@ if (!isAreaManager && currentOutletId) {
 
         const isShift22 = (checkInHour === 22);
         const targetHours = isShift22 ? 8 : 9;
-        const maxSessionMs = 15 * 60 * 60 * 1000;
 
-        if ((nowMs - inTimeMs) > maxSessionMs) {
-          await supabase.from('attendance_logs').update({
-            actual_out: new Date(inTimeMs + targetHours * 3600 * 1000).toISOString(),
-            status_out: 'Lupa Absen Pulang (>3 Jam) (-10 Poin)',
-            discipline_status: 'Terlambat Absen Pulang > 3 Jam',
-            penalty_points: 10
-          }).eq('id', currentLog.id);
-
-          setActiveLogId(null);
-          setHasCheckedIn(false);
-          setHasCheckedOut(false);
-          setCheckInTime(null);
-          setIsOnBreak(false);
-          setBreakStartTime(null);
-          return;
-        }
-
-        setActiveLogId(currentLog.id);
+        // Kunci status aktif: Tombol Masuk hijau, Pulang & Break aktif
+        setActiveLogId(activeRunningLog.id);
         setHasCheckedIn(true);
         setHasCheckedOut(false);
-        setActiveShiftStatusIn(currentLog.status_in || '');
+        setActiveShiftStatusIn(activeRunningLog.status_in || '');
         setCheckInTime(inTime);
         setRequiredWorkHours(targetHours);
         
         const allowedBreakSec = isShift22 ? 1800 : 3600;
-        const breaking = Boolean(currentLog.break_start_time) && !Boolean(currentLog.break_end_time);
+        const breaking = Boolean(activeRunningLog.break_start_time) && !Boolean(activeRunningLog.break_end_time);
         
         if (breaking) {
           setIsOnBreak(true);
-          setBreakStartTime(new Date(currentLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
-          const elapsed = Math.floor((nowMs - new Date(currentLog.break_start_time).getTime()) / 1000);
+          setBreakStartTime(new Date(activeRunningLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
+          const elapsed = Math.floor((nowMs - new Date(activeRunningLog.break_start_time).getTime()) / 1000);
           setTimeLeft(allowedBreakSec - elapsed);
           setMaxBreakDuration(allowedBreakSec);
         } else {
@@ -781,24 +738,27 @@ if (!isAreaManager && currentOutletId) {
           setBreakStartTime(null);
         }
       } else {
-        // Cek jika kru baru saja selesai checkout dalam rentang toleransi 4 jam terakhir
-        const recentOutLog = userRecentLogs?.find(l => l.actual_out && String(l.actual_out).trim() !== '' && String(l.actual_out).toLowerCase() !== 'null');
-        if (recentOutLog) {
-          const outTimeMs = new Date(recentOutLog.actual_out).getTime();
+        // --- TIDAK ADA SESI AKTIF ---
+        // Cek apakah kru baru saja absen pulang mandiri hari ini (dalam 3 jam terakhir dari waktu actual_out)
+        const recentCheckoutLog = userRecentLogs?.find(l => l.actual_out && String(l.actual_out).trim() !== '' && String(l.actual_out).toLowerCase() !== 'null');
+        
+        if (recentCheckoutLog) {
+          const outTimeMs = new Date(recentCheckoutLog.actual_out).getTime();
           const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
 
-          if (diffHours < 4) {
-            setActiveLogId(recentOutLog.id);
+          // Hanya tandai "Sudah Pulang" jika checkout-nya benar-benar baru terjadi kurang dari 3 jam lalu
+          if (diffHours >= 0 && diffHours < 3) {
+            setActiveLogId(recentCheckoutLog.id);
             setHasCheckedIn(true);
             setHasCheckedOut(true);
-            setCheckInTime(new Date(recentOutLog.actual_in));
+            setCheckInTime(new Date(recentCheckoutLog.actual_in));
             setIsOnBreak(false);
             setBreakStartTime(null);
             return;
           }
         }
 
-        // Jika benar-benar belum absen atau sudah lewat 4 jam dari checkout, tombol kembali ke Absen Masuk
+        // Kembali ke tampilan awal: Siap Absen Masuk
         setActiveLogId(null);
         setHasCheckedIn(false);
         setHasCheckedOut(false);
