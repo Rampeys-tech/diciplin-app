@@ -4969,28 +4969,48 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                               ) : (
                                 dailyTemplates.map(tpl => {
                                   const todayDate = new Date().toISOString().split('T')[0];
-                                  const mySubmission = dailySubmissions.find(s => 
+                                  const isScopeResto = tpl.scope_type === 'RESTO';
+
+                                  // Cari submission langsung milik user
+                                  const directSub = dailySubmissions.find(s => 
                                     s.template_id === tpl.id && 
                                     s.user_id === currentProfile?.id && 
                                     s.submission_date === todayDate
                                   );
-                                  const isCompletedToday = !!mySubmission;
+
+                                  // Jika tugas bertipe PER RESTO, cari apakah rekan satu restonya sudah ada yang menyelesaikan
+                                  const restoSub = isScopeResto
+                                    ? dailySubmissions.find(s => 
+                                        s.template_id === tpl.id && 
+                                        s.outlet_id === currentProfile?.outlet_id && 
+                                        s.submission_date === todayDate
+                                      )
+                                    : null;
+
+                                  const activeSub = directSub || restoSub;
+                                  const isCompletedToday = !!activeSub;
+                                  const isDoneByColleague = !directSub && !!restoSub;
+                                  const colleagueName = isDoneByColleague
+                                    ? profiles.find(p => p.id === restoSub?.user_id)?.full_name || 'Rekan Manajer'
+                                    : null;
 
                                   return (
                                     <div key={tpl.id} className="p-3.5 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-2.5">
                                       <div className="flex items-start justify-between gap-2">
                                         <div>
                                           <div className="flex items-center gap-1.5">
-                                            <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-amber-100 text-amber-900 rounded-md">
-                                              DAILY MANDATORY
+                                            <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-md ${
+                                              isScopeResto ? 'bg-purple-100 text-purple-800' : 'bg-amber-100 text-amber-900'
+                                            }`}>
+                                              {isScopeResto ? '🏪 DAILY PER RESTO' : '👤 DAILY PER ORANG'}
                                             </span>
                                             <span className="text-[9px] font-bold text-slate-400 font-mono">
                                               Batas: {tpl.deadline_time ? tpl.deadline_time.substring(0, 5) : '21:00'} WITA
                                             </span>
                                           </div>
                                           <h5 className="text-xs font-black text-slate-900 mt-1">{tpl.title}</h5>
-                                          <p className="text-[9.5px] text-indigo-700 font-bold">
-                                            📸 Syarat: Wajib {tpl.min_photos} Foto Bukti Fisik
+                                          <p className="text-[9.5px] text-slate-500 font-medium">
+                                            📸 Syarat: Wajib {tpl.min_photos} Foto {isScopeResto ? '(Cukup 1 orang per resto)' : '(Wajib tiap orang)'}
                                           </p>
                                         </div>
 
@@ -5005,26 +5025,37 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
                                       {isCompletedToday ? (
                                         <div className={`p-2.5 rounded-xl border flex items-center justify-between ${
-                                          mySubmission.status === 'completed' 
+                                          activeSub.status === 'completed' 
                                             ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900' 
                                             : 'bg-blue-50/80 border-blue-200 text-blue-900'
                                         }`}>
                                           <div>
                                             <span className="text-[10px] font-black block">
-                                              {mySubmission.status === 'completed' 
-                                                ? `✓ Selesai (${mySubmission.photo_urls?.length || tpl.min_photos} Foto)` 
-                                                : `✓ Tercatat: ${mySubmission.status}`}
+                                              {activeSub.status === 'completed' 
+                                                ? (isDoneByColleague 
+                                                    ? `✓ Selesai (Diselesaikan oleh: ${colleagueName})` 
+                                                    : `✓ Selesai (${activeSub.photo_urls?.length || tpl.min_photos} Foto Terkirim)`)
+                                                : `✓ Tercatat: ${activeSub.status}`}
                                             </span>
-                                            {mySubmission.notes && (
-                                              <span className="text-[8.5px] opacity-75">{mySubmission.notes}</span>
+                                            {activeSub.notes && (
+                                              <span className="text-[8.5px] opacity-75">{activeSub.notes}</span>
                                             )}
                                           </div>
 
-                                          {mySubmission.photo_urls?.[0] && (
+                                          {activeSub.photo_urls && activeSub.photo_urls.length > 0 && (
                                             <button
                                               type="button"
-                                              onClick={() => setTaskProofModalImage(mySubmission.photo_urls[0])}
-                                              className="text-[9px] font-black text-indigo-600 underline cursor-pointer"
+                                              onClick={() => {
+                                                if (activeSub.photo_urls.length > 1) {
+                                                  setMultiPhotoGallery({
+                                                    title: `${tpl.title}`,
+                                                    photos: activeSub.photo_urls
+                                                  });
+                                                } else {
+                                                  setTaskProofModalImage(activeSub.photo_urls[0]);
+                                                }
+                                              }}
+                                              className="text-[9px] font-black text-indigo-600 underline cursor-pointer shrink-0 ml-2"
                                             >
                                               Lihat Foto
                                             </button>
@@ -5046,22 +5077,24 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                             <FiCamera /> Ambil & Upload {tpl.min_photos} Foto Bukti
                                           </button>
 
-                                          {/* PILIHAN JIKA TIDAK MASUK SHIFT */}
-                                          <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1">
-                                            <span className="text-[8px] font-black text-slate-400 uppercase tracking-tight">Tidak Bertugas?</span>
-                                            <div className="flex gap-1">
-                                              {['OFF', 'SAKIT', 'IZIN', 'CUTI'].map((st) => (
-                                                <button
-                                                  key={st}
-                                                  type="button"
-                                                  onClick={() => handleReportDailyAbsence(tpl, st)}
-                                                  className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[8.5px] font-black cursor-pointer transition-colors border border-slate-200"
-                                                >
-                                                  {st}
-                                                </button>
-                                              ))}
+                                          {/* TOMBOL DISPENSASI (HANYA MUNCUL DI TUGAS PER ORANG / INDIVIDU) */}
+                                          {!isScopeResto && (
+                                            <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1">
+                                              <span className="text-[8px] font-black text-slate-400 uppercase tracking-tight">Tidak Bertugas?</span>
+                                              <div className="flex gap-1">
+                                                {['OFF', 'SAKIT', 'IZIN', 'CUTI'].map((st) => (
+                                                  <button
+                                                    key={st}
+                                                    type="button"
+                                                    onClick={() => handleReportDailyAbsence(tpl, st)}
+                                                    className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[8.5px] font-black cursor-pointer transition-colors border border-slate-200"
+                                                  >
+                                                    {st}
+                                                  </button>
+                                                ))}
+                                              </div>
                                             </div>
-                                          </div>
+                                          )}
                                         </div>
                                       )}
                                     </div>
