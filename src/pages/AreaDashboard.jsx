@@ -293,6 +293,8 @@ export default function AreaDashboard() {
   const [selectedRestoForSlaDetail, setSelectedRestoForSlaDetail] = useState(null);
   const [selectedManagerForCacpHistory, setSelectedManagerForCacpHistory] = useState(null);
   const [taskProofModalImage, setTaskProofModalImage] = useState(null);
+  const [multiPhotoGallery, setMultiPhotoGallery] = useState(null); // { title: '', photos: [] }
+  const [dailyFormScopeType, setDailyFormScopeType] = useState('INDIVIDUAL'); // 'INDIVIDUAL' | 'RESTO'
   const [equipStationFilter, setEquipStationFilter] = useState('ALL');
   const [equipSearchQuery, setEquipSearchQuery] = useState('');
   const [equipTabFilter, setEquipTabFilter] = useState('all');
@@ -378,6 +380,8 @@ export default function AreaDashboard() {
   const [dailyTemplates, setDailyTemplates] = useState([]);
   const [dailySubmissions, setDailySubmissions] = useState([]);
   const [taskTypeTab, setTaskTypeTab] = useState('adhoc'); // 'adhoc' | 'daily'
+  const [dailyRecapPeriod, setDailyRecapPeriod] = useState('daily'); // 'daily' | 'weekly' | 'monthly'
+  const [dailyFilterDate, setDailyFilterDate] = useState(new Date().toISOString().split('T')[0]);
   const [isCreatingDailyTemplate, setIsCreatingDailyTemplate] = useState(false);
   const [dailyFormTitle, setDailyFormTitle] = useState('');
   const [dailyFormMinPhotos, setDailyFormMinPhotos] = useState(10);
@@ -920,12 +924,14 @@ export default function AreaDashboard() {
         min_photos: Number(dailyFormMinPhotos) || 10,
         deadline_time: dailyFormDeadline || '21:00:00',
         target_role: dailyFormRole,
+        scope_type: dailyFormScopeType, // 'INDIVIDUAL' atau 'RESTO'
         is_active: true
       }]);
 
       if (error) throw error;
-      alert("✓ Template Jobdesk Daily berhasil disimpan! Berlaku setiap hari untuk manager.");
+      alert("✓ Template Jobdesk Daily berhasil disimpan!");
       setDailyFormTitle('');
+      setDailyFormScopeType('INDIVIDUAL');
       setIsCreatingDailyTemplate(false);
       loadMasterData();
     } catch (err) {
@@ -3831,9 +3837,20 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
               const isMatchRegion = isOutletInRegion(managerOutlet, 'KALSEL_1');
               const isMatchOutlet = slaFilterOutletId === 'ALL' || manager.outlet_id === slaFilterOutletId;
 
+              // 1. Ambil Tugas Bulanan/Adhoc Khusus Manajer Ini (Kecualikan CACP)
               const userTasks = monthlyTasks.filter(t => {
+                const isCacp = (t.department === 'cacp_audit') || (t.title || '').toUpperCase().includes('CACP');
+                if (isCacp) return false;
                 if (t.target_user_id) return t.target_user_id === manager.id;
                 return t.outlet_id === manager.outlet_id && t.target_role === manager.role;
+              });
+
+              // 2. Ambil Setoran Jobdesk Daily Rutin Khusus Individu (Hanya Tipe INDIVIDUAL)
+              const userDailySubs = dailySubmissions.filter(s => {
+                if (s.user_id !== manager.id) return false;
+                const matchMonth = s.submission_date && s.submission_date.substring(0, 7) === selectedMonth;
+                const tpl = dailyTemplates.find(t => t.id === s.template_id);
+                return matchMonth && tpl?.scope_type !== 'RESTO';
               });
 
               let totalScoreSum = 0;
@@ -3843,6 +3860,59 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
               let multiDayOverdue = 0;
               let uncompletedCount = 0;
               let speedBonusTotal = 0;
+
+              // A. Hitung Tugas Adhoc
+              userTasks.forEach(task => {
+                const score = calculateTaskScore(task);
+                if (score !== null) {
+                  totalScoreSum += score;
+                  evaluatedCount += 1;
+                  if (score >= 80) onTimeCount++;
+                  else if (score === 50) sameDayOverdue++;
+                  else if (score === 25) multiDayOverdue++;
+                  else if (score === 0) uncompletedCount++;
+                }
+
+                if (task.status === 'completed' && task.completed_at) {
+                  const created = new Date(task.created_at).getTime();
+                  const deadline = new Date(task.deadline).getTime();
+                  const completed = new Date(task.completed_at).getTime();
+                  if (completed <= deadline) {
+                    const durasiTotal = Math.max(1, deadline - created);
+                    const waktuHemat = Math.max(0, deadline - completed);
+                    speedBonusTotal += (waktuHemat / durasiTotal) * 100;
+                  }
+                }
+              });
+
+              // B. Hitung Tugas Daily Individu (1 Tugas Selesai = Tepat 1)
+              userDailySubs.forEach(s => {
+                evaluatedCount += 1;
+                const tpl = dailyTemplates.find(t => t.id === s.template_id);
+
+                if (s.status !== 'completed') {
+                  totalScoreSum += 100;
+                  onTimeCount += 1;
+                  return;
+                }
+
+                let isDailyOnTime = true;
+                if (tpl?.deadline_time && s.submitted_at) {
+                  const subTime = new Date(s.submitted_at);
+                  const subHourMinute = `${String(subTime.getHours()).padStart(2, '0')}:${String(subTime.getMinutes()).padStart(2, '0')}:00`;
+                  if (subHourMinute > tpl.deadline_time) {
+                    isDailyOnTime = false;
+                  }
+                }
+
+                if (isDailyOnTime) {
+                  totalScoreSum += 100;
+                  onTimeCount += 1;
+                } else {
+                  totalScoreSum += 50;
+                  sameDayOverdue += 1;
+                }
+              });
 
               userTasks.forEach(task => {
                 const score = calculateTaskScore(task);
@@ -3911,14 +3981,24 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
           const currentLoggedInManager = allManagersPerformance.find(m => m.id === currentProfile?.id);
           const currentManagerRank = allManagersPerformance.findIndex(m => m.id === currentProfile?.id) + 1;
 
-          // 4. Kalkulasi Performa SLA Tim per Resto
+          // 4. Kalkulasi Performa SLA Tim per Resto (Sinkron Tiket Bulanan + Jobdesk Daily)
           const restoPerformanceList = filteredOutletsList.map(resto => {
+            // A. Tugas Proyek Bulanan
             const restoTasks = monthlyTasks.filter(t => t.outlet_id === resto.id);
+            
+            // B. Setoran Daily Rutin Bulan Ini untuk Resto Ini
+            const restoDailySubs = dailySubmissions.filter(s => {
+              const matchResto = s.outlet_id === resto.id;
+              const matchMonth = s.submission_date && s.submission_date.substring(0, 7) === selectedMonth;
+              return matchResto && matchMonth;
+            });
+
             let sumScores = 0;
             let count = 0;
             let onTime = 0;
             let overdue = 0;
 
+            // 1. Evaluasi Tugas Bulanan / Adhoc
             restoTasks.forEach(t => {
               const score = calculateTaskScore(t);
               if (score !== null) {
@@ -3929,13 +4009,46 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
               }
             });
 
-            const avgSla = count > 0 ? Math.round(sumScores / count) : 100;
+            // 2. Evaluasi Setoran Daily (Menilai Kepatuhan Waktu Jam Submit)
+            restoDailySubs.forEach(s => {
+              const tpl = dailyTemplates.find(t => t.id === s.template_id);
+              count++;
+
+              if (s.status !== 'completed') {
+                // Status OFF / Sakit / Izin / Cuti dianggap aman & dispensasi
+                sumScores += 100;
+                onTime++;
+                return;
+              }
+
+              // Validasi Ketepatan Waktu: jam submit vs deadline template
+              let isDailyOnTime = true;
+              if (tpl?.deadline_time && s.submitted_at) {
+                const subTime = new Date(s.submitted_at);
+                const subHourMinute = `${String(subTime.getHours()).padStart(2, '0')}:${String(subTime.getMinutes()).padStart(2, '0')}:00`;
+                if (subHourMinute > tpl.deadline_time) {
+                  isDailyOnTime = false;
+                }
+              }
+
+              if (isDailyOnTime) {
+                sumScores += 100;
+                onTime++;
+              } else {
+                sumScores += 50; // Telat submit dikenakan skor 50%
+                overdue++;
+              }
+            });
+
+            const totalAllTasks = count;
+            const avgSla = totalAllTasks > 0 ? Math.round(sumScores / totalAllTasks) : 100;
+
             return {
               id: resto.id,
               name: resto.name,
               code: resto.code,
               avgSla,
-              totalTasks: restoTasks.length,
+              totalTasks: totalAllTasks,
               onTime,
               overdue
             };
@@ -4086,14 +4199,26 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                             <p className="text-[10px] text-indigo-300 font-medium mt-0.5 truncate">
                               Wilayah: {slaFilterRegion === 'KALSEL_1' ? 'Kalsel 1' : slaFilterRegion === 'KALTIM' ? 'Kaltim' : 'Kalsel & Kaltim'}
                             </p>
-                            <div className="flex items-center gap-2 mt-2">
-                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
-                                {selectedRestoPerf.onTime} Tepat Waktu
-                              </span>
-                              <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
-                                {selectedRestoPerf.overdue} Overdue
-                              </span>
-                            </div>
+                            {(() => {
+                              // Hitung total onTime & overdue secara dinamis sesuai filter
+                              const activeOnTime = slaFilterOutletId === 'ALL'
+                                ? restoPerformanceList.reduce((acc, r) => acc + r.onTime, 0)
+                                : selectedRestoPerf.onTime;
+                              const activeOverdue = slaFilterOutletId === 'ALL'
+                                ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
+                                : selectedRestoPerf.overdue;
+
+                              return (
+                                <div className="flex items-center gap-2 mt-2">
+                                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                                    {activeOnTime} Tepat Waktu
+                                  </span>
+                                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
+                                    {activeOverdue} Overdue
+                                  </span>
+                                </div>
+                              );
+                            })()}
                           </div>
 
                           <div className="text-right shrink-0">
@@ -4446,6 +4571,18 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none"
                                   />
 
+                                  <div className="space-y-1">
+                                    <label className="text-[8.5px] font-bold text-slate-500 block">Aturan Penyelesaian Tugas:</label>
+                                    <select
+                                      value={dailyFormScopeType}
+                                      onChange={(e) => setDailyFormScopeType(e.target.value)}
+                                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                                    >
+                                      <option value="INDIVIDUAL">👤 Wajib Tiap Manajer (Setiap orang wajib submit)</option>
+                                      <option value="RESTO">🏪 Cukup 1 Manajer per Resto (1 Orang submit, 1 resto selesai)</option>
+                                    </select>
+                                  </div>
+
                                   <div className="grid grid-cols-2 gap-2">
                                     <div>
                                       <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">Wajib Foto Bukti:</label>
@@ -4483,27 +4620,70 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                             </div>
                           )}
 
-                          {/* 2. TAMPILAN KHUSUS AREA MANAGER: MONITORING & AUDIT REKAP MANAJER */}
+                          {/* 2. TAMPILAN KHUSUS AREA MANAGER: MONITORING & REKAP (HARIAN / MINGGUAN / BULANAN) */}
                           {currentProfile?.role === 'area_manager' ? (
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between px-1">
-                                <span className="text-[10px] font-black uppercase text-slate-600 tracking-wider">
-                                  Monitoring Setoran Daily Hari Ini ({new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})
-                                </span>
-                                <span className="text-[9px] font-mono text-indigo-600 font-bold">
-                                  {dailyTemplates.length} Template Aktif
-                                </span>
+                            <div className="space-y-3.5">
+                              {/* BAR FILTER PERIODE REKAP DAILY */}
+                              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                                    Filter Evaluasi Daily:
+                                  </span>
+                                  <span className="text-[9px] font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100">
+                                    {dailyRecapPeriod === 'daily' ? '📅 Harian' : dailyRecapPeriod === 'weekly' ? '📆 7 Hari Terakhir' : '🗓️ 1 Bulan Kalender'}
+                                  </span>
+                                </div>
+
+                                <div className="flex gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyRecapPeriod('daily')}
+                                    className={`flex-1 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer ${
+                                      dailyRecapPeriod === 'daily' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                                    }`}
+                                  >
+                                    Harian
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyRecapPeriod('weekly')}
+                                    className={`flex-1 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer ${
+                                      dailyRecapPeriod === 'weekly' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                                    }`}
+                                  >
+                                    Mingguan
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDailyRecapPeriod('monthly')}
+                                    className={`flex-1 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer ${
+                                      dailyRecapPeriod === 'monthly' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                                    }`}
+                                  >
+                                    Bulanan
+                                  </button>
+                                </div>
+
+                                {dailyRecapPeriod === 'daily' && (
+                                  <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                    <span className="text-[9px] text-slate-500 font-bold">Pilih Tanggal:</span>
+                                    <input
+                                      type="date"
+                                      value={dailyFilterDate}
+                                      onChange={(e) => setDailyFilterDate(e.target.value)}
+                                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-[10px] font-mono font-bold text-slate-700 outline-none cursor-pointer"
+                                    />
+                                  </div>
+                                )}
                               </div>
 
                               {dailyTemplates.length === 0 ? (
                                 <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
-                                  Belum ada master tugas harian yang dibuat.
+                                  Belum ada template jobdesk daily yang terdaftar.
                                 </div>
                               ) : (
                                 dailyTemplates.map(tpl => {
-                                  const todayDate = new Date().toISOString().split('T')[0];
-                                  
-                                  // Ambil seluruh manajer Kalsel 1
+                                  // 1. Manajer dalam cakupan wilayah Kalsel 1
                                   const managersInScope = profiles.filter(p => {
                                     const isMgr = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role);
                                     const out = outlets.find(o => o.id === p.outlet_id);
@@ -4511,32 +4691,98 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                     return isMgr && isOutletInRegion(out, 'KALSEL_1') && matchOut;
                                   });
 
-                                  // Hitung berapa yang sudah kirim
-                                  const submissionsForThisTpl = dailySubmissions.filter(s => 
-                                    s.template_id === tpl.id && s.submission_date === todayDate
-                                  );
+                                  // 2. Filter data submission sesuai periode yang dipilih
+                                  const relevantSubmissions = dailySubmissions.filter(s => {
+                                    if (s.template_id !== tpl.id) return false;
+                                    const subDate = s.submission_date;
+                                    if (!subDate) return false;
+
+                                    if (dailyRecapPeriod === 'daily') {
+                                      return subDate === dailyFilterDate;
+                                    } else if (dailyRecapPeriod === 'weekly') {
+                                      const now = new Date();
+                                      const past7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                                      const todayStr = now.toISOString().split('T')[0];
+                                      return subDate >= past7Days && subDate <= todayStr;
+                                    } else {
+                                      return subDate.substring(0, 7) === selectedMonth;
+                                    }
+                                  });
+
+                                  const isScopeResto = tpl.scope_type === 'RESTO';
+
+                                  // Ambil daftar resto unik di wilayah aktif
+                                  const outletsInScope = outlets.filter(o => {
+                                    const matchReg = isOutletInRegion(o, 'KALSEL_1');
+                                    const matchOut = slaFilterOutletId === 'ALL' || o.id === slaFilterOutletId;
+                                    return matchReg && matchOut;
+                                  });
+
+                                  // Data untuk tugas PER RESTO
+                                  const completedOutlets = [];
+                                  const missedOutlets = [];
+
+                                  if (isScopeResto) {
+                                    outletsInScope.forEach(out => {
+                                      const sub = relevantSubmissions.find(s => s.outlet_id === out.id);
+                                      if (sub) {
+                                        const submitter = profiles.find(p => p.id === sub.user_id);
+                                        completedOutlets.push({
+                                          ...out,
+                                          submitterName: submitter?.full_name || 'Manajer Cabang',
+                                          submission: sub
+                                        });
+                                      } else {
+                                        missedOutlets.push(out);
+                                      }
+                                    });
+                                  }
+
+                                  // Data untuk tugas PER ORANG
+                                  const completedManagers = [];
+                                  const missedManagers = [];
+
+                                  if (!isScopeResto) {
+                                    managersInScope.forEach(mgr => {
+                                      const subs = relevantSubmissions.filter(s => s.user_id === mgr.id);
+                                      if (subs.length > 0) {
+                                        completedManagers.push({
+                                          ...mgr,
+                                          subCount: subs.length,
+                                          latestSub: subs[0]
+                                        });
+                                      } else {
+                                        missedManagers.push(mgr);
+                                      }
+                                    });
+                                  }
+
+                                  const totalTarget = isScopeResto ? outletsInScope.length : managersInScope.length;
+                                  const totalDone = isScopeResto ? completedOutlets.length : completedManagers.length;
 
                                   return (
                                     <div key={tpl.id} className="p-3.5 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-3">
                                       <div className="flex items-start justify-between">
                                         <div>
                                           <div className="flex items-center gap-1.5">
-                                            <span className="text-[8.5px] font-black uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md">
-                                              DAILY CONTROL
+                                            <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded-md ${
+                                              isScopeResto ? 'bg-purple-100 text-purple-800' : 'bg-indigo-50 text-indigo-700'
+                                            }`}>
+                                              {isScopeResto ? '🏪 PER RESTO' : '👤 PER ORANG'}
                                             </span>
                                             <span className="text-[9px] text-slate-400 font-mono">
-                                              Deadline: {tpl.deadline_time ? tpl.deadline_time.substring(0, 5) : '21:00'} WITA
+                                              Batas: {tpl.deadline_time ? tpl.deadline_time.substring(0, 5) : '21:00'} WITA
                                             </span>
                                           </div>
                                           <h5 className="text-xs font-black text-slate-900 mt-1">{tpl.title}</h5>
                                           <p className="text-[9.5px] text-slate-500">
-                                            📸 Syarat: Minimal {tpl.min_photos} Foto Bukti Fisik
+                                            📸 Syarat: Minimal {tpl.min_photos} Foto {isScopeResto ? '(Cukup 1 orang per resto)' : '(Semua manager wajib)'}
                                           </p>
                                         </div>
 
                                         <div className="flex items-center gap-1.5 shrink-0">
                                           <span className="text-xs font-mono font-black px-2.5 py-1 bg-slate-50 rounded-xl border border-slate-200 text-slate-800">
-                                            {submissionsForThisTpl.length} / {managersInScope.length} Selesai
+                                            {totalDone} / {totalTarget} {isScopeResto ? 'Resto' : 'Selesai'}
                                           </span>
                                           <button
                                             type="button"
@@ -4549,47 +4795,156 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                         </div>
                                       </div>
 
-                                      {/* Sub-list Status per Manajer */}
-                                      <div className="space-y-1.5 pt-1 border-t border-slate-100">
-                                        <span className="text-[8.5px] font-black uppercase text-slate-400 block tracking-wider">
-                                          Status Pengumpulan Manajer:
-                                        </span>
-                                        <div className="max-h-44 overflow-y-auto space-y-1.5 pr-0.5">
-                                          {managersInScope.map(mgr => {
-                                            const sub = submissionsForThisTpl.find(s => s.user_id === mgr.id);
-                                            const isDone = !!sub;
-                                            const mgrOutlet = outlets.find(o => o.id === mgr.outlet_id);
-
-                                            return (
-                                              <div key={mgr.id} className="p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px]">
-                                                <div className="min-w-0 flex-1 pr-2">
-                                                  <p className="font-black text-slate-900 truncate">{mgr.full_name}</p>
-                                                  <p className="text-[8.5px] text-slate-400 truncate">{mgrOutlet?.name || 'Resto'}</p>
-                                                </div>
-
-                                                <div className="flex items-center gap-2 shrink-0">
-                                                  {isDone && sub.photo_urls?.[0] && (
-                                                    <button
-                                                      type="button"
-                                                      onClick={() => setTaskProofModalImage(sub.photo_urls[0])}
-                                                      className="text-[8.5px] font-bold text-indigo-600 underline cursor-pointer"
-                                                    >
-                                                      Lihat {sub.photo_urls.length} Foto
-                                                    </button>
-                                                  )}
-                                                  <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
-                                                    !isDone ? 'bg-rose-100 text-rose-800' :
-                                                    sub.status === 'completed' ? 'bg-emerald-100 text-emerald-800' :
-                                                    'bg-blue-100 text-blue-800'
-                                                  }`}>
-                                                    {!isDone ? 'Belum' : sub.status === 'completed' ? '✓ Sudah Submit' : sub.status}
-                                                  </span>
-                                                </div>
+                                      {/* ================= TAMPILAN JIKA TIPE TUGAS: PER RESTO ================= */}
+                                      {isScopeResto ? (
+                                        <>
+                                          {/* RESTO YANG BELUM MENGERJAKAN */}
+                                          {missedOutlets.length > 0 && (
+                                            <div className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-1.5">
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-[9px] font-black uppercase text-rose-800 flex items-center gap-1">
+                                                  <FiAlertTriangle className="text-rose-600" /> Belum Dikerjakan ({missedOutlets.length} Resto):
+                                                </span>
+                                                <span className="text-[8px] font-black text-rose-600 bg-white px-1.5 py-0.2 rounded border border-rose-200">
+                                                  Perlu Follow-up
+                                                </span>
                                               </div>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
+
+                                              <div className="space-y-1">
+                                                {missedOutlets.map(out => (
+                                                  <div key={out.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-rose-100 text-[10px]">
+                                                    <span className="font-bold text-slate-800 truncate">{out.name}</span>
+                                                    <span className="text-[8px] font-black text-rose-600 uppercase">Belum Ada Setoran</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
+
+                                          {/* RESTO YANG SUDAH SELESAI */}
+                                          <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                                            <span className="text-[8.5px] font-black uppercase text-slate-400 block tracking-wider">
+                                              Resto Selesai ({completedOutlets.length} Resto):
+                                            </span>
+
+                                            {completedOutlets.length === 0 ? (
+                                              <p className="text-[9.5px] text-slate-400 italic">Belum ada cabang resto yang menyelesaikan tugas ini.</p>
+                                            ) : (
+                                              <div className="space-y-1.5">
+                                                {completedOutlets.map(out => {
+                                                  const sub = out.submission;
+                                                  return (
+                                                    <div key={out.id} className="p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px]">
+                                                      <div className="min-w-0 flex-1 pr-2">
+                                                        <p className="font-black text-slate-900 truncate">{out.name}</p>
+                                                        <p className="text-[8.5px] text-indigo-600 font-bold truncate">
+                                                          Diselesaikan oleh: {out.submitterName}
+                                                        </p>
+                                                      </div>
+
+                                                      <div className="flex items-center gap-2 shrink-0">
+                                                        {sub.photo_urls && sub.photo_urls.length > 0 && (
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => setMultiPhotoGallery({
+                                                              title: `${tpl.title} — ${out.name}`,
+                                                              photos: sub.photo_urls
+                                                            })}
+                                                            className="text-[8.5px] font-bold text-indigo-600 underline cursor-pointer"
+                                                          >
+                                                            Lihat {sub.photo_urls.length} Foto
+                                                          </button>
+                                                        )}
+                                                        <span className="px-2 py-0.5 rounded text-[8.5px] font-black bg-emerald-100 text-emerald-800">
+                                                          ✓ Selesai
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        /* ================= TAMPILAN JIKA TIPE TUGAS: PER ORANG ================= */
+                                        <>
+                                          {/* MANAJER YANG BELUM MENGERJAKAN */}
+                                          {missedManagers.length > 0 && (
+                                            <div className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-1.5">
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-[9px] font-black uppercase text-rose-800 flex items-center gap-1">
+                                                  <FiAlertTriangle className="text-rose-600" /> Belum Mengerjakan ({missedManagers.length} Manajer):
+                                                </span>
+                                                <span className="text-[8px] font-black text-rose-600 bg-white px-1.5 py-0.2 rounded border border-rose-200">
+                                                  Perlu Tindakan
+                                                </span>
+                                              </div>
+
+                                              <div className="max-h-28 overflow-y-auto space-y-1 pr-0.5">
+                                                {missedManagers.map(mgr => {
+                                                  const out = outlets.find(o => o.id === mgr.outlet_id);
+                                                  return (
+                                                    <div key={mgr.id} className="flex items-center justify-between bg-white px-2 py-1 rounded-lg border border-rose-100 text-[9.5px]">
+                                                      <span className="font-bold text-slate-800 truncate max-w-[170px]">{mgr.full_name}</span>
+                                                      <span className="text-[8.5px] text-rose-700 font-bold truncate">{out?.name || 'Cabang'}</span>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          )}
+
+                                          {/* MANAJER YANG SUDAH SELESAI */}
+                                          <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                                            <span className="text-[8.5px] font-black uppercase text-slate-400 block tracking-wider">
+                                              Sudah Selesai ({completedManagers.length} Manajer):
+                                            </span>
+
+                                            {completedManagers.length === 0 ? (
+                                              <p className="text-[9.5px] text-slate-400 italic">Belum ada manajer yang submit pada periode ini.</p>
+                                            ) : (
+                                              <div className="max-h-36 overflow-y-auto space-y-1.5 pr-0.5">
+                                                {completedManagers.map(item => {
+                                                  const sub = item.latestSub;
+                                                  const mgrOutlet = outlets.find(o => o.id === item.outlet_id);
+
+                                                  return (
+                                                    <div key={item.id} className="p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px]">
+                                                      <div className="min-w-0 flex-1 pr-2">
+                                                        <p className="font-black text-slate-900 truncate">{item.full_name}</p>
+                                                        <p className="text-[8.5px] text-slate-400 truncate">
+                                                          {mgrOutlet?.name || 'Resto'} • {dailyRecapPeriod !== 'daily' ? `${item.subCount}x Submit` : sub.submission_date}
+                                                        </p>
+                                                      </div>
+
+                                                      <div className="flex items-center gap-1.5 shrink-0">
+                                                        {sub.photo_urls && sub.photo_urls.length > 0 && (
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => setMultiPhotoGallery({
+                                                              title: `${tpl.title} — ${item.full_name}`,
+                                                              photos: sub.photo_urls
+                                                            })}
+                                                            className="text-[8.5px] font-bold text-indigo-600 underline cursor-pointer"
+                                                          >
+                                                            Lihat {sub.photo_urls.length} Foto
+                                                          </button>
+                                                        )}
+                                                        <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
+                                                          sub.status === 'completed' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'
+                                                        }`}>
+                                                          {sub.status === 'completed' ? '✓ Selesai' : sub.status}
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </>
+                                      )}
                                     </div>
                                   );
                                 })
@@ -5139,46 +5494,116 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
         )}
 {/* ================= MODAL DETAIL RIWAYAT & DISIPLIN RESTO ================= */}
         {selectedRestoForSlaDetail && (() => {
-          // Ambil seluruh tugas bulanan khusus cabang resto ini
+          const now = new Date();
+
+          // 1. Ambil tugas bulanan khusus cabang ini (Kecualikan CACP total)
           const restoTasks = tasks.filter(t => {
             const taskDate = t.created_at || t.deadline;
             const matchMonth = taskDate && taskDate.substring(0, 7) === selectedMonth;
-            return matchMonth && t.outlet_id === selectedRestoForSlaDetail.id;
+            const isCacp = (t.department === 'cacp_audit') || (t.title || '').toUpperCase().includes('CACP');
+            return matchMonth && t.outlet_id === selectedRestoForSlaDetail.id && !isCacp;
           });
 
-          // Ambil manajer yang bertugas di cabang resto ini
+          // 2. Ambil seluruh setoran jobdesk daily cabang ini
+          const restoDailySubs = dailySubmissions.filter(s => {
+            const matchMonth = s.submission_date && s.submission_date.substring(0, 7) === selectedMonth;
+            return s.outlet_id === selectedRestoForSlaDetail.id && matchMonth;
+          });
+
+          // 3. Susun Riwayat Log Tugas Gabungan
+          const combinedHistory = [
+            ...restoTasks.map(t => {
+              const u = profiles.find(p => p.id === (t.target_user_id || t.created_by));
+              const isDone = t.status === 'completed';
+              const isOverdue = !isDone && new Date(t.deadline) < now;
+              const isOngoing = !isDone && !isOverdue; // Belum lewat jam deadline
+              const rawScore = calculateTaskScore(t);
+
+              return {
+                id: t.id,
+                title: t.title,
+                type: 'PROYEK BULANAN',
+                personName: u?.full_name || t.department || 'Manajer Cabang',
+                deadlineText: `Deadline: ${new Date(t.deadline).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} WITA`,
+                isDone,
+                isOngoing,
+                isOverdue,
+                score: isDone ? (rawScore !== null ? rawScore : 100) : (isOverdue ? 0 : null),
+                photoUrl: t.proof_photo_url,
+                photos: t.proof_photo_url ? [t.proof_photo_url] : []
+              };
+            }),
+            ...restoDailySubs.map(s => {
+              const u = profiles.find(p => p.id === s.user_id);
+              const tpl = dailyTemplates.find(t => t.id === s.template_id);
+              const isDone = s.status === 'completed';
+
+              let isDailyOnTime = true;
+              if (tpl?.deadline_time && s.submitted_at) {
+                const subTime = new Date(s.submitted_at);
+                const subHourMinute = `${String(subTime.getHours()).padStart(2, '0')}:${String(subTime.getMinutes()).padStart(2, '0')}:00`;
+                if (subHourMinute > tpl.deadline_time) isDailyOnTime = false;
+              }
+
+              return {
+                id: s.id,
+                title: tpl?.title || 'Jobdesk Daily Rutin',
+                type: tpl?.scope_type === 'RESTO' ? 'DAILY PER RESTO' : 'DAILY INDIVIDU',
+                personName: u?.full_name || 'Manajer Cabang',
+                deadlineText: `Tanggal: ${s.submission_date} (${s.status !== 'completed' ? s.status : isDailyOnTime ? 'Tepat Waktu' : 'Terlambat'})`,
+                isDone: true,
+                isOngoing: false,
+                isOverdue: false,
+                score: s.status !== 'completed' ? 100 : isDailyOnTime ? 100 : 50,
+                photoUrl: s.photo_urls?.[0] || null,
+                photos: s.photo_urls || []
+              };
+            })
+          ];
+
+          // 4. Hitung Performa Masing-Masing Manajer di Resto Ini
           const restoManagers = profiles
             .filter(p => ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role))
             .filter(p => p.outlet_id === selectedRestoForSlaDetail.id)
             .map(mgr => {
-              const myTasks = restoTasks.filter(t => t.target_user_id === mgr.id);
+              const myTasks = combinedHistory.filter(h => h.personName === mgr.full_name);
               let onTime = 0;
               let overdue = 0;
-              let scores = [];
+              let validScores = [];
 
-              myTasks.forEach(t => {
-                const s = calculateTaskScore(t);
-                if (s !== null) {
-                  scores.push(s);
-                  if (s >= 80) onTime++;
+              myTasks.forEach(item => {
+                if (item.score !== null) {
+                  validScores.push(item.score);
+                  if (item.score >= 80) onTime++;
                   else overdue++;
                 }
               });
 
-              const avg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 100;
+              const avgSla = validScores.length > 0
+                ? Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length)
+                : 100;
+
               return {
                 ...mgr,
                 taskCount: myTasks.length,
                 onTime,
                 overdue,
-                avgSla: avg
+                avgSla
               };
             });
 
-          // Analisis Manager Terrajin & Manager yang Perlu Perhatian
-          const completedManagers = restoManagers.filter(m => m.taskCount > 0);
-          const topManager = [...completedManagers].sort((a, b) => b.avgSla - a.avgSla || b.onTime - a.onTime)[0];
-          const overdueManager = [...completedManagers].sort((a, b) => b.overdue - a.overdue || a.avgSla - b.avgSla)[0];
+          // 5. Hitung Akumulasi Total Cabang
+          const evaluatedItems = combinedHistory.filter(h => h.score !== null);
+          const totalSuksesTepat = combinedHistory.filter(h => h.score !== null && h.score >= 80).length;
+          const totalTerlambatOver = combinedHistory.filter(h => h.score !== null && h.score < 80).length;
+          const branchSlaScore = evaluatedItems.length > 0
+            ? Math.round(evaluatedItems.reduce((acc, curr) => acc + curr.score, 0) / evaluatedItems.length)
+            : 100;
+
+          // Manajer Terrajin & Evaluasi
+          const activeMgrs = restoManagers.filter(m => m.taskCount > 0);
+          const topManager = [...activeMgrs].sort((a, b) => b.onTime - a.onTime || b.avgSla - a.avgSla)[0] || restoManagers[0];
+          const overdueManager = [...activeMgrs].filter(m => m.overdue > 0).sort((a, b) => b.overdue - a.overdue)[0];
 
           return (
             <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
@@ -5205,35 +5630,33 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
                   
-                  {/* Kartu Ringkasan SLA Resto */}
+                  {/* Kartu Ringkasan SLA Akumulatif Resto */}
                   <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 text-white p-4 rounded-2xl shadow-md border border-indigo-500/20 flex items-center justify-between">
                     <div>
                       <span className="text-[9px] text-indigo-300 uppercase font-black tracking-widest block">
                         Rerata Keberhasilan Cabang
                       </span>
                       <p className="text-3xl font-black font-mono text-emerald-400 mt-0.5">
-                        {selectedRestoForSlaDetail.avgSla}%
+                        {branchSlaScore}%
                       </p>
                       <p className="text-[9.5px] text-slate-300 font-mono mt-1">
-                        Total {restoTasks.length} Tugas • {selectedRestoForSlaDetail.onTime} Tepat Waktu
+                        Total {combinedHistory.length} Tugas • {totalSuksesTepat} Sukses Tepat
                       </p>
                     </div>
 
                     <div className="text-right space-y-1 font-mono text-[10px]">
                       <div className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-lg">
-                        ✓ {selectedRestoForSlaDetail.onTime} Sukses Tepat
+                        ✓ {totalSuksesTepat} Sukses Tepat
                       </div>
                       <div className="px-2.5 py-1 bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded-lg">
-                        ⚠️ {selectedRestoForSlaDetail.overdue} Terlambat / Over
+                        ⚠️ {totalTerlambatOver} Terlambat / Over
                       </div>
                     </div>
                   </div>
 
-                  {/* Komparasi: Manajer Terrajin vs Sering Over */}
+                  {/* Komparasi Terrajin & Evaluasi */}
                   <div className="grid grid-cols-2 gap-2.5">
-                    
-                    {/* Terrajin */}
-                    <div className="bg-white p-3 rounded-2xl border border-emerald-200 shadow-2xs space-y-1.5">
+                    <div className="bg-white p-3 rounded-2xl border border-emerald-200 shadow-2xs space-y-1">
                       <div className="flex items-center gap-1.5 text-emerald-700">
                         <span className="text-xs">👑</span>
                         <span className="text-[9px] font-black uppercase tracking-wider">Manajer Terrajin</span>
@@ -5244,8 +5667,8 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                           <span className="text-[8.5px] font-bold text-indigo-600 block uppercase">
                             {topManager.role.replace(/_/g, ' ')}
                           </span>
-                          <span className="text-[9px] font-mono font-black text-emerald-600 mt-1 block">
-                            {topManager.avgSla}% SLA ({topManager.onTime} Tepat)
+                          <span className="text-[9px] font-mono font-black text-emerald-600 mt-0.5 block">
+                            {topManager.onTime} Selesai ({topManager.avgSla}% SLA)
                           </span>
                         </div>
                       ) : (
@@ -5253,84 +5676,119 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                       )}
                     </div>
 
-                    {/* Sering Over */}
-                    <div className="bg-white p-3 rounded-2xl border border-rose-200 shadow-2xs space-y-1.5">
+                    <div className="bg-white p-3 rounded-2xl border border-rose-200 shadow-2xs space-y-1">
                       <div className="flex items-center gap-1.5 text-rose-700">
                         <span className="text-xs">⚠️</span>
                         <span className="text-[9px] font-black uppercase tracking-wider">Evaluasi Over</span>
                       </div>
-                      {overdueManager && overdueManager.overdue > 0 ? (
+                      {overdueManager ? (
                         <div>
                           <p className="text-xs font-black text-slate-900 truncate">{overdueManager.full_name}</p>
                           <span className="text-[8.5px] font-bold text-rose-600 block uppercase">
                             {overdueManager.role.replace(/_/g, ' ')}
                           </span>
-                          <span className="text-[9px] font-mono font-black text-rose-600 mt-1 block">
-                            {overdueManager.overdue} Kali Over SLA
+                          <span className="text-[9px] font-mono font-black text-rose-600 mt-0.5 block">
+                            {overdueManager.overdue} Tugas Over SLA
                           </span>
                         </div>
                       ) : (
                         <p className="text-[10px] text-emerald-600 font-bold mt-1">✓ Tidak ada manajer over</p>
                       )}
                     </div>
-
                   </div>
 
-                  {/* Riwayat Tugas yang Dikerjakan di Resto Tersebut */}
+                  {/* DAFTAR MANAJER DI RESTO INI & TINGKAT KERAJINAN */}
+                  <div className="p-3 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-2">
+                    <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider block">
+                      Tim Manajer di Resto Ini ({restoManagers.length} Orang):
+                    </span>
+
+                    <div className="space-y-1.5">
+                      {restoManagers.map(mgr => (
+                        <div key={mgr.id} className="p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px]">
+                          <div className="min-w-0 flex-1 pr-2">
+                            <p className="font-black text-slate-900 truncate">{mgr.full_name}</p>
+                            <span className="text-[8.5px] text-indigo-600 font-bold uppercase">
+                              {mgr.role.replace(/_/g, ' ')} • {mgr.onTime} Selesai
+                            </span>
+                          </div>
+
+                          <span className={`text-[9px] font-mono font-black px-2 py-0.5 rounded-lg border ${
+                            mgr.avgSla >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                            mgr.avgSla >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                            'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}>
+                            {mgr.avgSla}% SLA
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Riwayat Log Tugas Cabang */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between px-1">
                       <span className="text-[10px] font-black uppercase text-slate-600 tracking-wider">
-                        Log Riwayat Tugas Cabang ({restoTasks.length})
+                        Log Riwayat Tugas Cabang ({combinedHistory.length})
                       </span>
                       <span className="text-[9px] text-slate-400 font-mono">Bulan {selectedMonth}</span>
                     </div>
 
-                    {restoTasks.length === 0 ? (
+                    {combinedHistory.length === 0 ? (
                       <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
-                        Belum ada tugas yang ditugaskan ke cabang ini.
+                        Belum ada riwayat tugas pada cabang ini.
                       </div>
                     ) : (
-                      restoTasks.map(t => {
-                        const targetUser = profiles.find(p => p.id === t.target_user_id);
-                        const isDone = t.status === 'completed';
-                        const score = calculateTaskScore(t);
-
-                        return (
-                          <div key={t.id} className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md truncate max-w-[210px]">
-                                👤 {targetUser ? targetUser.full_name : t.department}
+                      combinedHistory.map((item, idx) => (
+                        <div key={idx} className="bg-white p-3 rounded-2xl border border-slate-200/90 shadow-2xs space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5 truncate max-w-[220px]">
+                              <span className="text-[8px] font-black px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded uppercase">
+                                {item.type}
                               </span>
+                              <span className="text-[9.5px] font-black text-indigo-700 truncate">
+                                👤 {item.personName}
+                              </span>
+                            </div>
+
+                            {item.isOngoing ? (
+                              <span className="text-[8.5px] font-bold px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded">
+                                ⏳ Sedang Berjalan
+                              </span>
+                            ) : (
                               <span className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded ${
-                                score >= 80 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                item.score >= 80 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                               }`}>
-                                {isDone ? `${score}% SLA` : 'Pending'}
+                                {item.score}% SLA
                               </span>
-                            </div>
-
-                            <p className="text-xs font-black text-slate-900 leading-snug">{t.title}</p>
-                            
-                            <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono pt-0.5">
-                              <span>Deadline: {new Date(t.deadline).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}</span>
-                              {t.proof_photo_url && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (t.proof_photo_url.toLowerCase().endsWith('.pdf')) {
-                                      window.open(t.proof_photo_url, '_blank');
-                                    } else {
-                                      setTaskProofModalImage(t.proof_photo_url);
-                                    }
-                                  }}
-                                  className="text-indigo-600 font-bold underline"
-                                >
-                                  Bukti Hasil ↗
-                                </button>
-                              )}
-                            </div>
+                            )}
                           </div>
-                        );
-                      })
+
+                          <p className="text-xs font-black text-slate-900 leading-snug">{item.title}</p>
+                          
+                          <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono pt-0.5">
+                            <span>{item.deadlineText}</span>
+                            {item.photos && item.photos.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (item.photos.length > 1) {
+                                    setMultiPhotoGallery({
+                                      title: `${item.title} — ${item.personName}`,
+                                      photos: item.photos
+                                    });
+                                  } else {
+                                    setTaskProofModalImage(item.photos[0]);
+                                  }
+                                }}
+                                className="text-indigo-600 font-bold underline cursor-pointer"
+                              >
+                                {item.photos.length > 1 ? `Lihat ${item.photos.length} Foto ↗` : 'Bukti Hasil ↗'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
                     )}
                   </div>
 
@@ -5351,7 +5809,6 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             </div>
           );
         })()}
-        
         {/* MODAL PREVIEW FOTO BUKTI DOKUMENTASI FULL SCREEN */}
         {taskProofModalImage && (
           <div 
