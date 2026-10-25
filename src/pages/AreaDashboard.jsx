@@ -369,8 +369,18 @@ export default function AreaDashboard() {
   // Konfirmasi Bukti Foto Tugas
   const [taskToConfirm, setTaskToConfirm] = useState(null);
   const [proofImage, setProofImage] = useState(null);
+  const [multiProofImages, setMultiProofImages] = useState([]);
   const [completionNotes, setCompletionNotes] = useState('');
   const [isConfirmingTask, setIsConfirmingTask] = useState(false);
+  // STATE BARU: DAILY TEMPLATES & MULTI-PHOTO UPLOAD
+  const [dailyTemplates, setDailyTemplates] = useState([]);
+  const [dailySubmissions, setDailySubmissions] = useState([]);
+  const [taskTypeTab, setTaskTypeTab] = useState('adhoc'); // 'adhoc' | 'daily'
+  const [isCreatingDailyTemplate, setIsCreatingDailyTemplate] = useState(false);
+  const [dailyFormTitle, setDailyFormTitle] = useState('');
+  const [dailyFormMinPhotos, setDailyFormMinPhotos] = useState(10);
+  const [dailyFormDeadline, setDailyFormDeadline] = useState('21:00');
+  const [dailyFormRole, setDailyFormRole] = useState('ALL_MANAGERS');
 
   // Upload Closing & Adjustment Deviasi
   const [uploadOutletId, setUploadOutletId] = useState('');
@@ -884,33 +894,73 @@ export default function AreaDashboard() {
     }
   };
     
+// SIMPAN TEMPLATE DAILY BARU (OLEH AREA MANAGER)
+  const handleCreateDailyTemplate = async (e) => {
+    e.preventDefault();
+    if (!dailyFormTitle.trim()) return alert("Judul tugas daily wajib diisi!");
 
-  // KONFIRMASI PENYELESAIAN TUGAS + SIMPAN FOTO PERMANEN KE STORAGE
+    setIsSubmittingTask(true);
+    try {
+      const { error } = await supabase.from('daily_task_templates').insert([{
+        title: dailyFormTitle.trim(),
+        min_photos: Number(dailyFormMinPhotos) || 10,
+        deadline_time: dailyFormDeadline || '21:00:00',
+        target_role: dailyFormRole,
+        is_active: true
+      }]);
+
+      if (error) throw error;
+      alert("✓ Template Jobdesk Daily berhasil disimpan! Berlaku setiap hari untuk manager.");
+      setDailyFormTitle('');
+      setIsCreatingDailyTemplate(false);
+      loadMasterData();
+    } catch (err) {
+      alert(`Gagal simpan template: ${err.message}`);
+    } finally {
+      setIsSubmittingTask(false);
+    }
+  };
+  // KONFIRMASI PENYELESAIAN TUGAS + SIMPAN FOTO KE STORAGE (MULTI-FOTO SUPPORT)
   const handleConfirmTaskCompletion = async (e) => {
     e.preventDefault();
     if (!taskToConfirm) return;
-    if (!proofImage) return alert("Wajib lampirkan foto dokumentasi hasil pekerjaan!");
+
+    // Cek apakah tugas adalah TTC atau membutuhkan minimal 10 foto
+    const isTTC = (taskToConfirm.title || '').toUpperCase().includes('TTC');
+    const minPhotosRequired = isTTC ? 10 : 1;
+
+    const totalFiles = multiProofImages.length > 0 ? multiProofImages.length : (proofImage ? 1 : 0);
+
+    if (totalFiles < minPhotosRequired) {
+      return alert(`⚠️ DITOLAK! Tugas ini memerlukan minimal ${minPhotosRequired} bukti foto. Saat ini baru ada ${totalFiles} foto.`);
+    }
 
     setIsConfirmingTask(true);
     try {
-      // Unggah foto ke storage bucket Supabase agar Area Manager bisa melihatnya
-      const fileExt = proofImage.name.split('.').pop();
-      const filePath = `task_proofs/${user.id}-${Date.now()}.${fileExt}`;
+      const filesToUpload = multiProofImages.length > 0 ? multiProofImages : [proofImage];
+      const uploadedUrls = [];
 
-      const { error: uploadError } = await supabase.storage
-        .from('attendance-proofs')
-        .upload(filePath, proofImage, {
-          contentType: proofImage.type || 'image/jpeg',
-          cacheControl: '31536000',
-          upsert: true
-        });
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i];
+        const fileExt = file.name.split('.').pop();
+        const filePath = `task_proofs/${user.id}-${Date.now()}-${i + 1}.${fileExt}`;
 
-      let publicPhotoUrl = null;
-      if (!uploadError) {
-        const { data: publicData } = supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from('attendance-proofs')
-          .getPublicUrl(filePath);
-        publicPhotoUrl = publicData?.publicUrl;
+          .upload(filePath, file, {
+            contentType: file.type || 'image/jpeg',
+            cacheControl: '31536000',
+            upsert: true
+          });
+
+        if (!uploadError) {
+          const { data: publicData } = supabase.storage
+            .from('attendance-proofs')
+            .getPublicUrl(filePath);
+          if (publicData?.publicUrl) {
+            uploadedUrls.push(publicData.publicUrl);
+          }
+        }
       }
 
       const now = new Date();
@@ -918,14 +968,14 @@ export default function AreaDashboard() {
       const isCompletedOnTime = now <= deadline;
 
       const fullNotes = completionNotes 
-        ? `${completionNotes.trim()} | [Dikonfirmasi: ${now.toLocaleDateString('id-ID')}]` 
-        : `Selesai pada ${now.toLocaleTimeString('id-ID')} WITA`;
+        ? `${completionNotes.trim()} | [${uploadedUrls.length} Foto Terlampir] | [Dikonfirmasi: ${now.toLocaleDateString('id-ID')}]` 
+        : `Selesai (${uploadedUrls.length} foto) pada ${now.toLocaleTimeString('id-ID')} WITA`;
 
       const primaryPayload = {
         status: 'completed',
         completed_at: now.toISOString(),
         completed_by: user?.id,
-        proof_photo_url: publicPhotoUrl,
+        proof_photo_url: uploadedUrls[0] || null, // Foto utama untuk preview thumbnail
         completion_notes: fullNotes,
         is_on_time: isCompletedOnTime
       };
@@ -938,10 +988,11 @@ export default function AreaDashboard() {
       if (updateError) throw updateError;
 
       alert(isCompletedOnTime 
-        ? "✓ Tugas berhasil dikonfirmasi tepat waktu! Dokumentasi fisik telah tersimpan." 
-        : "⚠️ Tugas dikonfirmasi melewati deadline.");
+        ? `✓ Tugas berhasil dikonfirmasi tepat waktu! (${uploadedUrls.length} foto tersimpan)` 
+        : `⚠️ Tugas dikonfirmasi (${uploadedUrls.length} foto), melewati deadline.`);
 
       setProofImage(null);
+      setMultiProofImages([]);
       setCompletionNotes('');
       setTaskToConfirm(null);
       setActiveModal('task_manager');
@@ -4047,8 +4098,130 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                   {slaActiveTab === 'tasks' && (
                     <div className="space-y-3.5 animate-in fade-in duration-150">
                       
-                      {/* FORM TERBITKAN TUGAS BARU (KHUSUS AREA MANAGER) */}
-                      {currentProfile?.role === 'area_manager' && (
+                      {/* SAKLAR: TUGAS PROYEK VS JOBDESK DAILY */}
+                      <div className="flex gap-1.5 p-1 bg-slate-200/80 rounded-2xl">
+                        <button
+                          type="button"
+                          onClick={() => setTaskTypeTab('adhoc')}
+                          className={`flex-1 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                            taskTypeTab === 'adhoc' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          📋 Tugas Proyek / Bulanan
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTaskTypeTab('daily')}
+                          className={`flex-1 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                            taskTypeTab === 'daily' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          ⭐ Jobdesk Daily (Rutin)
+                        </button>
+                      </div>
+
+                      {/* JIKA MEMILIH TAB DAILY: TAMPILKAN MASTER JOBDESK DAILY & FORM BUAT DAILY */}
+                      {taskTypeTab === 'daily' && (
+                        <div className="space-y-3">
+                          <div className="bg-gradient-to-r from-amber-500/15 via-white to-amber-500/10 p-3.5 rounded-2xl border border-amber-300 shadow-2xs space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h4 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                                  <span>⭐ Jobdesk Daily All Manager</span>
+                                  <span className="text-[8px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-black">Rutin Tiap Hari</span>
+                                </h4>
+                                <p className="text-[9.5px] text-slate-500">Tugas ini selalu ada setiap hari tanpa perlu dibuat ulang.</p>
+                              </div>
+
+                              {currentProfile?.role === 'area_manager' && (
+                                <button
+                                  type="button"
+                                  onClick={() => setIsCreatingDailyTemplate(!isCreatingDailyTemplate)}
+                                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black rounded-lg cursor-pointer"
+                                >
+                                  {isCreatingDailyTemplate ? 'Batal' : '+ Atur Jobdesk'}
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Form Input Template Baru */}
+                            {isCreatingDailyTemplate && (
+                              <div className="pt-2 border-t border-amber-200/80 space-y-2">
+                                <input
+                                  type="text"
+                                  placeholder="Nama Tugas Daily (misal: TTC 10 Kali Harian)..."
+                                  value={dailyFormTitle}
+                                  onChange={(e) => setDailyFormTitle(e.target.value)}
+                                  className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold outline-none"
+                                />
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[8px] font-black uppercase text-slate-500 block">Wajib Foto Bukti:</label>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      placeholder="Min Foto (misal: 10)"
+                                      value={dailyFormMinPhotos}
+                                      onChange={(e) => setDailyFormMinPhotos(e.target.value)}
+                                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-mono font-bold outline-none"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="text-[8px] font-black uppercase text-slate-500 block">Batas Jam Submit:</label>
+                                    <input
+                                      type="time"
+                                      value={dailyFormDeadline}
+                                      onChange={(e) => setDailyFormDeadline(e.target.value)}
+                                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-mono font-bold outline-none"
+                                    />
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={handleCreateDailyTemplate}
+                                  disabled={isSubmittingTask}
+                                  className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-black cursor-pointer"
+                                >
+                                  {isSubmittingTask ? 'Menyimpan...' : 'Simpan Jobdesk Rutin Harian'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* DAFTAR MASTER TUGAS HARIAN AKTIF */}
+                          <div className="space-y-2">
+                            <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider px-1 block">
+                              Daftar Master Tugas Harian Aktif
+                            </span>
+
+                            {dailyTemplates.length === 0 ? (
+                              <div className="p-4 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
+                                Belum ada template daily. Klik "+ Atur Jobdesk" untuk menambahkan.
+                              </div>
+                            ) : (
+                              dailyTemplates.map(tpl => (
+                                <div key={tpl.id} className="p-3 bg-white border border-slate-200 rounded-2xl shadow-2xs flex items-center justify-between">
+                                  <div>
+                                    <h5 className="text-xs font-black text-slate-900">{tpl.title}</h5>
+                                    <p className="text-[9.5px] text-indigo-600 font-bold mt-0.5">
+                                      📸 Wajib {tpl.min_photos} Foto Bukti • Deadline Pukul {tpl.deadline_time} WITA
+                                    </p>
+                                  </div>
+                                  <span className="text-[9px] font-black px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md">
+                                    Aktif Tiap Hari
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* FORM TERBITKAN TUGAS BARU (HANYA MUNCUL DI TAB ADHOC) */}
+                      {currentProfile?.role === 'area_manager' && taskTypeTab === 'adhoc' && (
                         <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
                           <span className="text-[10px] font-black uppercase text-indigo-700 flex items-center gap-1">
                             <FiPlus className="text-xs" /> Terbitkan Tugas Baru
@@ -4066,16 +4239,17 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
                             <div className="grid grid-cols-2 gap-2">
                               <select
-  value={taskScopeType}
-  onChange={(e) => setTaskScopeType(e.target.value)}
-  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
->
-  <option value="STORE_MANAGER">👑 Khusus Store Manager (SM)</option>
-  <option value="AST_STORE_MANAGER">🥈 Khusus Asst. Manager (ASM)</option>
-  <option value="FLOOR_LEADER">🥉 Khusus Floor Leader (FL/FLO)</option>
-  <option value="ALL_MANAGERS">👥 Seluruh Manager (SM, ASM, FL)</option>
-  <option value="USER">👤 Khusus 1 Orang Tertentu</option>
-</select>
+                                value={taskScopeType}
+                                onChange={(e) => setTaskScopeType(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1.5 text-[10px] font-bold text-slate-700 outline-none cursor-pointer"
+                              >
+                                <option value="BROADCAST_ALL">🌐 All Manager (1 Tugas Cukup Sekali Bikin)</option>
+                                <option value="STORE_MANAGER">👑 Khusus Store Manager (SM)</option>
+                                <option value="AST_STORE_MANAGER">🥈 Khusus Asst. Manager (ASM)</option>
+                                <option value="FLOOR_LEADER">🥉 Khusus Floor Leader (FL/FLO)</option>
+                                <option value="ALL_MANAGERS">👥 Massal Per Orang (SM, ASM, FL)</option>
+                                <option value="USER">👤 Khusus 1 Orang Tertentu</option>
+                              </select>
 
                               <select
                                 value={taskPriority}
@@ -4165,25 +4339,25 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                               <div key={t.id} className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
                                 <div className="flex items-center justify-between gap-1.5">
                                   {(() => {
-  const targetPerson = profiles.find(p => p.id === t.target_user_id);
-  const targetOutlet = outlets.find(o => o.id === t.outlet_id);
-  const roleLabel = targetPerson?.role === 'store_manager' ? 'SM' :
-                    targetPerson?.role === 'ast_store_manager' ? 'ASM' :
-                    targetPerson?.role === 'floor_leader' ? 'FL' : '';
+                                    const targetPerson = profiles.find(p => p.id === t.target_user_id);
+                                    const targetOutlet = outlets.find(o => o.id === t.outlet_id);
+                                    const roleLabel = targetPerson?.role === 'store_manager' ? 'SM' :
+                                                      targetPerson?.role === 'ast_store_manager' ? 'ASM' :
+                                                      targetPerson?.role === 'floor_leader' ? 'FL' : '';
 
-  return (
-    <div className="flex items-center gap-1.5 max-w-[220px]">
-      <span className="text-[9px] font-black px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 rounded-md truncate">
-        👤 {targetPerson ? `${targetPerson.full_name} (${roleLabel})` : (t.department || 'Tugas')}
-      </span>
-      {targetOutlet && (
-        <span className="text-[8.5px] font-bold text-slate-400 truncate">
-          • {targetOutlet.code || targetOutlet.name}
-        </span>
-      )}
-    </div>
-  );
-})()}
+                                    return (
+                                      <div className="flex items-center gap-1.5 max-w-[230px]">
+                                        <span className="text-[9px] font-black px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200/80 rounded-md truncate">
+                                          👤 {targetPerson ? `${targetPerson.full_name} (${roleLabel})` : (t.department || 'Tugas')}
+                                        </span>
+                                        {targetOutlet && (
+                                          <span className="text-[8.5px] font-bold text-slate-600 truncate">
+                                            • {targetOutlet.name}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                   
                                   <div className="flex items-center gap-1">
                                     {score !== null && (
@@ -4727,29 +4901,62 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                   </p>
                 </div>
 
-                <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-2xl space-y-1.5">
+                <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-2xl space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
-                      <FiUploadCloud className="text-emerald-700" /> Bukti Pengerjaan (Wajib)
+                      <FiCamera className="text-emerald-700" /> Bukti Foto Langsung
                     </span>
-                    <span className="text-[9px] font-bold text-emerald-800 bg-white px-2 py-0.5 rounded border border-emerald-200">
-                      Foto / Screenshot / PDF
-                    </span>
+                    {(() => {
+                      const isTTC = (taskToConfirm?.title || '').toUpperCase().includes('TTC');
+                      const minReq = isTTC ? 10 : 1;
+                      const count = multiProofImages.length;
+                      return (
+                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
+                          count >= minReq ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-rose-100 text-rose-800 border-rose-300'
+                        }`}>
+                          {count} / {minReq} Foto Terambil
+                        </span>
+                      );
+                    })()}
                   </div>
+
                   <p className="text-[10px] text-slate-500">
-                    Bisa foto kamera langsung, screenshot dari galeri HP, atau file dokumen PDF.
+                    Ambil foto fisik langsung dengan kamera HP. Tombol submit terkunci jika jumlah foto belum mencukupi.
                   </p>
+
+                  {/* Input Foto dengan dukungan Kamera & Multi-Selection */}
                   <input
                     type="file"
-                    accept="image/*,application/pdf"
-                    onChange={(e) => setProofImage(e.target.files[0])}
+                    accept="image/*"
+                    capture="environment"
+                    multiple
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      setMultiProofImages(prev => [...prev, ...files]);
+                    }}
                     className="text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 cursor-pointer w-full"
-                    required
                   />
-                  {proofImage && (
-                    <p className="text-[10px] text-emerald-700 font-bold truncate">
-                      ✓ Berkas siap: {proofImage.name}
-                    </p>
+
+                  {/* Preview Thumbnail Foto */}
+                  {multiProofImages.length > 0 && (
+                    <div className="grid grid-cols-5 gap-1.5 pt-1.5">
+                      {multiProofImages.map((file, idx) => (
+                        <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-emerald-300 bg-slate-100 shadow-2xs">
+                          <img 
+                            src={URL.createObjectURL(file)} 
+                            alt={`Bukti ${idx + 1}`} 
+                            className="w-full h-full object-cover" 
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setMultiProofImages(prev => prev.filter((_, i) => i !== idx))}
+                            className="absolute top-0.5 right-0.5 bg-black/75 text-white rounded-full w-4 h-4 flex items-center justify-center text-[8px] cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
 
@@ -4763,14 +4970,32 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isConfirmingTask}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
-                >
-                  <FiCheckCircle />
-                  <span>{isConfirmingTask ? 'Menyimpan Bukti...' : 'Submit Selesai Pekerjaan'}</span>
-                </button>
+                {(() => {
+                  const isTTC = (taskToConfirm?.title || '').toUpperCase().includes('TTC');
+                  const minReq = isTTC ? 10 : 1;
+                  const isNotEnough = multiProofImages.length < minReq;
+
+                  return (
+                    <button
+                      type="submit"
+                      disabled={isConfirmingTask || isNotEnough}
+                      className={`w-full py-2.5 text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-colors shadow-md ${
+                        isNotEnough || isConfirmingTask
+                          ? 'bg-slate-400 cursor-not-allowed opacity-60'
+                          : 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'
+                      }`}
+                    >
+                      <FiCheckCircle />
+                      <span>
+                        {isConfirmingTask 
+                          ? 'Mengunggah & Menyimpan...' 
+                          : isNotEnough 
+                          ? `Ambil Minimal ${minReq} Foto (${multiProofImages.length}/${minReq})` 
+                          : 'Submit Selesai Pekerjaan'}
+                      </span>
+                    </button>
+                  );
+                })()}
 
                 <button
                   type="button"
