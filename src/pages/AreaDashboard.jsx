@@ -488,7 +488,9 @@ export default function AreaDashboard() {
         { data: taskData },
         { data: closeData },
         { data: opexDbData },
-        { data: equipDbData }
+        { data: equipDbData },
+        { data: dailyTplData },
+        { data: dailySubData }
       ] = await Promise.all([
         supabase.from('outlets').select('*').order('code', { ascending: true }),
         supabase.from('user_profiles').select('id, full_name, avatar, role, total_points, outlet_id, station_placement'),
@@ -497,8 +499,13 @@ export default function AreaDashboard() {
         supabase.from('department_tasks').select('*').order('created_at', { ascending: false }),
         supabase.from('store_daily_closings').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('opex_budgets').select('*').eq('period_month', selectedMonth),
-        supabase.from('controlling_equipment').select('*').limit(5000)
+        supabase.from('controlling_equipment').select('*').limit(5000),
+        supabase.from('daily_task_templates').select('*').eq('is_active', true),
+        supabase.from('daily_task_submissions').select('*')
       ]);
+
+      if (dailyTplData) setDailyTemplates(dailyTplData);
+      if (dailySubData) setDailySubmissions(dailySubData);
 
       if (outData) {
         const kaltimOutlets = outData
@@ -920,6 +927,23 @@ export default function AreaDashboard() {
       setIsSubmittingTask(false);
     }
   };
+
+  // HAPUS TEMPLATE DAILY (OLEH AREA MANAGER)
+  const handleDeleteDailyTemplate = async (templateId, templateTitle) => {
+    if (!confirm(`Hapus template jobdesk "${templateTitle}"?`)) return;
+    try {
+      const { error } = await supabase
+        .from('daily_task_templates')
+        .delete()
+        .eq('id', templateId);
+
+      if (error) throw error;
+      alert("✓ Template berhasil dihapus!");
+      loadMasterData();
+    } catch (err) {
+      alert(`Gagal menghapus: ${err.message}`);
+    }
+  };
   // KONFIRMASI PENYELESAIAN TUGAS + SIMPAN FOTO KE STORAGE (MULTI-FOTO SUPPORT)
   const handleConfirmTaskCompletion = async (e) => {
     e.preventDefault();
@@ -961,6 +985,37 @@ export default function AreaDashboard() {
             uploadedUrls.push(publicData.publicUrl);
           }
         }
+      }
+
+      const todayDate = new Date().toISOString().split('T')[0];
+
+      // JIKA YANG DISUBMIT ADALAH TUGAS DAILY TEMPLATE
+      if (taskToConfirm?.deadline_time || (taskToConfirm?.min_photos && taskToConfirm.min_photos > 1)) {
+        const dailyPayload = {
+          template_id: taskToConfirm.id,
+          user_id: user?.id,
+          outlet_id: currentProfile?.outlet_id,
+          submission_date: todayDate,
+          photo_urls: uploadedUrls,
+          notes: completionNotes || '',
+          status: 'completed',
+          submitted_at: new Date().toISOString()
+        };
+
+        const { error: dailyErr } = await supabase
+          .from('daily_task_submissions')
+          .upsert([dailyPayload], { onConflict: 'template_id,user_id,submission_date' });
+
+        if (dailyErr) throw dailyErr;
+
+        alert(`✓ Sukses! Berhasil mengirim ${uploadedUrls.length} foto bukti tugas daily.`);
+        setProofImage(null);
+        setMultiProofImages([]);
+        setCompletionNotes('');
+        setTaskToConfirm(null);
+        setActiveModal('task_manager');
+        await loadMasterData();
+        return;
       }
 
       const now = new Date();
@@ -4122,101 +4177,273 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
 
                       {/* JIKA MEMILIH TAB DAILY: TAMPILKAN MASTER JOBDESK DAILY & FORM BUAT DAILY */}
                       {taskTypeTab === 'daily' && (
-                        <div className="space-y-3">
-                          <div className="bg-gradient-to-r from-amber-500/15 via-white to-amber-500/10 p-3.5 rounded-2xl border border-amber-300 shadow-2xs space-y-2">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <h4 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
-                                  <span>⭐ Jobdesk Daily All Manager</span>
-                                  <span className="text-[8px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-black">Rutin Tiap Hari</span>
-                                </h4>
-                                <p className="text-[9.5px] text-slate-500">Tugas ini selalu ada setiap hari tanpa perlu dibuat ulang.</p>
-                              </div>
+                        <div className="space-y-3.5">
+                          {/* 1. HEADER KONTROL MASTER DAILY (LAYOUT BERSIH & RAPI) */}
+                          {currentProfile?.role === 'area_manager' && (
+                            <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <h4 className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                                    <span>⭐ Master Jobdesk Rutin Harian</span>
+                                  </h4>
+                                  <p className="text-[9.5px] text-slate-400">Daftar tugas wajib harian untuk seluruh manajer.</p>
+                                </div>
 
-                              {currentProfile?.role === 'area_manager' && (
                                 <button
                                   type="button"
                                   onClick={() => setIsCreatingDailyTemplate(!isCreatingDailyTemplate)}
-                                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-black rounded-lg cursor-pointer"
+                                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black rounded-xl cursor-pointer shadow-2xs transition-all"
                                 >
-                                  {isCreatingDailyTemplate ? 'Batal' : '+ Atur Jobdesk'}
+                                  {isCreatingDailyTemplate ? 'Batal' : '+ Tambah Jobdesk'}
                                 </button>
+                              </div>
+
+                              {isCreatingDailyTemplate && (
+                                <div className="pt-2.5 border-t border-slate-100 space-y-2">
+                                  <input
+                                    type="text"
+                                    placeholder="Nama Tugas Daily (misal: TTC Daily Minimal 10 Foto)..."
+                                    value={dailyFormTitle}
+                                    onChange={(e) => setDailyFormTitle(e.target.value)}
+                                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none"
+                                  />
+
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">Wajib Foto Bukti:</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        placeholder="Min Foto (misal: 10)"
+                                        value={dailyFormMinPhotos}
+                                        onChange={(e) => setDailyFormMinPhotos(e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold outline-none"
+                                      />
+                                    </div>
+
+                                    <div>
+                                      <label className="text-[8.5px] font-bold text-slate-500 block mb-0.5">Batas Jam Submit:</label>
+                                      <input
+                                        type="time"
+                                        value={dailyFormDeadline}
+                                        onChange={(e) => setDailyFormDeadline(e.target.value)}
+                                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-mono font-bold outline-none"
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={handleCreateDailyTemplate}
+                                    disabled={isSubmittingTask}
+                                    className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-black cursor-pointer shadow-xs"
+                                  >
+                                    {isSubmittingTask ? 'Menyimpan...' : 'Simpan Jobdesk Rutin'}
+                                  </button>
+                                </div>
                               )}
                             </div>
+                          )}
 
-                            {/* Form Input Template Baru */}
-                            {isCreatingDailyTemplate && (
-                              <div className="pt-2 border-t border-amber-200/80 space-y-2">
-                                <input
-                                  type="text"
-                                  placeholder="Nama Tugas Daily (misal: TTC 10 Kali Harian)..."
-                                  value={dailyFormTitle}
-                                  onChange={(e) => setDailyFormTitle(e.target.value)}
-                                  className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1.5 text-xs font-bold outline-none"
-                                />
-
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div>
-                                    <label className="text-[8px] font-black uppercase text-slate-500 block">Wajib Foto Bukti:</label>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      placeholder="Min Foto (misal: 10)"
-                                      value={dailyFormMinPhotos}
-                                      onChange={(e) => setDailyFormMinPhotos(e.target.value)}
-                                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-mono font-bold outline-none"
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <label className="text-[8px] font-black uppercase text-slate-500 block">Batas Jam Submit:</label>
-                                    <input
-                                      type="time"
-                                      value={dailyFormDeadline}
-                                      onChange={(e) => setDailyFormDeadline(e.target.value)}
-                                      className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-mono font-bold outline-none"
-                                    />
-                                  </div>
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={handleCreateDailyTemplate}
-                                  disabled={isSubmittingTask}
-                                  className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-black cursor-pointer"
-                                >
-                                  {isSubmittingTask ? 'Menyimpan...' : 'Simpan Jobdesk Rutin Harian'}
-                                </button>
+                          {/* 2. TAMPILAN KHUSUS AREA MANAGER: MONITORING & AUDIT REKAP MANAJER */}
+                          {currentProfile?.role === 'area_manager' ? (
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between px-1">
+                                <span className="text-[10px] font-black uppercase text-slate-600 tracking-wider">
+                                  Monitoring Setoran Daily Hari Ini ({new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})
+                                </span>
+                                <span className="text-[9px] font-mono text-indigo-600 font-bold">
+                                  {dailyTemplates.length} Template Aktif
+                                </span>
                               </div>
-                            )}
-                          </div>
 
-                          {/* DAFTAR MASTER TUGAS HARIAN AKTIF */}
-                          <div className="space-y-2">
-                            <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider px-1 block">
-                              Daftar Master Tugas Harian Aktif
-                            </span>
-
-                            {dailyTemplates.length === 0 ? (
-                              <div className="p-4 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
-                                Belum ada template daily. Klik "+ Atur Jobdesk" untuk menambahkan.
-                              </div>
-                            ) : (
-                              dailyTemplates.map(tpl => (
-                                <div key={tpl.id} className="p-3 bg-white border border-slate-200 rounded-2xl shadow-2xs flex items-center justify-between">
-                                  <div>
-                                    <h5 className="text-xs font-black text-slate-900">{tpl.title}</h5>
-                                    <p className="text-[9.5px] text-indigo-600 font-bold mt-0.5">
-                                      📸 Wajib {tpl.min_photos} Foto Bukti • Deadline Pukul {tpl.deadline_time} WITA
-                                    </p>
-                                  </div>
-                                  <span className="text-[9px] font-black px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md">
-                                    Aktif Tiap Hari
-                                  </span>
+                              {dailyTemplates.length === 0 ? (
+                                <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
+                                  Belum ada master tugas harian yang dibuat.
                                 </div>
-                              ))
-                            )}
-                          </div>
+                              ) : (
+                                dailyTemplates.map(tpl => {
+                                  const todayDate = new Date().toISOString().split('T')[0];
+                                  
+                                  // Ambil seluruh manajer Kalsel 1
+                                  const managersInScope = profiles.filter(p => {
+                                    const isMgr = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role);
+                                    const out = outlets.find(o => o.id === p.outlet_id);
+                                    const matchOut = slaFilterOutletId === 'ALL' || p.outlet_id === slaFilterOutletId;
+                                    return isMgr && isOutletInRegion(out, 'KALSEL_1') && matchOut;
+                                  });
+
+                                  // Hitung berapa yang sudah kirim
+                                  const submissionsForThisTpl = dailySubmissions.filter(s => 
+                                    s.template_id === tpl.id && s.submission_date === todayDate
+                                  );
+
+                                  return (
+                                    <div key={tpl.id} className="p-3.5 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-3">
+                                      <div className="flex items-start justify-between">
+                                        <div>
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-[8.5px] font-black uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md">
+                                              DAILY CONTROL
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-mono">
+                                              Deadline: {tpl.deadline_time ? tpl.deadline_time.substring(0, 5) : '21:00'} WITA
+                                            </span>
+                                          </div>
+                                          <h5 className="text-xs font-black text-slate-900 mt-1">{tpl.title}</h5>
+                                          <p className="text-[9.5px] text-slate-500">
+                                            📸 Syarat: Minimal {tpl.min_photos} Foto Bukti Fisik
+                                          </p>
+                                        </div>
+
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <span className="text-xs font-mono font-black px-2.5 py-1 bg-slate-50 rounded-xl border border-slate-200 text-slate-800">
+                                            {submissionsForThisTpl.length} / {managersInScope.length} Selesai
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDeleteDailyTemplate(tpl.id, tpl.title)}
+                                            className="p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg cursor-pointer transition-colors"
+                                            title="Hapus Jobdesk Ini"
+                                          >
+                                            <FiX className="text-sm" />
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {/* Sub-list Status per Manajer */}
+                                      <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                                        <span className="text-[8.5px] font-black uppercase text-slate-400 block tracking-wider">
+                                          Status Pengumpulan Manajer:
+                                        </span>
+                                        <div className="max-h-44 overflow-y-auto space-y-1.5 pr-0.5">
+                                          {managersInScope.map(mgr => {
+                                            const sub = submissionsForThisTpl.find(s => s.user_id === mgr.id);
+                                            const isDone = !!sub;
+                                            const mgrOutlet = outlets.find(o => o.id === mgr.outlet_id);
+
+                                            return (
+                                              <div key={mgr.id} className="p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px]">
+                                                <div className="min-w-0 flex-1 pr-2">
+                                                  <p className="font-black text-slate-900 truncate">{mgr.full_name}</p>
+                                                  <p className="text-[8.5px] text-slate-400 truncate">{mgrOutlet?.name || 'Resto'}</p>
+                                                </div>
+
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                  {isDone && sub.photo_urls?.[0] && (
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setTaskProofModalImage(sub.photo_urls[0])}
+                                                      className="text-[8.5px] font-bold text-indigo-600 underline cursor-pointer"
+                                                    >
+                                                      Lihat {sub.photo_urls.length} Foto
+                                                    </button>
+                                                  )}
+                                                  <span className={`px-2 py-0.5 rounded text-[8.5px] font-black ${
+                                                    isDone ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                                  }`}>
+                                                    {isDone ? '✓ Sudah Submit' : 'Belum'}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          ) : (
+                            /* 3. TAMPILAN KHUSUS MANAJER RESTO (HANYA MUNCUL DI AKUN MANAJER UNTUK UPLOAD) */
+                            <div className="space-y-2.5">
+                              <div className="flex items-center justify-between px-1">
+                                <span className="text-[10px] font-black uppercase text-slate-700 tracking-wider">
+                                  Tugas Harian Anda ({new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })})
+                                </span>
+                                <span className="text-[9px] font-mono text-indigo-600 font-bold">
+                                  Wajib Disubmit
+                                </span>
+                              </div>
+
+                              {dailyTemplates.length === 0 ? (
+                                <div className="p-6 bg-white rounded-2xl border border-dashed border-slate-200 text-center text-xs text-slate-400 font-bold">
+                                  Tidak ada tugas daily hari ini.
+                                </div>
+                              ) : (
+                                dailyTemplates.map(tpl => {
+                                  const todayDate = new Date().toISOString().split('T')[0];
+                                  const mySubmission = dailySubmissions.find(s => 
+                                    s.template_id === tpl.id && 
+                                    s.user_id === currentProfile?.id && 
+                                    s.submission_date === todayDate
+                                  );
+                                  const isCompletedToday = !!mySubmission;
+
+                                  return (
+                                    <div key={tpl.id} className="p-3.5 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-2.5">
+                                      <div className="flex items-start justify-between gap-2">
+                                        <div>
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-amber-100 text-amber-900 rounded-md">
+                                              DAILY MANDATORY
+                                            </span>
+                                            <span className="text-[9px] font-bold text-slate-400 font-mono">
+                                              Batas: {tpl.deadline_time ? tpl.deadline_time.substring(0, 5) : '21:00'} WITA
+                                            </span>
+                                          </div>
+                                          <h5 className="text-xs font-black text-slate-900 mt-1">{tpl.title}</h5>
+                                          <p className="text-[9.5px] text-indigo-700 font-bold">
+                                            📸 Syarat: Wajib {tpl.min_photos} Foto Bukti Fisik
+                                          </p>
+                                        </div>
+
+                                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-md border shrink-0 ${
+                                          isCompletedToday 
+                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                                        }`}>
+                                          {isCompletedToday ? '✓ Selesai' : 'Belum Submit'}
+                                        </span>
+                                      </div>
+
+                                      {isCompletedToday ? (
+                                        <div className="p-2 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between">
+                                          <span className="text-[9.5px] font-bold text-emerald-800">
+                                            ✓ {mySubmission.photo_urls?.length || tpl.min_photos} Foto Bukti Terkirim
+                                          </span>
+                                          {mySubmission.photo_urls?.[0] && (
+                                            <button
+                                              type="button"
+                                              onClick={() => setTaskProofModalImage(mySubmission.photo_urls[0])}
+                                              className="text-[9px] font-black text-indigo-600 underline cursor-pointer"
+                                            >
+                                              Lihat Foto Bukti
+                                            </button>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setTaskToConfirm({
+                                              ...tpl,
+                                              deadline: `${todayDate}T${tpl.deadline_time || '21:00:00'}`
+                                            });
+                                            setActiveModal('confirm_task');
+                                          }}
+                                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                                        >
+                                          <FiCamera /> Ambil & Upload {tpl.min_photos} Foto Bukti
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
 
