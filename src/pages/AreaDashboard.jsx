@@ -1025,9 +1025,9 @@ export default function AreaDashboard() {
     e.preventDefault();
     if (!taskToConfirm) return;
 
-    // Cek apakah tugas adalah TTC atau membutuhkan minimal 10 foto
+    // Cek apakah tugas adalah TTC atau membutuhkan minimal 20 foto
     const isTTC = (taskToConfirm.title || '').toUpperCase().includes('TTC');
-    const minPhotosRequired = isTTC ? 10 : 1;
+    const minPhotosRequired = isTTC ? 20 : 1;
 
     const totalFiles = multiProofImages.length > 0 ? multiProofImages.length : (proofImage ? 1 : 0);
 
@@ -4720,7 +4720,7 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
                                 <div className="pt-2.5 border-t border-slate-100 space-y-2">
                                   <input
                                     type="text"
-                                    placeholder="Nama Tugas Daily (misal: TTC Daily Minimal 10 Foto)..."
+                                    placeholder="Nama Tugas Daily (misal: TTC Daily Minimal 20 Foto)..."
                                     value={dailyFormTitle}
                                     onChange={(e) => setDailyFormTitle(e.target.value)}
                                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none"

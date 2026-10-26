@@ -499,12 +499,23 @@ export default function BreakSystem() {
 
       const currentOutletId = profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id;
 
-if (!isAreaManager && currentOutletId) {
-  logsQuery = logsQuery.eq('outlet_id', currentOutletId);
-  profilesQuery = profilesQuery.eq('outlet_id', currentOutletId);
-} else if (isAreaManager && selectedBranchId !== 'ALL') {
-        logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
-        profilesQuery = profilesQuery.eq('outlet_id', selectedBranchId);
+const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code)))).map(b => b.id);
+      const kaltimIds = outletsList.filter(b => !['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code)))).map(b => b.id);
+
+      if (!isAreaManager && currentOutletId) {
+        logsQuery = logsQuery.eq('outlet_id', currentOutletId);
+        profilesQuery = profilesQuery.eq('outlet_id', currentOutletId);
+      } else if (isAreaManager) {
+        if (selectedBranchId === 'AREA_KALSEL_1' && kalselIds.length > 0) {
+          logsQuery = logsQuery.in('outlet_id', kalselIds);
+          profilesQuery = profilesQuery.in('outlet_id', kalselIds);
+        } else if (selectedBranchId === 'AREA_KALTIM' && kaltimIds.length > 0) {
+          logsQuery = logsQuery.in('outlet_id', kaltimIds);
+          profilesQuery = profilesQuery.in('outlet_id', kaltimIds);
+        } else if (selectedBranchId !== 'ALL') {
+          logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
+          profilesQuery = profilesQuery.eq('outlet_id', selectedBranchId);
+        }
       }
 
       const [{ data: activeLogs, error: lError }, { data: profiles, error: pError }] = await Promise.all([
@@ -1203,35 +1214,108 @@ if (!isAreaManager && currentOutletId) {
   const fetchLeaderboard = useCallback(async () => {
     setIsFetchingLeaderboard(true);
     try {
+      // 1. Pastikan data seluruh resto tersedia
+      let currentOutlets = outletsList;
+      if (!currentOutlets || currentOutlets.length === 0) {
+        const { data: oData } = await supabase.from('outlets').select('id, name, code');
+        if (oData) {
+          const filtered = oData.filter(o => !/cabang\s*0[2-9]|cabang\s*10/i.test(o.name));
+          currentOutlets = filtered;
+          setOutletsList(filtered);
+        }
+      }
+
+      // 2. Pemetaan cabang Kalsel 1 secara presisi sesuai database
+      const isKalselBranch = (b) => {
+        const n = (b.name || '').toLowerCase();
+        const c = (b.code || '').toUpperCase();
+        return (
+          ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].includes(c) ||
+          n.includes('hasan basri') ||
+          n.includes('ahmad yani') ||
+          n.includes('a yani') ||
+          n.includes('bali rejo') ||
+          n.includes('pelaihari') ||
+          n.includes('tanah laut') ||
+          n.includes('batulicin') ||
+          n.includes('batu licin') ||
+          n.includes('tanah bumbu') ||
+          n.includes('tanahbumbu') ||
+          n.includes('propinsi')
+        );
+      };
+
+      const kalselOutletIds = (currentOutlets || []).filter(isKalselBranch).map(b => b.id);
+      const kaltimOutletIds = (currentOutlets || []).filter(b => !isKalselBranch(b)).map(b => b.id);
+
+      // Rentang tanggal bulan terpilih
+      const [yearStr, monthStr] = selectedMonth.split('-');
+      const y = parseInt(yearStr);
+      const m = parseInt(monthStr);
+      const startOfMonthIso = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0)).toISOString();
+      const endOfMonthIso = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999)).toISOString();
+
+      // 3. Tentukan target ID outlet yang akan ditarik
+      let targetOutletIds = null;
+      if (!isAreaManager && profile?.outlet_id) {
+        targetOutletIds = [profile.outlet_id];
+      } else if (isAreaManager) {
+        if (selectedBranchId === 'AREA_KALSEL_1') {
+          targetOutletIds = kalselOutletIds;
+        } else if (selectedBranchId === 'AREA_KALTIM') {
+          targetOutletIds = kaltimOutletIds;
+        } else if (selectedBranchId !== 'ALL') {
+          targetOutletIds = [selectedBranchId];
+        }
+      }
+
+      // 4. Helper penarik semua record tanpa limit 1000 baris
+      const fetchAllRows = async (queryBuilder, batchSize = 1000) => {
+        let allData = [];
+        let from = 0;
+        let hasMore = true;
+        while (hasMore) {
+          const { data, error } = await queryBuilder.range(from, from + batchSize - 1);
+          if (error || !data || data.length === 0) break;
+          allData.push(...data);
+          if (data.length < batchSize) hasMore = false;
+          else from += batchSize;
+        }
+        return allData;
+      };
+
       let profQuery = supabase
         .from('user_profiles')
-        .select('id, full_name, avatar, station_placement, role, total_points, outlet_id');
+        .select('id, full_name, avatar, station_placement, role, total_points, outlet_id')
+        .order('id');
 
       let logsQuery = supabase
         .from('attendance_logs')
-        .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in, status_out, is_outside_radius, distance_meters, outlet_id');
+        .select('id, user_id, created_at, break_start_time, break_end_time, actual_in, actual_out, discipline_status, penalty_points, status_in, status_out, is_outside_radius, distance_meters, outlet_id')
+        .gte('created_at', startOfMonthIso)
+        .lte('created_at', endOfMonthIso)
+        .order('id');
 
       let violQuery = supabase
         .from('operational_violations')
-        .select('*');
+        .select('*')
+        .gte('created_at', startOfMonthIso)
+        .lte('created_at', endOfMonthIso)
+        .order('id');
 
-      if (!isAreaManager && profile?.outlet_id) {
-        profQuery = profQuery.eq('outlet_id', profile.outlet_id);
-        logsQuery = logsQuery.eq('outlet_id', profile.outlet_id);
-        violQuery = violQuery.eq('outlet_id', profile.outlet_id);
-      } else if (isAreaManager && selectedBranchId !== 'ALL') {
-        profQuery = profQuery.eq('outlet_id', selectedBranchId);
-        logsQuery = logsQuery.eq('outlet_id', selectedBranchId);
-        violQuery = violQuery.eq('outlet_id', selectedBranchId);
+      if (targetOutletIds && targetOutletIds.length > 0) {
+        profQuery = profQuery.in('outlet_id', targetOutletIds);
+        logsQuery = logsQuery.in('outlet_id', targetOutletIds);
+        violQuery = violQuery.in('outlet_id', targetOutletIds);
       }
 
-      const [{ data: profiles, error: pError }, { data: logs }, { data: violations }] = await Promise.all([
-        profQuery,
-        logsQuery,
-        violQuery
+      const [profiles, logs, violations] = await Promise.all([
+        fetchAllRows(profQuery),
+        fetchAllRows(logsQuery),
+        fetchAllRows(violQuery)
       ]);
-        
-      if (pError || !profiles) {
+
+      if (!profiles || profiles.length === 0) {
         setIsFetchingLeaderboard(false);
         return;
       }
@@ -1298,7 +1382,9 @@ if (!isAreaManager && currentOutletId) {
           personLogs.forEach(log => {
             const rawDate = log.actual_in || log.created_at;
             const dateKey = rawDate ? rawDate.substring(0, 10) : '';
-            if (dateKey && log.actual_in) shiftDates.add(dateKey);
+            if (dateKey && log.actual_in && log.actual_out) {
+              shiftDates.add(dateKey);
+            }
 
             const logDate = new Date(rawDate);
             const formattedDate = logDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Makassar' });
@@ -1425,7 +1511,7 @@ if (!isAreaManager && currentOutletId) {
             }
           });
 
-          // Filter pelanggaran operasional per bulan
+          // Filter pelanggaran operasional per kru
           const personViolations = (violations || []).filter(v => {
             if (v.crew_id !== person.id) return false;
             const refDate = v.incident_date || v.created_at;
@@ -1450,7 +1536,6 @@ if (!isAreaManager && currentOutletId) {
             const deduction = v.penalty_points ? Number(v.penalty_points) : 0;
             totalDeduction += deduction;
             
-            // Format tanggal kejadian tindakan (Point 2)
             const eventDateObj = new Date(v.incident_date ? `${v.incident_date}T00:00:00` : v.created_at);
             const formattedEventDate = eventDateObj.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -1485,7 +1570,7 @@ if (!isAreaManager && currentOutletId) {
           });
 
           const disciplineBonus = cleanDaysCount * 5;
-          let calculatedPoints = (100 + disciplineBonus) - totalDeduction;
+          let calculatedPoints = Math.max(0, (100 + disciplineBonus) - totalDeduction);
 
           let pts = calculatedPoints;
           if (selectedMonth !== currentMonthYear && historyMap[person.id] !== undefined) {
@@ -1533,7 +1618,6 @@ if (!isAreaManager && currentOutletId) {
             });
           }
 
-          // 4. Pisahkan list mangkir
           if (mangkirCount > 0) {
             mangkirRankingList.push({
               id: person.id,
@@ -1622,7 +1706,7 @@ if (!isAreaManager && currentOutletId) {
     } finally {
       setIsFetchingLeaderboard(false);
     }
-  }, [selectedMonth, currentMonthYear, isAreaManager, profile?.outlet_id, selectedBranchId]);
+  }, [selectedMonth, currentMonthYear, isAreaManager, profile?.outlet_id, selectedBranchId, outletsList]);
 
   // Submit Tanggapan Indisipliner ke Atasan
   const handleSubmitAppeal = async (e) => {
@@ -2745,7 +2829,7 @@ if (!isAreaManager && currentOutletId) {
         const past24hOut = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         const { data: activeLogOut } = await supabase
           .from('attendance_logs')
-          .select('id, actual_in, status_in, outlet_id')
+          .select('id, actual_in, status_in, outlet_id, discipline_status, break_start_time, break_end_time')
           .eq('user_id', user.id)
           .is('actual_out', null)
           .gte('actual_in', past24hOut)
@@ -2774,6 +2858,10 @@ if (!isAreaManager && currentOutletId) {
           let penaltyPoints = 0;
           let financialLoss = 0;
 
+          // Cek ketertiban absen masuk dan break
+          const isLateIn = (activeLogOut.status_in || '').toLowerCase().includes('terlambat');
+          const isOverBreak = (activeLogOut.discipline_status || '').toLowerCase() === 'overbreak';
+
           if (workedHours > (targetRequiredHours + 3)) {
             const lateOutMinutes = Math.floor((workedHours - targetRequiredHours) * 60);
             statusOutText = `Terlambat Absen Pulang > 3 Jam (${Math.floor(lateOutMinutes / 60)}j ${lateOutMinutes % 60}m)`;
@@ -2788,10 +2876,11 @@ if (!isAreaManager && currentOutletId) {
               outlet_id: activeLogOut.outlet_id
             });
           } else if (workedHours < targetRequiredHours) {
+            // Pengurangan 1 poin per menit jika pulang lebih awal
             const missingMinutes = Math.floor((targetRequiredHours * 60) - (workedHours * 60));
             statusOutText = `Pulang Cepat (${missingMinutes}m)`;
             disciplineStatusOut = 'Pulang Lebih Awal';
-            penaltyPoints = Math.min(30, Math.max(5, Math.floor(missingMinutes / 10) * 5));
+            penaltyPoints = missingMinutes; // 1 poin per menit
             financialLoss = missingMinutes * 1000;
           }
 
@@ -2803,17 +2892,28 @@ if (!isAreaManager && currentOutletId) {
             financial_loss_amount: financialLoss
           }).eq('id', logIdOut);
 
-          if (penaltyPoints > 0) {
-            const { data: currentProf } = await supabase
-              .from('user_profiles')
-              .select('total_points')
-              .eq('id', user.id)
-              .maybeSingle();
+          // Sinkronisasi poin real-time ke user_profiles
+          const { data: currentProf } = await supabase
+            .from('user_profiles')
+            .select('total_points')
+            .eq('id', user.id)
+            .maybeSingle();
 
-            const existingPts = currentProf?.total_points ?? 100;
+          const existingPts = currentProf?.total_points !== null && currentProf?.total_points !== undefined 
+            ? Number(currentProf.total_points) 
+            : 100;
+
+          if (penaltyPoints > 0) {
+            // Berkurang sesuai poin penalti pulang cepat / telat out
             await supabase
               .from('user_profiles')
-              .update({ total_points: Math.max(0, Number(existingPts) - penaltyPoints) })
+              .update({ total_points: Math.max(0, existingPts - penaltyPoints) })
+              .eq('id', user.id);
+          } else if (!isLateIn && !isOverBreak && disciplineStatusOut === 'Shift Selesai') {
+            // Tertib masuk, tertib break, dan shift selesai: poin bertambah (+5 Poin)
+            await supabase
+              .from('user_profiles')
+              .update({ total_points: existingPts + 5 })
               .eq('id', user.id);
           }
         }
@@ -3107,11 +3207,16 @@ if (!isAreaManager && currentOutletId) {
                   setManagerCrewLogs([]);
                   setLogsPage(0);
                 }}
-                className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer max-w-[210px]"
+                className="text-xs font-bold bg-slate-50 border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer max-w-[220px]"
               >
-                <option value="ALL">🌐 Semua Resto (Kaltim & Kalsel 1)</option>
+                <option value="ALL">🌐 Semua Resto (Semua Cabang)</option>
                 
-                <optgroup label="📍 Wilayah Kalsel 1 (5 Resto)">
+                <optgroup label="🏢 Filter per Area">
+                  <option value="AREA_KALSEL_1">📍 Semua Area Kalsel 1</option>
+                  <option value="AREA_KALTIM">📍 Semua Area Kaltim</option>
+                </optgroup>
+
+                <optgroup label="📍 Resto Wilayah Kalsel 1">
                   {outletsList
                     .filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code))))
                     .map((branch) => (
@@ -3121,7 +3226,7 @@ if (!isAreaManager && currentOutletId) {
                     ))}
                 </optgroup>
 
-                <optgroup label="📍 Wilayah Kaltim">
+                <optgroup label="📍 Resto Wilayah Kaltim">
                   {outletsList
                     .filter(b => !['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code))))
                     .map((branch) => (
