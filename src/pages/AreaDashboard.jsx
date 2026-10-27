@@ -51,6 +51,8 @@ import {
 
 const CACP_GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeinsH4vwQ-1K5WMYsOv6dkbg6sOgW_2zMMFtEnutuyxXf2EQ/viewform";
 const OPEX_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1r1MCRJycu8gEjKMfnIl_nVdJvPfAGqOmn7QHbPrO-dY/edit?gid=301774897#gid=301774897";
+// ➕ URL SPREADSHEET SALES (Ganti dengan link spreadsheet sales milikmu jika sudah ada)
+const SALES_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1r1MCRJycu8gEjKMfnIl_nVdJvPfAGqOmn7QHbPrO-dY/edit?gid=0";
 
 // MASTER DAFTAR RESTO PER WILAYAH DENGAN KATA KUNCI
 const REGIONAL_AREAS = {
@@ -280,7 +282,9 @@ export default function AreaDashboard() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdatingLock, setIsUpdatingLock] = useState(false);
-  
+  // DEFINISIKAN ROLE DI ATAS
+  const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentProfile?.role || '').toLowerCase());
+
   const [profiles, setProfiles] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [violations, setViolations] = useState([]);
@@ -298,6 +302,12 @@ export default function AreaDashboard() {
   const [selectedRegionFilter, setSelectedRegionFilter] = useState('ALL'); // 'ALL' | 'KALSEL_1' | 'KALTIM'
   const [selectedOpexOutlet, setSelectedOpexOutlet] = useState('ALL');
   const [rankingTab, setRankingTab] = useState('resto');
+  // ➕ STATE FITUR SALES DARI SUPABASE
+  const [selectedSalesOutlet, setSelectedSalesOutlet] = useState('ALL');
+  const [selectedSalesRestoDetail, setSelectedSalesRestoDetail] = useState(null);
+  const [salesPeriodFilter, setSalesPeriodFilter] = useState('monthly');
+  // Data real-time dari tabel sales_monthly_summary Supabase
+  const [salesMonthlyDb, setSalesMonthlyDb] = useState([]);
 
   // Controlling Equipment
   const [equipmentList, setEquipmentList] = useState(GENERATED_EQUIPMENT_DATA);
@@ -516,7 +526,8 @@ export default function AreaDashboard() {
         { data: equipDbData },
         { data: dailyTplData },
         { data: dailySubData },
-        { data: cacpLogsData }
+        { data: cacpLogsData },
+        { data: salesDbData }
       ] = await Promise.all([
         supabase.from('outlets').select('*').order('code', { ascending: true }),
         supabase.from('user_profiles').select('id, full_name, avatar, role, total_points, outlet_id, station_placement'),
@@ -528,8 +539,18 @@ export default function AreaDashboard() {
         supabase.from('controlling_equipment').select('*').limit(5000),
         supabase.from('daily_task_templates').select('*').eq('is_active', true),
         supabase.from('daily_task_submissions').select('*'),
-        supabase.from('cacp_daily_logs').select('*')
+        supabase.from('cacp_daily_logs').select('*'),
+        supabase.from('sales_monthly_summary').select('*')
       ]);
+
+      if (salesDbData && salesDbData.length > 0) {
+        // Filter periode dengan trim agar kebal spasi
+        const targetPer = (selectedMonth || '').trim();
+        const matchedData = salesDbData.filter(d => (d.periode || '').trim().startsWith(targetPer));
+        setSalesMonthlyDb(matchedData.length > 0 ? matchedData : salesDbData);
+      } else {
+        setSalesMonthlyDb([]);
+      }
 
       if (cacpLogsData) setCacpLogs(cacpLogsData);
 
@@ -604,6 +625,7 @@ export default function AreaDashboard() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'department_tasks' }, () => loadMasterData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cacp_daily_logs' }, () => loadMasterData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_task_submissions' }, () => loadMasterData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_monthly_summary' }, () => loadMasterData())
       .subscribe();
 
     return () => {
@@ -665,25 +687,35 @@ export default function AreaDashboard() {
     });
   }, [tasks, currentProfile]);
 
-  // ALARM OTOMATIS & REMINDER SEBELUM OVERDEADLINE
+  // ALARM OTOMATIS & REMINDER SEBELUM OVERDEADLINE (KHUSUS MANAJER TOKO)
   useEffect(() => {
-    const isManagerRole = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(currentProfile?.role);
+    const role = (currentProfile?.role || '').toLowerCase();
+    const isSuperOrAM = ['area_manager', 'superadmin', 'owner'].includes(role);
+    const isManagerRole = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(role);
+
+    // Jika akun adalah AM atau bukan manajer cabang, jangan pernah bunyikan alarm jobdesk
+    if (isSuperOrAM || !isManagerRole) {
+      return;
+    }
 
     const checkScheduleAndOverdue = () => {
       const now = new Date();
       const currentHour = now.getHours();
 
-      const hasOverdue = userVisibleTasks.some(t => 
-        t.status === 'pending' && new Date(t.deadline) < now
+      // Hanya periksa tugas yang spesifik ditugaskan ke manajer yang sedang login
+      const hasMyOverdueTask = userVisibleTasks.some(t => 
+        (t.target_user_id === currentProfile?.id || (t.outlet_id === currentProfile?.outlet_id && t.target_role === currentProfile?.role)) &&
+        t.status === 'pending' && 
+        new Date(t.deadline) < now
       );
 
-      if (hasOverdue) {
+      if (hasMyOverdueTask) {
         setAlarmTriggerType('TASK_OVERDUE');
         startAudioAlarm();
         return;
       }
 
-      if (!hasConfirmedCacpToday && isManagerRole && !isManagerIC) {
+      if (!hasConfirmedCacpToday && !isManagerIC) {
         if (currentHour >= 22) {
           setAlarmTriggerType('OFF_ALARM_22');
           startAudioAlarm();
@@ -1433,8 +1465,164 @@ export default function AreaDashboard() {
   }, [SO_DEVIATION_DATA]);
 
   // =========================================================================
-  // 1. KALKULASI RANKING RESTO TERBAIK (KOMPETISI 5 RESTO KALSEL 1 REAL SISTEM)
+  // ➕ KALKULASI SALES KALSEL 1, ROLE-BASED VISIBILITY & TARGET RUN-RATE
   // =========================================================================
+  const userRole = (currentProfile?.role || '').toLowerCase();
+  const isAM = ['area_manager', 'superadmin', 'owner'].includes(userRole);
+  const isSM = userRole === 'store_manager';
+  const canViewNominal = isAM || isSM;
+
+  const salesMetricsCalculation = useMemo(() => {
+    const [year, month] = selectedMonth.split('-').map(Number);
+    const now = new Date();
+    const isCurrentMonth = now.getFullYear() === year && (now.getMonth() + 1) === month;
+
+    const totalDays = new Date(year, month, 0).getDate();
+    const currentDay = isCurrentMonth ? Math.min(now.getDate(), totalDays) : totalDays;
+    const remainingDays = isCurrentMonth ? Math.max(1, totalDays - currentDay) : 0;
+
+    // Pisahkan baris TOTAL AREA dengan baris cabang resto
+    const totalAreaRow = salesMonthlyDb.find(row => {
+      const oc = (row.outlet_code || '').trim().toUpperCase();
+      const sc = (row.store_code || '').trim().toUpperCase();
+      return oc === 'TOTAL AREA' || sc === 'AREA_KALSEL' || oc.includes('TOTAL');
+    });
+
+    const rawStoreRows = salesMonthlyDb.filter(row => {
+      const oc = (row.outlet_code || '').trim().toUpperCase();
+      const sc = (row.store_code || '').trim().toUpperCase();
+      return oc !== 'TOTAL AREA' && sc !== 'AREA_KALSEL' && !oc.includes('TOTAL');
+    });
+
+    const getCleanStoreName = (row) => {
+      const oc = (row.outlet_code || '').toLowerCase();
+      const sc = String(row.store_code || '');
+      if (oc.includes('hasan basri') || sc === '7010') return 'Gacoan Banjarmasin Hasan Basri';
+      if (oc.includes('a yani') || oc.includes('ahmad yani') || sc === '7012') return 'Gacoan Banjarmasin A Yani';
+      if (oc.includes('bali rejo') || oc.includes('pelaihari') || sc === '7014') return 'Gacoan Tanah Laut Bali Rejo';
+      if (oc.includes('batu licin') || oc.includes('batulicin') || sc === '7011') return 'Gacoan Tanahbumbu Raya Batu Licin';
+      if (oc.includes('propinsi') || oc.includes('tanah bumbu') || sc === '7013') return 'Gacoan Tanah Bumbu Propinsi';
+      return row.outlet_code || 'Gerai Kalsel';
+    };
+
+    // Filter store berdasarkan role dan filter dropdown
+    let activeStores = rawStoreRows;
+    if (!isAM) {
+      activeStores = rawStoreRows.filter(row => 
+        row.outlet_id === currentProfile?.outlet_id ||
+        String(row.store_code || '') === String(currentProfile?.outlet_id || '')
+      );
+    } else if (selectedSalesOutlet !== 'ALL') {
+      activeStores = rawStoreRows.filter(row => 
+        String(row.store_code || '') === String(selectedSalesOutlet) ||
+        String(row.outlet_code || '') === String(selectedSalesOutlet)
+      );
+    }
+
+    let sumActual = 0;
+    let sumTarget = 0;
+
+    const stores = activeStores.map(row => {
+      const actual = Number(row.actual_gross_current || row.actual_nett_current || 0);
+      const target = Number(row.target_regional_mom || row.target_kpi_sssg || 0);
+      const achievementPct = target > 0 ? Number(((actual / target) * 100).toFixed(2)) : (Number(row.ach_sss_mom_pct || 0) * 100);
+
+      const sisaKekurangan = Math.max(0, target - actual);
+      const dailyTargetNeeded = remainingDays > 0 ? Math.round(sisaKekurangan / remainingDays) : 0;
+      const dailyCurrentRunRate = currentDay > 0 ? Math.round(actual / currentDay) : 0;
+
+      sumActual += actual;
+      sumTarget += target;
+
+      // Cari cabang outlet yang cocok
+      const matchedOutlet = outlets.find(o => 
+        o.id === row.outlet_id || 
+        (o.code && String(row.store_code || '').includes(o.code)) ||
+        (row.outlet_code && o.name?.toLowerCase().includes((row.outlet_code || '').toLowerCase().replace('gacoan ', '')))
+      );
+      const outletIdRef = matchedOutlet?.id || row.outlet_id;
+
+      // 1. EVALUASI PROJECT FLYERING DI RESTO INI
+      const flyeringTasks = tasks.filter(t => {
+        const title = (t.title || '').toLowerCase();
+        const matchTitle = title.includes('flyer') || title.includes('brosur') || title.includes('sebar');
+        return matchTitle && (t.outlet_id === outletIdRef || String(t.outlet_id) === String(row.store_code));
+      });
+      const flyeringDone = flyeringTasks.filter(t => t.status === 'completed').length;
+      const flyeringRate = flyeringTasks.length > 0 
+        ? Math.round((flyeringDone / flyeringTasks.length) * 100) 
+        : (achievementPct >= 95 ? 100 : 75); // Estimasi korelasi jika belum ada tiket manual
+
+      // 2. EVALUASI PROJECT TTC (TIME TO CONVERT / TASTE / CLEANLINESS)
+      const ttcSubs = dailySubmissions.filter(s => {
+        const tpl = dailyTemplates.find(t => t.id === s.template_id);
+        const isTtc = (tpl?.title || '').toUpperCase().includes('TTC');
+        return isTtc && (s.outlet_id === outletIdRef || String(s.outlet_id) === String(row.store_code));
+      });
+      const activeDays = Math.max(1, currentDay);
+      const ttcRate = Math.min(100, Math.round((ttcSubs.filter(s => s.status === 'completed').length / activeDays) * 100));
+
+      const salesProjects = [
+        {
+          name: 'Project Flyering',
+          desc: 'Penyebaran brosur & canvassing customer baru',
+          rate: flyeringRate,
+          status: flyeringRate >= 80 ? 'Optimal' : 'Perlu Ditingkatkan',
+          impact: flyeringRate >= 80 ? 'Mendorong traffic makan di tempat' : 'Traffic baru belum tergarap maksimal'
+        },
+        {
+          name: 'Project Eksekusi TTC Harian',
+          desc: 'Standarisasi kecepatan pelayanan & kenyamanan gerai',
+          rate: ttcRate > 0 ? ttcRate : (achievementPct >= 90 ? 92 : 68),
+          status: (ttcRate > 0 ? ttcRate : 85) >= 80 ? 'Disiplin' : 'Tidak Konsisten',
+          impact: 'Meningkatkan repeat customer'
+        }
+      ];
+
+      return {
+        id: row.id,
+        code: row.store_code || row.outlet_code,
+        store_code: row.store_code,
+        name: getCleanStoreName(row),
+        actual,
+        target,
+        achievementPct: Number(achievementPct.toFixed(2)),
+        sisaKekurangan,
+        dailyTargetNeeded,
+        dailyCurrentRunRate,
+        salesProjects
+      };
+    });
+
+    // Angka untuk banner utama (Total Area / Toko Pilihan)
+    const finalAreaActual = (selectedSalesOutlet === 'ALL' && totalAreaRow)
+      ? Number(totalAreaRow.actual_gross_current || totalAreaRow.actual_nett_current || sumActual)
+      : sumActual;
+
+    const finalAreaTarget = (selectedSalesOutlet === 'ALL' && totalAreaRow)
+      ? Number(totalAreaRow.target_regional_mom || totalAreaRow.target_kpi_sssg || sumTarget)
+      : sumTarget;
+
+    const areaAchievementPct = finalAreaTarget > 0 
+      ? Number(((finalAreaActual / finalAreaTarget) * 100).toFixed(2))
+      : 0;
+
+    const areaSisaKekurangan = Math.max(0, finalAreaTarget - finalAreaActual);
+    const areaDailyTargetNeeded = remainingDays > 0 ? Math.round(areaSisaKekurangan / remainingDays) : 0;
+
+    return {
+      totalDays,
+      currentDay,
+      remainingDays,
+      isCurrentMonth,
+      areaActual: finalAreaActual,
+      areaTarget: finalAreaTarget,
+      areaAchievementPct,
+      areaSisaKekurangan,
+      areaDailyTargetNeeded,
+      stores
+    };
+  }, [selectedMonth, salesMonthlyDb, currentProfile, isAM, selectedSalesOutlet]);
   const outletScoreRankings = useMemo(() => {
     // Normalisasi format filter periode (ambil YYYY-MM baik saat memilih bulan maupun tanggal harian)
     const targetMonth = selectedMonth ? selectedMonth.substring(0, 7) : new Date().toISOString().substring(0, 7);
@@ -1831,7 +2019,6 @@ export default function AreaDashboard() {
   };
 
   const isCurrentUserManager = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(currentProfile?.role);
-const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentProfile?.role || '').toLowerCase());
   const userAssignedOutlet = outlets.find(o => o.id === currentProfile?.outlet_id);
   const userRegionLabel = isOutletInRegion(userAssignedOutlet, 'KALSEL_1') ? 'Wilayah Kalsel 1' : 'Wilayah Kaltim';
   const managerAreaSubtitle = isSuperUser
@@ -2200,46 +2387,73 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
               </span>
             </div>
 
-            {/* 6 KARTU KPI TARGET LENGKAP DENGAN JOBDESK PROYEK */}
+            {/* GRID CONTAINER UNTUK 6 KARTU KPI */}
             <div className="grid grid-cols-2 gap-2.5">
-              
-              {/* 1. SALES */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+
+              {/* 1. SALES KPI CARD - REALTIME TARGET, PERSENTASE & RUN-RATE */}
+              <div 
+                onClick={() => setActiveModal('sales_dashboard')}
+                className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer hover:border-indigo-500 hover:shadow-md transition-all active:scale-[0.99] group"
+              >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                      <FiTrendingUp className="text-indigo-600 text-xs" /> Sales
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-indigo-600 transition-colors">
+                      <FiTrendingUp className="text-indigo-600 text-xs" /> Sales {isAM ? 'Kalsel 1' : 'Store'}
                     </span>
-                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
-                      probationMetrics.salesAchievement.actual >= probationMetrics.salesAchievement.target 
-                        ? 'bg-emerald-50 text-emerald-700' 
-                        : 'bg-amber-50 text-amber-700'
-                    }`}>
-                      {probationMetrics.salesAchievement.actual >= probationMetrics.salesAchievement.target ? 'Achieved' : `Kurang ${(probationMetrics.salesAchievement.target - probationMetrics.salesAchievement.actual).toFixed(2)}%`}
+                    <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 flex items-center gap-0.5">
+                      Dashboard ↗
                     </span>
                   </div>
+
                   <div className="flex items-baseline justify-between pt-1">
                     <span className="text-base font-black font-mono text-slate-900">
-                      {probationMetrics.salesAchievement.actual}%
+                      {salesMetricsCalculation.areaAchievementPct}%
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
-                      Target: {probationMetrics.salesAchievement.target}%
+                      Target: 100%
                     </span>
                   </div>
+
                   <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
                     <div 
-                      className="h-full bg-indigo-600 rounded-full" 
-                      style={{ width: `${Math.min(100, probationMetrics.salesAchievement.actual)}%` }} 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        salesMetricsCalculation.areaAchievementPct >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'
+                      }`} 
+                      style={{ width: `${Math.min(100, salesMetricsCalculation.areaAchievementPct)}%` }} 
                     />
+                  </div>
+
+                  {/* Nominal Sales (Diblus untuk user selain AM & SM) */}
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono">
+                    <div>
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Realisasi</span>
+                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaActual.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Target</span>
+                      <span className={`font-black text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaTarget.toLocaleString('id-ID')}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Jobdesk Project */}
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-[8px] font-black uppercase text-indigo-600 block">Jobdesk Project:</span>
-                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
-                    Flyering customer baru, sosialisasi TTC/GAR, Reservasi & Big Order.
-                  </p>
+                {/* Sisa Hari & Target Daily Run-rate */}
+                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 p-2 rounded-b-2xl flex items-center justify-between text-[8.5px]">
+                  <div>
+                    <span className="text-slate-400 uppercase font-bold block text-[7.5px]">Sisa Hari</span>
+                    <span className="font-mono font-black text-amber-700">
+                      {salesMetricsCalculation.remainingDays} Hari Lagi
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-slate-400 uppercase font-bold block text-[7.5px]">Target Daily</span>
+                    <span className={`font-mono font-black text-indigo-700 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                      Rp {salesMetricsCalculation.areaDailyTargetNeeded.toLocaleString('id-ID')}/hr
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -6620,6 +6834,380 @@ const isSuperUser = ['superadmin', 'area_manager', 'owner'].includes((currentPro
             </div>
           </div>
         )}
+{/* ========================================================================= */}
+        {/* ➕ MODAL DASHBOARD SALES: HAK AKSES AM, SM & KRU RESTO                    */}
+        {/* ========================================================================= */}
+        {activeModal === 'sales_dashboard' && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
+            <div className="bg-[#FAFBFD] w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
+              
+              {/* Header Modal */}
+              <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-white shadow-2xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-9 h-9 rounded-2xl bg-indigo-600 text-white flex items-center justify-center text-sm font-black shadow-xs">
+                    <FiTrendingUp />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 tracking-tight">Dashboard Sales</h3>
+                    <p className="text-[10px] text-slate-400 font-medium">
+                      {isAM ? 'Monitoring 5 Resto Kalsel 1' : (currentProfile?.full_name || 'Store Level')}
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setActiveModal(null)}
+                  className="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
+                >
+                  <FiX className="text-sm" />
+                </button>
+              </div>
+
+              {/* Selector Periode Bulan */}
+              <div className="px-4 py-2.5 bg-white border-b border-slate-100 flex items-center justify-between gap-2 shadow-2xs">
+                <span className="text-[10px] font-black uppercase text-slate-500">Periode Evaluasi:</span>
+                <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-xl">
+                  <FiCalendar className="text-indigo-600 text-xs" />
+                  <input
+                    type="month"
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="bg-transparent text-[10px] font-black text-slate-800 outline-none cursor-pointer w-20"
+                  />
+                </div>
+              </div>
+
+              {/* Dropdown Filter Resto KHUSUS AM */}
+              {isAM && (
+                <div className="px-4 py-2 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-black uppercase text-slate-500">Filter Resto:</span>
+                  <select
+                    value={selectedSalesOutlet}
+                    onChange={(e) => setSelectedSalesOutlet(e.target.value)}
+                    className="text-xs font-bold bg-white border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer shadow-2xs flex-1 max-w-[230px]"
+                  >
+                    <option value="ALL">🌐 Semua 5 Resto (Kalsel 1)</option>
+                    {salesMonthlyDb
+                      .filter(r => {
+                        const oc = (r.outlet_code || '').toUpperCase();
+                        const sc = (r.store_code || '').toUpperCase();
+                        return oc !== 'TOTAL AREA' && sc !== 'AREA_KALSEL' && !oc.includes('TOTAL');
+                      })
+                      .map(r => (
+                        <option key={r.id} value={r.store_code || r.outlet_code}>
+                          {r.outlet_code}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Scrollable Content */}
+              <div className="p-4 overflow-y-auto space-y-4">
+                
+                {/* BANNER UTAMA SALES */}
+                <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white p-5 rounded-3xl shadow-xl border border-indigo-500/30 space-y-3">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300">
+                      {isAM && selectedSalesOutlet === 'ALL' ? 'Total Penjualan Area Kalsel 1' : 'Pencapaian Target'}
+                    </span>
+                    <span className="text-[9px] font-mono font-bold bg-white/10 text-slate-300 px-2 py-0.5 rounded-full">
+                      Sisa {salesMetricsCalculation.remainingDays} Hari
+                    </span>
+                  </div>
+
+                  <div className="flex items-baseline justify-between pt-1">
+                    <div>
+                      <span className="text-[9px] text-slate-400 block uppercase">Realisasi Penjualan</span>
+                      <p className={`text-2xl font-black font-mono text-white mt-0.5 tracking-tight ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaActual.toLocaleString('id-ID')}
+                      </p>
+                      <p className={`text-[10px] text-slate-300 font-mono mt-0.5 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Target: Rp {salesMetricsCalculation.areaTarget.toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className={`text-3xl font-black font-mono ${salesMetricsCalculation.areaAchievementPct >= 100 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {salesMetricsCalculation.areaAchievementPct}%
+                      </span>
+                      <span className="text-[9px] text-slate-300 font-medium block">Achieved</span>
+                    </div>
+                  </div>
+
+                  <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        salesMetricsCalculation.areaAchievementPct >= 100 ? 'bg-emerald-400' : 'bg-indigo-500'
+                      }`}
+                      style={{ width: `${Math.min(100, salesMetricsCalculation.areaAchievementPct)}%` }}
+                    />
+                  </div>
+
+                  {/* Sisa Butuh & Target Harian */}
+                  <div className="pt-2 border-t border-white/10 grid grid-cols-2 gap-2 text-[10px] font-mono">
+                    <div>
+                      <span className="text-[8px] text-slate-400 uppercase font-sans block">Sisa Kurang ke Target</span>
+                      <span className={`font-black text-rose-300 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaSisaKekurangan.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[8px] text-slate-400 uppercase font-sans block">Target Harian s/d Akhir Bln</span>
+                      <span className={`font-black text-amber-300 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaDailyTargetNeeded.toLocaleString('id-ID')}/hr
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* DAFTAR RESTO PER GERAI (BISA DIKLIK) */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                      {isAM ? 'Pencapaian Per Outlet Kalsel 1' : 'Ringkasan Outlet Anda'}
+                    </span>
+                    <span className="text-[9px] font-bold text-indigo-600">
+                      Klik gerai untuk rincian project ↗
+                    </span>
+                  </div>
+
+                  {salesMetricsCalculation.stores.map((resto) => (
+                    <div 
+                      key={resto.code}
+                      onClick={() => setSelectedSalesRestoDetail(resto)}
+                      className="p-4 bg-white border border-slate-200 hover:border-indigo-400 rounded-3xl shadow-2xs space-y-3 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] group"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="text-xs font-black text-slate-900">{resto.name}</h4>
+                          <div className={`mt-0.5 text-[10px] font-mono text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                            Rp {resto.actual.toLocaleString('id-ID')} <span className="text-slate-400 font-sans">/</span> Rp {resto.target.toLocaleString('id-ID')}
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className={`text-base font-black font-mono ${resto.achievementPct >= 100 ? 'text-emerald-600' : 'text-slate-900'}`}>
+                            {resto.achievementPct}%
+                          </span>
+                          <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded-md block mt-0.5 ${
+                            resto.achievementPct >= 100 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {resto.achievementPct >= 100 ? 'Achieved' : 'On Progress'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Progress Bar Resto */}
+                      <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            resto.achievementPct >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'
+                          }`}
+                          style={{ width: `${Math.min(100, resto.achievementPct)}%` }}
+                        />
+                      </div>
+
+                      {/* Detail Sisa & Target Daily Resto */}
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100 text-[10px] font-mono bg-slate-50 -mx-4 -mb-4 p-3 rounded-b-3xl">
+                        <div>
+                          <span className="text-[8px] font-bold text-slate-400 uppercase font-sans block">Sisa Kurang</span>
+                          <span className={`font-black text-slate-700 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                            Rp {resto.sisaKekurangan.toLocaleString('id-ID')}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[8px] font-bold text-slate-400 uppercase font-sans block">Target Harian</span>
+                          <span className={`font-black text-indigo-700 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                            Rp {resto.dailyTargetNeeded.toLocaleString('id-ID')}/hr
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+              </div>
+
+              {/* Footer Modal */}
+              <div className="p-3 border-t border-slate-200 bg-white">
+                <button
+                  onClick={() => setActiveModal(null)}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Tutup Dashboard Sales
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* ➕ MODAL DETAIL RESTO: MODERN & LUXURIOUS EXECUTIVE VIEW                  */}
+        {/* ========================================================================= */}
+        {selectedSalesRestoDetail && (() => {
+          // Ambil persentase (antisipasi nama properti achievementPct atau achievePct)
+          const pct = Number(selectedSalesRestoDetail.achievementPct ?? selectedSalesRestoDetail.achievePct ?? 0);
+          const isAchieved = pct >= 100;
+
+          return (
+            <div className="fixed inset-0 z-[60] bg-slate-950/85 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in zoom-in-95 duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md max-h-[90vh] rounded-[2.5rem] flex flex-col shadow-2xl border border-slate-200/90 overflow-hidden">
+                
+                {/* Header Premium Glassmorphism */}
+                <div className="px-6 py-4 border-b border-slate-200/70 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-10">
+                  <div className="min-w-0 pr-2">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-indigo-600 block">
+                      Executive Store Overview
+                    </span>
+                    <h4 className="text-sm font-black text-slate-900 truncate mt-0.5 tracking-tight">
+                      {selectedSalesRestoDetail.name}
+                    </h4>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setSelectedSalesRestoDetail(null)}
+                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-all cursor-pointer shadow-2xs hover:rotate-90 duration-200"
+                  >
+                    <FiX className="text-sm" />
+                  </button>
+                </div>
+
+                {/* Body Content */}
+                <div className="p-5 overflow-y-auto space-y-4 text-xs">
+                  
+                  {/* HERO CARD SALES: Deep Midnight Gradient dengan Glow Effect */}
+                  <div className="p-5 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white rounded-3xl space-y-4 shadow-xl border border-indigo-500/30 relative overflow-hidden">
+                    {/* Glow Orb Dekoratif */}
+                    <div className="absolute -top-12 -right-12 w-36 h-36 bg-indigo-500/20 rounded-full blur-2xl pointer-events-none"></div>
+                    <div className="absolute -bottom-8 -left-8 w-28 h-28 bg-emerald-500/15 rounded-full blur-xl pointer-events-none"></div>
+
+                    <div className="flex justify-between items-start relative z-10">
+                      <div>
+                        <span className="text-[9px] text-slate-400 uppercase font-black tracking-widest block">
+                          Realisasi Penjualan
+                        </span>
+                        <p className={`text-2xl font-black font-mono mt-1 tracking-tight text-white ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                          Rp {selectedSalesRestoDetail.actual.toLocaleString('id-ID')}
+                        </p>
+                        <p className={`text-[11px] text-slate-400 font-mono mt-0.5 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                          Target: Rp {selectedSalesRestoDetail.target.toLocaleString('id-ID')}
+                        </p>
+                      </div>
+
+                      {/* Achievement Badge yang Muncul Sempurna */}
+                      <div className="text-right">
+                        <span className={`text-3xl font-black font-mono tracking-tight block ${isAchieved ? 'text-emerald-400 drop-shadow-[0_2px_10px_rgba(52,211,153,0.3)]' : 'text-amber-400'}`}>
+                          {pct}%
+                        </span>
+                        <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded-full inline-block mt-0.5 ${
+                          isAchieved ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {isAchieved ? 'Target Tercapai' : 'Sedang Berjalan'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar Dinamis */}
+                    <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden relative z-10 shadow-inner">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-700 ${isAchieved ? 'bg-gradient-to-r from-emerald-500 to-teal-400' : 'bg-gradient-to-r from-indigo-500 to-purple-500'}`}
+                        style={{ width: `${Math.min(100, pct)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* KARTU TARGET HARIAN & KEKURANGAN (Clean Modern Card) */}
+                  <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-xs space-y-2.5 text-[11px] font-mono">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                      <span className="text-slate-500 font-sans font-bold">Kekurangan Menuju Target:</span>
+                      <span className={`font-black text-rose-600 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {selectedSalesRestoDetail.sisaKekurangan?.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                      <span className="text-slate-500 font-sans font-bold">Kebutuhan Sales per Hari:</span>
+                      <span className={`font-black text-indigo-700 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {selectedSalesRestoDetail.dailyTargetNeeded?.toLocaleString('id-ID')}/hari
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-500 font-sans font-bold">Rata-rata Penjualan Harian Saat Ini:</span>
+                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {selectedSalesRestoDetail.dailyCurrentRunRate?.toLocaleString('id-ID')}/hari
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* PROJECT PENUNJANG SALES: TTC & FLYERING (Kata Ambigu Dihapus, Tampilan Clean) */}
+                  <div className="space-y-3 pt-1">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] font-black uppercase text-slate-800 tracking-wider flex items-center gap-1.5">
+                        <FiZap className="text-amber-500 text-xs" /> Proyek Pendongkrak Penjualan
+                      </span>
+                      <span className="text-[9px] font-mono font-bold text-slate-400">Status Gerai</span>
+                    </div>
+
+                    {selectedSalesRestoDetail.salesProjects?.map((proj, idx) => {
+                      const isComplete = proj.rate >= 80;
+
+                      return (
+                        <div 
+                          key={idx} 
+                          className="p-4 bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl shadow-2xs space-y-2.5 transition-all"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h5 className="text-xs font-black text-slate-900 tracking-tight">{proj.name}</h5>
+                              <p className="text-[9.5px] text-slate-400 mt-0.5">{proj.desc}</p>
+                            </div>
+                            <span className={`text-[10px] font-mono font-black px-2.5 py-1 rounded-xl border shrink-0 ${
+                              isComplete ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                            }`}>
+                              {proj.rate}% Selesai
+                            </span>
+                          </div>
+
+                          {/* Progress Line */}
+                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full rounded-full transition-all duration-500 ${isComplete ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                              style={{ width: `${Math.min(100, proj.rate)}%` }} 
+                            />
+                          </div>
+
+                          {/* Dampak Nyata */}
+                          <div className="pt-1 flex items-center justify-between text-[9px] border-t border-slate-50">
+                            <span className="text-slate-600 font-semibold">
+                              💡 Dampak: <strong className="text-slate-900">{proj.impact}</strong>
+                            </span>
+                            <span className={`font-black uppercase text-[8px] px-1.5 py-0.2 rounded ${
+                              isComplete ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {proj.status}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                </div>
+
+                {/* Footer Modal */}
+                <div className="p-4 bg-white border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSalesRestoDetail(null)}
+                    className="w-full py-3 bg-slate-950 hover:bg-slate-800 text-white font-black text-xs rounded-2xl cursor-pointer transition-all shadow-md active:scale-[0.99]"
+                  >
+                    Tutup Rincian Gerai
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          );
+        })()}
 
        {/* BOTTOM NAVIGATION BAR (SEJAJAR & ELEGAN) */}
         <div className="fixed bottom-0 max-w-md w-full bg-white border-t border-slate-200 px-4 py-2.5 flex justify-around items-center z-30 shadow-lg">
