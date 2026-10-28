@@ -488,9 +488,8 @@ export default function BreakSystem() {
 
       let logsQuery = supabase
         .from('attendance_logs')
-        .select('id, user_id, status_in, break_start_time, break_end_time, discipline_status, outlet_id, actual_in')
+        .select('id, user_id, status_in, break_start_time, break_end_time, discipline_status, outlet_id, actual_in, actual_out, status_out')
         .not('actual_in', 'is', null)
-        .is('actual_out', null)
         .gte('actual_in', past24Hours);
 
       let profilesQuery = supabase
@@ -499,8 +498,22 @@ export default function BreakSystem() {
 
       const currentOutletId = profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id;
 
-const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code)))).map(b => b.id);
-      const kaltimIds = outletsList.filter(b => !['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code)))).map(b => b.id);
+// Mendukung kode angka di database (7010 Hasan Basri, 7011 Batu Licin, 7012 A Yani) dan nama resto
+      const isKalselOutlet = (b) => {
+        const codeStr = String(b.code || '');
+        const nameLower = String(b.name || '').toLowerCase();
+        
+        // JANGAN masukkan Samarinda ke Kalsel
+        if (nameLower.includes('samarinda') || codeStr === '7004') return false;
+
+        const validCodes = ['7010', '7011', '7012', 'BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'];
+        return validCodes.includes(codeStr) || 
+               /banjarmasin|hasan basri|batu licin|batulicin|pelaihari|tanah bumbu/i.test(nameLower) ||
+               ((nameLower.includes('a yani') || nameLower.includes('ahmad yani')) && !nameLower.includes('samarinda'));
+      };
+
+      const kalselIds = outletsList.filter(isKalselOutlet).map(b => b.id);
+      const kaltimIds = outletsList.filter(b => !isKalselOutlet(b)).map(b => b.id);
 
       if (!isAreaManager && currentOutletId) {
         logsQuery = logsQuery.eq('outlet_id', currentOutletId);
@@ -541,47 +554,22 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
 
         for (const log of activeLogs) {
           const inTimeMs = new Date(log.actual_in).getTime();
-          const inHour = new Date(log.actual_in).getHours();
-          const targetHours = (inHour === 22) ? 8 : 9;
-          const maxAllowedSessionMs = (targetHours + 3) * 60 * 60 * 1000;
           const elapsedMs = nowMs - inTimeMs;
+          const diffHoursSinceIn = elapsedMs / (1000 * 60 * 60);
 
-          if (elapsedMs > maxAllowedSessionMs) {
-            const outTimestamp = new Date(inTimeMs + targetHours * 3600 * 1000).toISOString();
-
-            supabase
-              .from('attendance_logs')
-              .update({
-                actual_out: outTimestamp,
-                status_out: 'Lupa Absen Pulang (>3 Jam) (-10 Poin)',
-                discipline_status: 'Terlambat Absen Pulang > 3 Jam',
-                penalty_points: 10,
-              })
-              .eq('id', log.id)
-              .then(() => {});
-
-            supabase
-              .from('operational_violations')
-              .insert({
-                crew_id: log.user_id,
-                violation_type: 'Terlambat Absen Pulang > 3 Jam',
-                notes: 'Sistem otomatis menutup shift karena tidak clock out lebih dari 3 jam.',
-                penalty_points: 10,
-                outlet_id: log.outlet_id
-              }).then(() => {});
-
-            const targetCrewProf = profileMap[log.user_id];
-            if (targetCrewProf) {
-              const curPts = targetCrewProf.total_points !== null && targetCrewProf.total_points !== undefined ? Number(targetCrewProf.total_points) : 100;
-              const nextPts = Math.max(0, curPts - 10);
-              supabase
-                .from('user_profiles')
-                .update({ total_points: nextPts })
-                .eq('id', log.user_id)
-                .then(() => {});
-            }
-
+          // Abaikan log yang memang sudah kadaluwarsa (> 16 jam)
+          if (elapsedMs > 16 * 60 * 60 * 1000) {
             continue;
+          }
+
+          // Cek apakah log sudah checkout normal atau terkena autoclose prematur
+          if (log.actual_out) {
+            const outTimeMs = new Date(log.actual_out).getTime();
+            // Jika belum 12 jam tapi sudah terisi actual_out (autoclose prematur), kru TETAP dihitung aktif di station
+            const isPrematureAutoclose = diffHoursSinceIn < 12 && (outTimeMs > nowMs || String(log.status_out).includes('Lupa Absen Pulang'));
+            if (!isPrematureAutoclose) {
+              continue; // Jika checkout resmi / normal, lewati
+            }
           }
 
           const p = profileMap[log.user_id];
@@ -705,13 +693,30 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
         .order('actual_in', { ascending: false })
         .limit(10);
 
-      // Cari apakah ada sesi aktif yang BENAR-BENAR belum checkout
-      const activeRunningLog = userRecentLogs?.find(l => !l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null');
+      // 1. Cari apakah ada sesi yang BENAR-BENAR aktif (belum checkout ATAU checkout palsu di masa depan padahal belum lewat 12 jam)
+      const activeRunningLog = userRecentLogs?.find(l => {
+        if (!l.actual_in) return false;
+        const inTimeMs = new Date(l.actual_in).getTime();
+        const diffHoursSinceIn = (nowMs - inTimeMs) / (1000 * 60 * 60);
+
+        // Jika belum ada actual_out
+        if (!l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null') {
+          return true;
+        }
+
+        const outTimeMs = new Date(l.actual_out).getTime();
+        // PERLINDUNGAN AUTOCLOSE PREMATUR:
+        // Jika actual_out diset di masa depan (outTimeMs > nowMs) ATAU kru belum 12 jam kerja tapi sudah tertutup autoclose:
+        if (diffHoursSinceIn < 12 && (outTimeMs > nowMs || String(l.status_out).includes('Lupa Absen Pulang'))) {
+          return true;
+        }
+
+        return false;
+      });
 
       if (activeRunningLog && activeRunningLog.actual_in) {
-        // --- KRU SEDANG AKTIF BEKERJA (Bukan sudah pulang) ---
+        // --- KRU SEDANG AKTIF BEKERJA (Tombol Masuk Tetap Hijau / Berjalan) ---
         const inTime = new Date(activeRunningLog.actual_in);
-        const inTimeMs = inTime.getTime();
         let checkInHour = inTime.getHours();
 
         if (activeRunningLog.status_in && activeRunningLog.status_in.includes('Shift ')) {
@@ -727,7 +732,6 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
         const isShift22 = (checkInHour === 22);
         const targetHours = isShift22 ? 8 : 9;
 
-        // Kunci status aktif: Tombol Masuk hijau, Pulang & Break aktif
         setActiveLogId(activeRunningLog.id);
         setHasCheckedIn(true);
         setHasCheckedOut(false);
@@ -749,16 +753,16 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
           setBreakStartTime(null);
         }
       } else {
-        // --- TIDAK ADA SESI AKTIF ---
-        // Cek apakah kru baru saja absen pulang mandiri hari ini (dalam 3 jam terakhir dari waktu actual_out)
+        // --- TIDAK ADA SESI AKTIF (Hanya jika benar-benar sudah checkout normal) ---
         const recentCheckoutLog = userRecentLogs?.find(l => l.actual_out && String(l.actual_out).trim() !== '' && String(l.actual_out).toLowerCase() !== 'null');
         
         if (recentCheckoutLog) {
           const outTimeMs = new Date(recentCheckoutLog.actual_out).getTime();
-          const diffHours = (nowMs - outTimeMs) / (1000 * 60 * 60);
+          const inTimeMs = new Date(recentCheckoutLog.actual_in).getTime();
+          const diffHoursSinceIn = (nowMs - inTimeMs) / (1000 * 60 * 60);
 
-          // Hanya tandai "Sudah Pulang" jika checkout-nya benar-benar baru terjadi kurang dari 3 jam lalu
-          if (diffHours >= 0 && diffHours < 3) {
+          // Tandai "Sudah Pulang" jika checkout normal dan sudah lewat jamnya
+          if (diffHoursSinceIn >= 12 || (nowMs - outTimeMs >= 0 && (nowMs - outTimeMs) / 3600000 < 3)) {
             setActiveLogId(recentCheckoutLog.id);
             setHasCheckedIn(true);
             setHasCheckedOut(true);
@@ -1230,10 +1234,11 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
         const n = (b.name || '').toLowerCase();
         const c = (b.code || '').toUpperCase();
         return (
-          ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].includes(c) ||
+          ['7010', '7011', '7012', 'BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].includes(c) ||
+          n.includes('banjarmasin') ||
           n.includes('hasan basri') ||
-          n.includes('ahmad yani') ||
           n.includes('a yani') ||
+          n.includes('ahmad yani') ||
           n.includes('bali rejo') ||
           n.includes('pelaihari') ||
           n.includes('tanah laut') ||
@@ -3218,7 +3223,12 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
 
                 <optgroup label="📍 Resto Wilayah Kalsel 1">
                   {outletsList
-                    .filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code))))
+                    .filter(b => {
+                      const c = String(b.code || '').toUpperCase();
+                      const n = String(b.name || '').toLowerCase();
+                      return ['7010', '7011', '7012', 'BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].includes(c) ||
+                             /banjarmasin|ahmad yani|a yani|hasan basri|batu licin|batulicin|pelaihari|tanah bumbu/i.test(n);
+                    })
                     .map((branch) => (
                       <option key={branch.id} value={branch.id}>
                         {branch.name}
@@ -3228,7 +3238,13 @@ const kalselIds = outletsList.filter(b => ['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT
 
                 <optgroup label="📍 Resto Wilayah Kaltim">
                   {outletsList
-                    .filter(b => !['BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].some(code => (b.code === code || b.name?.includes(code))))
+                    .filter(b => {
+                      const c = String(b.code || '').toUpperCase();
+                      const n = String(b.name || '').toLowerCase();
+                      const isKalsel = ['7010', '7011', '7012', 'BJMHAS', 'BJMAHM', 'PLIBAL', 'BLNBAT', 'BLNPRO'].includes(c) ||
+                                       /banjarmasin|ahmad yani|a yani|hasan basri|batu licin|batulicin|pelaihari|tanah bumbu/i.test(n);
+                      return !isKalsel;
+                    })
                     .map((branch) => (
                       <option key={branch.id} value={branch.id}>
                         {branch.name}
