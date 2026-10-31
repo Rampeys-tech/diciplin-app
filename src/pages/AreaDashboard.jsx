@@ -301,6 +301,10 @@ export default function AreaDashboard() {
   const [selectedDevOutlet, setSelectedDevOutlet] = useState('ALL');
   const [selectedRegionFilter, setSelectedRegionFilter] = useState('ALL'); // 'ALL' | 'KALSEL_1' | 'KALTIM'
   const [selectedOpexOutlet, setSelectedOpexOutlet] = useState('ALL');
+  // State untuk jenis opex aktif: 'gas' | 'atk' | 'inv'
+  const [activeOpexCategory, setActiveOpexCategory] = useState('gas');
+  // State modal detail resto terpilih
+  const [selectedOpexRestoDetail, setSelectedOpexRestoDetail] = useState(null);
   const [rankingTab, setRankingTab] = useState('resto');
   // ➕ STATE FITUR SALES DARI SUPABASE
   const [selectedSalesOutlet, setSelectedSalesOutlet] = useState('ALL');
@@ -308,6 +312,8 @@ export default function AreaDashboard() {
   const [salesPeriodFilter, setSalesPeriodFilter] = useState('monthly');
   // Data real-time dari tabel sales_monthly_summary Supabase
   const [salesMonthlyDb, setSalesMonthlyDb] = useState([]);
+  // Data real-time controlling opex kalsel
+  const [opexKalselDb, setOpexKalselDb] = useState([]);
 
   // Controlling Equipment
   const [equipmentList, setEquipmentList] = useState(GENERATED_EQUIPMENT_DATA);
@@ -527,7 +533,8 @@ export default function AreaDashboard() {
         { data: dailyTplData },
         { data: dailySubData },
         { data: cacpLogsData },
-        { data: salesDbData }
+        { data: salesDbData },
+        { data: opexKalselRes }
       ] = await Promise.all([
         supabase.from('outlets').select('*').order('code', { ascending: true }),
         supabase.from('user_profiles').select('id, full_name, avatar, role, total_points, outlet_id, station_placement'),
@@ -540,8 +547,15 @@ export default function AreaDashboard() {
         supabase.from('daily_task_templates').select('*').eq('is_active', true),
         supabase.from('daily_task_submissions').select('*'),
         supabase.from('cacp_daily_logs').select('*'),
-        supabase.from('sales_monthly_summary').select('*')
+        supabase.from('sales_monthly_summary').select('*'),
+        supabase.from('opex_kalsel_controlling').select('*')
       ]);
+
+      if (opexKalselRes && opexKalselRes.length > 0) {
+        setOpexKalselDb(opexKalselRes);
+      } else {
+        setOpexKalselDb([]);
+      }
 
       if (salesDbData && salesDbData.length > 0) {
         // Filter periode dengan trim agar kebal spasi
@@ -626,6 +640,7 @@ export default function AreaDashboard() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cacp_daily_logs' }, () => loadMasterData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_task_submissions' }, () => loadMasterData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_monthly_summary' }, () => loadMasterData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'opex_kalsel_controlling' }, () => loadMasterData())
       .subscribe();
 
     return () => {
@@ -1623,6 +1638,151 @@ export default function AreaDashboard() {
       stores
     };
   }, [selectedMonth, salesMonthlyDb, currentProfile, isAM, selectedSalesOutlet]);
+  // KALKULASI OPEX KALSEL 1 (STRUKTUR MASTER 5 RESTO PERSIS DASHBOARD SALES)
+  const opexKalselMetrics = useMemo(() => {
+    const TARGET_GAS_PCT = 2.37;
+    const TARGET_ATK_PCT = 0.21;
+    const TARGET_INV_PCT = 0.75;
+    const TARGET_TOTAL_PCT = Number((TARGET_GAS_PCT + TARGET_ATK_PCT + TARGET_INV_PCT).toFixed(2)); // 3.33%
+
+    // 5 Master Toko Resmi Kalsel 1
+    const MASTER_KALSEL_1 = [
+      { code: 'BJMHAS', name: 'Gacoan Banjarmasin Hasan Basri' },
+      { code: 'BJMAHM', name: 'Gacoan Banjarmasin A Yani' },
+      { code: 'BLNBAT', name: 'Gacoan Tanahbumbu Raya Batu Licin' },
+      { code: 'BLNPRO', name: 'Gacoan Tanah Bumbu Propinsi' },
+      { code: 'PLIBAL', name: 'Gacoan Tanah Laut Bali Rejo' }
+    ];
+
+    // Filter per user/role & dropdown outlet
+    let targetStores = MASTER_KALSEL_1;
+    const myOutletObj = outlets.find(o => o.id === currentProfile?.outlet_id);
+    const myCode = (myOutletObj?.code || '').toUpperCase();
+
+    if (!isAM) {
+      targetStores = MASTER_KALSEL_1.filter(s => s.code === myCode);
+      if (targetStores.length === 0) targetStores = MASTER_KALSEL_1;
+    } else if (selectedOpexOutlet && selectedOpexOutlet !== 'ALL') {
+      targetStores = MASTER_KALSEL_1.filter(s => s.code === selectedOpexOutlet);
+    }
+
+    let sumSales = 0;
+    let sumActualTotal = 0;
+    let sumBudgetTotal = 0;
+    let sumGasActual = 0;
+    let sumGasBudget = 0;
+    let sumAtkActual = 0;
+    let sumAtkBudget = 0;
+    let sumInvActual = 0;
+    let sumInvBudget = 0;
+
+    const stores = targetStores.map(store => {
+      // Cari baris data dari database berdasarkan code atau kemiripan nama
+      const dbRow = (opexKalselDb || []).find(r => {
+        const rc = (r.outlet_code || '').toUpperCase().trim();
+        const rn = (r.outlet_name || '').toLowerCase();
+        return rc === store.code || rn.includes(store.name.toLowerCase().replace('gacoan ', ''));
+      });
+
+      const sales = Number(dbRow?.actual_sales) || 0;
+      const gasActual = Number(dbRow?.gas_actual_rp) || 0;
+      const atkActual = Number(dbRow?.atk_actual_rp) || 0;
+      const invActual = Number(dbRow?.inv_actual_rp) || 0;
+
+      const gasBudget = Math.round(sales * (TARGET_GAS_PCT / 100));
+      const atkBudget = Math.round(sales * (TARGET_ATK_PCT / 100));
+      const invBudget = Math.round(sales * (TARGET_INV_PCT / 100));
+
+      const totalActual = gasActual + atkActual + invActual;
+      const totalBudget = gasBudget + atkBudget + invBudget;
+      const sisaBudget = totalBudget - totalActual;
+      const pctUsed = sales > 0 ? Number(((totalActual / sales) * 100).toFixed(2)) : 0;
+
+      sumSales += sales;
+      sumActualTotal += totalActual;
+      sumBudgetTotal += totalBudget;
+
+      sumGasActual += gasActual;
+      sumGasBudget += gasBudget;
+      sumAtkActual += atkActual;
+      sumAtkBudget += atkBudget;
+      sumInvActual += invActual;
+      sumInvBudget += invBudget;
+
+      return {
+        id: dbRow?.id || store.code,
+        code: store.code,
+        name: store.name,
+        sales,
+        totalBudget,
+        totalActual,
+        sisaBudget,
+        pctUsed,
+        isOver: pctUsed > TARGET_TOTAL_PCT,
+        gas: {
+          actualRp: gasActual,
+          budgetRp: gasBudget,
+          sisaRp: gasBudget - gasActual,
+          actualPct: sales > 0 ? Number(((gasActual / sales) * 100).toFixed(2)) : 0,
+          targetPct: TARGET_GAS_PCT,
+          tabung: Number(dbRow?.gas_qty_tabung) || 0
+        },
+        atk: {
+          actualRp: atkActual,
+          budgetRp: atkBudget,
+          sisaRp: atkBudget - atkActual,
+          actualPct: sales > 0 ? Number(((atkActual / sales) * 100).toFixed(2)) : 0,
+          targetPct: TARGET_ATK_PCT
+        },
+        inv: {
+          actualRp: invActual,
+          budgetRp: invBudget,
+          sisaRp: invBudget - invActual,
+          actualPct: sales > 0 ? Number(((invActual / sales) * 100).toFixed(2)) : 0,
+          targetPct: TARGET_INV_PCT
+        }
+      };
+    });
+
+    const areaPctUsed = sumSales > 0 ? Number(((sumActualTotal / sumSales) * 100).toFixed(2)) : 0;
+    const areaGasPct = sumSales > 0 ? Number(((sumGasActual / sumSales) * 100).toFixed(2)) : 0;
+    const areaAtkPct = sumSales > 0 ? Number(((sumAtkActual / sumSales) * 100).toFixed(2)) : 0;
+    const areaInvPct = sumSales > 0 ? Number(((sumInvActual / sumSales) * 100).toFixed(2)) : 0;
+
+    return {
+      sumSales,
+      sumActualTotal,
+      sumBudgetTotal,
+      sumSisaTotal: sumBudgetTotal - sumActualTotal,
+      areaPctUsed,
+      targetTotalPct: TARGET_TOTAL_PCT,
+      gas: {
+        actualPct: areaGasPct,
+        actualRp: sumGasActual,
+        budgetRp: sumGasBudget,
+        sisaRp: sumGasBudget - sumGasActual,
+        targetPct: TARGET_GAS_PCT,
+        isOver: areaGasPct > TARGET_GAS_PCT
+      },
+      atk: {
+        actualPct: areaAtkPct,
+        actualRp: sumAtkActual,
+        budgetRp: sumAtkBudget,
+        sisaRp: sumAtkBudget - sumAtkActual,
+        targetPct: TARGET_ATK_PCT,
+        isOver: areaAtkPct > TARGET_ATK_PCT
+      },
+      inv: {
+        actualPct: areaInvPct,
+        actualRp: sumInvActual,
+        budgetRp: sumInvBudget,
+        sisaRp: sumInvBudget - sumInvActual,
+        targetPct: TARGET_INV_PCT,
+        isOver: areaInvPct > TARGET_INV_PCT
+      },
+      stores
+    };
+  }, [opexKalselDb, isAM, selectedOpexOutlet, currentProfile, outlets]);
   const outletScoreRankings = useMemo(() => {
     // Normalisasi format filter periode (ambil YYYY-MM baik saat memilih bulan maupun tanggal harian)
     const targetMonth = selectedMonth ? selectedMonth.substring(0, 7) : new Date().toISOString().substring(0, 7);
@@ -2458,118 +2618,185 @@ export default function AreaDashboard() {
               </div>
 
               {/* 2. OPEX GAS */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+              <div 
+                onClick={() => { setActiveOpexCategory('gas'); setActiveModal('opex_control'); }}
+                className="bg-white border border-slate-200/90 hover:border-amber-400 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer transition-all hover:shadow-md group active:scale-[0.99]"
+              >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-amber-600 transition-colors">
                       <FiZap className="text-amber-500 text-xs" /> Opex Gas
                     </span>
-                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
-                      probationMetrics.opexGas.actual <= probationMetrics.opexGas.target 
-                        ? 'bg-emerald-50 text-emerald-700' 
-                        : 'bg-rose-50 text-rose-700'
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${
+                      opexKalselMetrics.gas.isOver 
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200' 
+                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                     }`}>
-                      {probationMetrics.opexGas.actual <= probationMetrics.opexGas.target ? 'On-Track' : `Over +${(probationMetrics.opexGas.actual - probationMetrics.opexGas.target).toFixed(2)}%`}
+                      {opexKalselMetrics.gas.isOver ? `Over +${(opexKalselMetrics.gas.actualPct - opexKalselMetrics.gas.targetPct).toFixed(2)}%` : 'On-Track'}
                     </span>
                   </div>
+
                   <div className="flex items-baseline justify-between pt-1">
-                    <span className={`text-base font-black font-mono ${probationMetrics.opexGas.actual <= probationMetrics.opexGas.target ? 'text-emerald-700' : 'text-rose-600'}`}>
-                      {probationMetrics.opexGas.actual}%
+                    <span className={`text-base font-black font-mono ${opexKalselMetrics.gas.isOver ? 'text-rose-600' : 'text-slate-900'}`}>
+                      {opexKalselMetrics.gas.actualPct}%
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
-                      Maks: {probationMetrics.opexGas.target}%
+                      Maks: {opexKalselMetrics.gas.targetPct}%
                     </span>
                   </div>
+
                   <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
                     <div 
-                      className={`h-full rounded-full ${probationMetrics.opexGas.actual <= probationMetrics.opexGas.target ? 'bg-emerald-500' : 'bg-rose-500'}`} 
-                      style={{ width: `${Math.min(100, (probationMetrics.opexGas.actual / probationMetrics.opexGas.target) * 100)}%` }} 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        opexKalselMetrics.gas.isOver ? 'bg-rose-500' : 'bg-amber-500'
+                      }`} 
+                      style={{ width: `${Math.min(100, (opexKalselMetrics.gas.actualPct / (opexKalselMetrics.gas.targetPct || 1)) * 100)}%` }} 
                     />
+                  </div>
+
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono">
+                    <div>
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Realisasi</span>
+                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {opexKalselMetrics.gas.actualRp.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Budget</span>
+                      <span className={`font-black text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {opexKalselMetrics.gas.budgetRp.toLocaleString('id-ID')}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Jobdesk Project */}
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-[8px] font-black uppercase text-amber-600 block">Jobdesk Project:</span>
-                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
-                    Incoming Gas (Manager + Stocker), monitor produktivitas sales/tabung, DOT kompor.
-                  </p>
+                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 p-2 rounded-b-2xl flex items-center justify-between text-[8.5px]">
+                  <span className="text-slate-400 uppercase font-bold text-[7.5px]">Sisa Budget:</span>
+                  <span className={`font-mono font-black ${opexKalselMetrics.gas.sisaRp >= 0 ? 'text-emerald-700' : 'text-rose-600'} ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                    Rp {opexKalselMetrics.gas.sisaRp.toLocaleString('id-ID')}
+                  </span>
                 </div>
               </div>
 
               {/* 3. OPEX INVENTARIS */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+              <div 
+                onClick={() => { setActiveOpexCategory('inv'); setActiveModal('opex_control'); }}
+                className="bg-white border border-slate-200/90 hover:border-blue-400 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer transition-all hover:shadow-md group active:scale-[0.99]"
+              >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-blue-600 transition-colors">
                       <FiTool className="text-blue-600 text-xs" /> Opex Inventaris
                     </span>
-                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
-                      probationMetrics.opexInventaris.actual <= probationMetrics.opexInventaris.target 
-                        ? 'bg-emerald-50 text-emerald-700' 
-                        : 'bg-rose-50 text-rose-700'
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${
+                      opexKalselMetrics.inv.isOver 
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200' 
+                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                     }`}>
-                      {probationMetrics.opexInventaris.actual <= probationMetrics.opexInventaris.target ? 'Aman' : `Over +${(probationMetrics.opexInventaris.actual - probationMetrics.opexInventaris.target).toFixed(2)}%`}
+                      {opexKalselMetrics.inv.isOver ? `Over +${(opexKalselMetrics.inv.actualPct - opexKalselMetrics.inv.targetPct).toFixed(2)}%` : 'Aman'}
                     </span>
                   </div>
+
                   <div className="flex items-baseline justify-between pt-1">
-                    <span className="text-base font-black font-mono text-slate-900">
-                      {probationMetrics.opexInventaris.actual}%
+                    <span className={`text-base font-black font-mono ${opexKalselMetrics.inv.isOver ? 'text-rose-600' : 'text-slate-900'}`}>
+                      {opexKalselMetrics.inv.actualPct}%
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
-                      Maks: {probationMetrics.opexInventaris.target}%
+                      Maks: {opexKalselMetrics.inv.targetPct}%
                     </span>
                   </div>
+
                   <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
                     <div 
-                      className="h-full bg-blue-600 rounded-full" 
-                      style={{ width: `${Math.min(100, (probationMetrics.opexInventaris.actual / probationMetrics.opexInventaris.target) * 100)}%` }} 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        opexKalselMetrics.inv.isOver ? 'bg-rose-500' : 'bg-blue-600'
+                      }`} 
+                      style={{ width: `${Math.min(100, (opexKalselMetrics.inv.actualPct / (opexKalselMetrics.inv.targetPct || 1)) * 100)}%` }} 
                     />
+                  </div>
+
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono">
+                    <div>
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Realisasi</span>
+                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {opexKalselMetrics.inv.actualRp.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Budget</span>
+                      <span className={`font-black text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {opexKalselMetrics.inv.budgetRp.toLocaleString('id-ID')}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Jobdesk Project */}
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-[8px] font-black uppercase text-blue-600 block">Jobdesk Project:</span>
-                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
-                    Project Log Book TPS, Manager IC wajib catat alat rusak/pecah harian.
-                  </p>
+                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 p-2 rounded-b-2xl flex items-center justify-between text-[8.5px]">
+                  <span className="text-slate-400 uppercase font-bold text-[7.5px]">Sisa Budget:</span>
+                  <span className={`font-mono font-black ${opexKalselMetrics.inv.sisaRp >= 0 ? 'text-emerald-700' : 'text-rose-600'} ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                    Rp {opexKalselMetrics.inv.sisaRp.toLocaleString('id-ID')}
+                  </span>
                 </div>
               </div>
 
               {/* 4. OPEX ATK */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+              <div 
+                onClick={() => { setActiveOpexCategory('atk'); setActiveModal('opex_control'); }}
+                className="bg-white border border-slate-200/90 hover:border-purple-400 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer transition-all hover:shadow-md group active:scale-[0.99]"
+              >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-purple-600 transition-colors">
                       <FiFileText className="text-purple-600 text-xs" /> Opex ATK
                     </span>
-                    <span className="text-[8px] font-black px-1.5 py-0.2 rounded-md bg-purple-50 text-purple-700">
-                      ±0.21%
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${
+                      opexKalselMetrics.atk.isOver 
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200' 
+                        : 'bg-purple-50 text-purple-700 border border-purple-200'
+                    }`}>
+                      ±{opexKalselMetrics.atk.targetPct}%
                     </span>
                   </div>
+
                   <div className="flex items-baseline justify-between pt-1">
-                    <span className="text-base font-black font-mono text-slate-900">
-                      {probationMetrics.opexOfficeSupply.actual}%
+                    <span className={`text-base font-black font-mono ${opexKalselMetrics.atk.isOver ? 'text-rose-600' : 'text-slate-900'}`}>
+                      {opexKalselMetrics.atk.actualPct}%
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
-                      Target: {probationMetrics.opexOfficeSupply.target}%
+                      Target: {opexKalselMetrics.atk.targetPct}%
                     </span>
                   </div>
+
                   <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
                     <div 
-                      className="h-full bg-purple-600 rounded-full" 
-                      style={{ width: `${Math.min(100, (probationMetrics.opexOfficeSupply.actual / probationMetrics.opexOfficeSupply.target) * 100)}%` }} 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        opexKalselMetrics.atk.isOver ? 'bg-rose-500' : 'bg-purple-600'
+                      }`} 
+                      style={{ width: `${Math.min(100, (opexKalselMetrics.atk.actualPct / (opexKalselMetrics.atk.targetPct || 1)) * 100)}%` }} 
                     />
+                  </div>
+
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono">
+                    <div>
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Realisasi</span>
+                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {opexKalselMetrics.atk.actualRp.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Budget</span>
+                      <span className={`font-black text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {opexKalselMetrics.atk.budgetRp.toLocaleString('id-ID')}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Jobdesk Project */}
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-[8px] font-black uppercase text-purple-600 block">Jobdesk Project:</span>
-                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
-                    Digitalisasi form QC & Stocker, sosialisasi bayar via ESB Digital.
-                  </p>
+                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 p-2 rounded-b-2xl flex items-center justify-between text-[8.5px]">
+                  <span className="text-slate-400 uppercase font-bold text-[7.5px]">Sisa Budget:</span>
+                  <span className={`font-mono font-black ${opexKalselMetrics.atk.sisaRp >= 0 ? 'text-emerald-700' : 'text-rose-600'} ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                    Rp {opexKalselMetrics.atk.sisaRp.toLocaleString('id-ID')}
+                  </span>
                 </div>
               </div>
 
@@ -3014,278 +3241,421 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* MODAL OPEX */}
-        {activeModal === 'opex_control' && (
-          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
-            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[94vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
-              
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <div className="flex items-center gap-2">
-                  <span className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-xs font-black shadow-xs">
-                    <FiDollarSign />
-                  </span>
-                  <div>
-                    <h3 className="text-sm font-black text-slate-900">Controlling Budget OPEX</h3>
-                    <p className="text-[10px] text-slate-400 font-medium">Monitoring Anggaran & Pos Pengeluaran Kritis</p>
+        {/* ========================================================================= */}
+        {/* ➕ MODAL CONTROLLING OPEX (MURNI TUNGGAL SESUAI KATEGORI YANG DIKLIK)     */}
+        {/* ========================================================================= */}
+        {activeModal === 'opex_control' && (() => {
+          // Konfigurasi murni mandiri per fitur (tanpa tab saklar gabungan)
+          const catConfig = {
+            gas: {
+              title: 'Opex Gas LPG',
+              badgeLabel: 'GAS LPG',
+              icon: <FiZap className="text-amber-500" />,
+              badgeBg: 'bg-amber-50 text-amber-800 border-amber-200',
+              bannerGradient: 'from-slate-950 via-slate-900 to-amber-950',
+              bannerBorder: 'border-amber-500/30',
+              accentColor: 'text-amber-400',
+              barColor: 'bg-amber-500',
+              targetPct: 2.37,
+              targetLabel: '2.37%'
+            },
+            atk: {
+              title: 'Opex ATK & Kantor',
+              badgeLabel: 'ATK',
+              icon: <FiFileText className="text-purple-600" />,
+              badgeBg: 'bg-purple-50 text-purple-800 border-purple-200',
+              bannerGradient: 'from-slate-950 via-slate-900 to-purple-950',
+              bannerBorder: 'border-purple-500/30',
+              accentColor: 'text-purple-400',
+              barColor: 'bg-purple-600',
+              targetPct: 0.21,
+              targetLabel: '0.21%'
+            },
+            inv: {
+              title: 'Opex Inventaris',
+              badgeLabel: 'INVENTARIS',
+              icon: <FiTool className="text-blue-600" />,
+              badgeBg: 'bg-blue-50 text-blue-800 border-blue-200',
+              bannerGradient: 'from-slate-950 via-slate-900 to-blue-950',
+              bannerBorder: 'border-blue-500/30',
+              accentColor: 'text-blue-400',
+              barColor: 'bg-blue-600',
+              targetPct: 0.75,
+              targetLabel: '0.75%'
+            }
+          }[activeOpexCategory] || {
+            title: 'Opex Gas LPG',
+            badgeLabel: 'GAS LPG',
+            icon: <FiZap className="text-amber-500" />,
+            bannerGradient: 'from-slate-950 via-slate-900 to-amber-950',
+            bannerBorder: 'border-amber-500/30',
+            accentColor: 'text-amber-400',
+            barColor: 'bg-amber-500',
+            targetPct: 2.37,
+            targetLabel: '2.37%'
+          };
+
+          // Filter baris data murni hanya untuk kategori aktif ini
+          const storeRows = (opexKalselMetrics.stores || []).map(st => {
+            const currentCat = st[activeOpexCategory] || { actualRp: 0, budgetRp: 0, sisaRp: 0, actualPct: 0 };
+            const isOver = currentCat.actualPct > catConfig.targetPct;
+            return {
+              ...st,
+              itemActual: currentCat.actualRp,
+              itemBudget: currentCat.budgetRp,
+              itemSisa: currentCat.sisaRp,
+              itemPct: currentCat.actualPct,
+              itemTabung: currentCat.tabung || 0,
+              isItemOver: isOver
+            };
+          });
+
+          // Kalkulasi murni total area hanya untuk kategori ini
+          const totalSalesArea = storeRows.reduce((a, b) => a + (b.sales || 0), 0);
+          const totalActualArea = storeRows.reduce((a, b) => a + (b.itemActual || 0), 0);
+          const totalBudgetArea = Math.round(totalSalesArea * (catConfig.targetPct / 100));
+          const totalSisaArea = totalBudgetArea - totalActualArea;
+          const areaPctUsed = totalSalesArea > 0 ? Number(((totalActualArea / totalSalesArea) * 100).toFixed(2)) : 0;
+          const isAreaOver = areaPctUsed > catConfig.targetPct;
+
+          return (
+            <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
+                
+                {/* Header Modal */}
+                <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-white shadow-2xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-9 h-9 rounded-2xl bg-slate-900 text-white flex items-center justify-center text-sm font-black shadow-xs">
+                      {catConfig.icon}
+                    </span>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 tracking-tight">{catConfig.title}</h3>
+                      <p className="text-[10px] text-slate-400 font-medium">Monitoring Anggaran • 5 Resto Kalsel 1</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setActiveModal(null)}
+                    className="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
+                  >
+                    <FiX className="text-sm" />
+                  </button>
+                </div>
+
+                {/* Periode Evaluasi */}
+                <div className="px-4 py-2.5 bg-white border-b border-slate-100 flex items-center justify-between gap-2 shadow-2xs">
+                  <span className="text-[10px] font-black uppercase text-slate-500">Periode Evaluasi:</span>
+                  <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-xl">
+                    <FiCalendar className="text-slate-700 text-xs" />
+                    <input
+                      type="month"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      className="bg-transparent text-[10px] font-black text-slate-800 outline-none cursor-pointer w-20"
+                    />
                   </div>
                 </div>
-                <button 
-                  onClick={() => setActiveModal(null)}
-                  className="p-2 bg-white hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
-                >
-                  <FiX className="text-sm" />
-                </button>
-              </div>
 
-              <div className="p-3 bg-emerald-50/70 border-b border-emerald-100 flex items-center justify-between gap-2">
-                <div>
-                  <span className="text-xs font-black text-emerald-950 block">Database Spreadsheet RM</span>
-                  <span className="text-[10px] text-emerald-700">Sumber data real-time OPEX Kaltim</span>
-                </div>
-                <a
-                  href={OPEX_SPREADSHEET_URL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer"
-                >
-                  <span>Buka Sheet</span>
-                  <FiExternalLink className="text-xs" />
-                </a>
-              </div>
-
-              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-2">
-                <span className="text-[10px] font-black uppercase text-slate-400">Filter Resto:</span>
-                <select
-                  value={selectedOpexOutlet}
-                  onChange={(e) => setSelectedOpexOutlet(e.target.value)}
-                  className="text-xs font-bold bg-white border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer shadow-2xs flex-1 max-w-[220px]"
-                >
-                  <option value="ALL">📊 Semua Cabang (Executive View)</option>
-                  {opexList.map(o => (
-                    <option key={o.outletCode} value={o.outletCode}>{o.outletName}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="p-4 overflow-y-auto space-y-4">
-                {selectedOpexOutlet === 'ALL' && (
-                  <div className="space-y-3">
-                    <div className="bg-gradient-to-br from-slate-900 via-emerald-950 to-slate-900 p-5 rounded-3xl text-white shadow-lg relative overflow-hidden border border-emerald-500/20">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
-                          <FiLayers /> Total Anggaran OPEX Area Kaltim
-                        </span>
-                        <span className="text-[9px] font-mono font-bold bg-emerald-500/30 text-emerald-200 px-2 py-0.5 rounded-full">
-                          {selectedMonth}
-                        </span>
-                      </div>
-
-                      <div className="mt-4 flex items-baseline justify-between">
-                        <div>
-                          <span className="text-[9px] text-slate-400 block uppercase">Total Realisasi</span>
-                          <p className="text-xl font-black font-mono text-white mt-0.5">
-                            Rp {totalOpexRegional.sumActual.toLocaleString('id-ID')}
-                          </p>
-                          <p className="text-[10px] text-slate-300 font-mono">
-                            dari pagu Rp {totalOpexRegional.sumBudget.toLocaleString('id-ID')}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-3xl font-black font-mono text-emerald-400 block">
-                            {totalOpexRegional.avgPercent}%
-                          </span>
-                          <span className="text-[9px] text-slate-300 font-medium">Realisasi Regional</span>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 h-2.5 w-full bg-white/10 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-500 ${
-                            totalOpexRegional.avgPercent > 100 ? 'bg-rose-500' :
-                            totalOpexRegional.avgPercent > 80 ? 'bg-amber-400' : 'bg-emerald-400'
-                          }`}
-                          style={{ width: `${Math.min(100, totalOpexRegional.avgPercent)}%` }}
-                        />
-                      </div>
-
-                      <div className="mt-3 pt-2.5 border-t border-white/10 flex justify-between text-[10px] font-mono text-slate-300">
-                        <span>Total Sisa Kuota OPEX:</span>
-                        <span className="font-bold text-emerald-300">
-                          Rp {totalOpexRegional.sumSisa.toLocaleString('id-ID')}
-                        </span>
-                      </div>
-                    </div>
+                {/* Dropdown Filter Resto */}
+                {isAM && (
+                  <div className="px-4 py-2 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-black uppercase text-slate-500">Filter Resto:</span>
+                    <select
+                      value={selectedOpexOutlet}
+                      onChange={(e) => setSelectedOpexOutlet(e.target.value)}
+                      className="text-xs font-bold bg-white border border-slate-200 text-slate-800 rounded-xl px-2.5 py-1.5 outline-none cursor-pointer shadow-2xs flex-1 max-w-[240px]"
+                    >
+                      <option value="ALL">🌐 Semua 5 Resto (Kalsel 1)</option>
+                      <option value="BJMHAS">Gacoan Banjarmasin Hasan Basri</option>
+                      <option value="BJMAHM">Gacoan Banjarmasin A Yani</option>
+                      <option value="BLNBAT">Gacoan Tanahbumbu Raya Batu Licin</option>
+                      <option value="BLNPRO">Gacoan Tanah Bumbu Propinsi</option>
+                      <option value="PLIBAL">Gacoan Tanah Laut Bali Rejo</option>
+                    </select>
                   </div>
                 )}
 
-                <div className="space-y-3">
-                  <span className="text-[10px] font-black uppercase text-slate-400 px-1 block">
-                    {selectedOpexOutlet === 'ALL' ? 'Kartu Kontrol OPEX Resto' : 'Rincian Resto Terpilih'}
-                  </span>
+                {/* Scrollable Body */}
+                <div className="p-4 overflow-y-auto space-y-4">
+                  
+                  {/* Banner Utama Murni Kategori Ini */}
+                  <div className={`bg-gradient-to-br ${catConfig.bannerGradient} text-white p-5 rounded-3xl shadow-xl border ${catConfig.bannerBorder} space-y-3`}>
+                    <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">
+                        {isAM && selectedOpexOutlet === 'ALL' ? `Total ${catConfig.title} Area Kalsel 1` : `Target ${catConfig.title}`}
+                      </span>
+                      <span className="text-[9px] font-mono font-bold bg-white/10 text-slate-300 px-2 py-0.5 rounded-full">
+                        Pagu Maks: {catConfig.targetLabel}
+                      </span>
+                    </div>
 
-                  {opexList
-                    .filter(item => selectedOpexOutlet === 'ALL' || item.outletCode === selectedOpexOutlet)
-                    .map(item => {
-                      const isOverbudget = item.percent_used > 100;
-                      const cat = item.categories || {};
-                      const util = cat.utilities || {};
-                      const utilItems = util.items || {};
-                      const ops = cat.operational_supply || {};
-                      const off = cat.office_supply || {};
-                      const maint = cat.maintenance || {};
+                    <div className="flex items-baseline justify-between pt-1">
+                      <div>
+                        <span className="text-[9px] text-slate-400 block uppercase">Realisasi Pemakaian</span>
+                        <p className={`text-2xl font-black font-mono text-white mt-0.5 tracking-tight ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                          Rp {totalActualArea.toLocaleString('id-ID')}
+                        </p>
+                        <p className={`text-[10px] text-slate-300 font-mono mt-0.5 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                          Pagu Budget: Rp {totalBudgetArea.toLocaleString('id-ID')}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className={`text-3xl font-black font-mono ${isAreaOver ? 'text-rose-400' : catConfig.accentColor}`}>
+                          {areaPctUsed}%
+                        </span>
+                        <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded-full inline-block mt-0.5 ${
+                          isAreaOver ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        }`}>
+                          {isAreaOver ? 'Overbudget' : 'On-Track'}
+                        </span>
+                      </div>
+                    </div>
 
-                      const opsPct = ops.budget_rp > 0 ? ((ops.actual_rp / ops.budget_rp) * 100).toFixed(1) : 0;
-                      const offPct = off.budget_rp > 0 ? ((off.actual_rp / off.budget_rp) * 100).toFixed(1) : 0;
-                      const maintPct = maint.budget_rp > 0 ? ((maint.actual_rp / maint.budget_rp) * 100).toFixed(1) : 0;
+                    {/* Progress Bar */}
+                    <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-500 ${isAreaOver ? 'bg-rose-500' : catConfig.barColor}`}
+                        style={{ width: `${Math.min(100, (areaPctUsed / (catConfig.targetPct || 1)) * 100)}%` }}
+                      />
+                    </div>
 
-                      return (
-                        <div key={item.outletCode} className="p-4 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-3">
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
-                                  {item.outletCode}
-                                </span>
-                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
-                                  isOverbudget ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
-                                }`}>
-                                  {isOverbudget ? 'OVERBUDGET' : 'ON-BUDGET'}
-                                </span>
-                              </div>
-                              <h4 className="text-xs font-black text-slate-900 mt-1">{item.outletName}</h4>
-                              <p className="text-[10px] text-slate-400 font-mono">Actual Sales: Rp {item.actual_sales.toLocaleString('id-ID')}</p>
-                            </div>
-                            <div className="text-right">
-                              <span className="text-[9px] text-slate-400 uppercase block">Sisa Kuota</span>
-                              <span className="text-xs font-mono font-black text-emerald-600">
-                                Rp {item.sisa_budget.toLocaleString('id-ID')}
+                    <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[10px] font-mono">
+                      <span className="text-[8px] text-slate-400 uppercase font-sans">Sisa Kuota Budget:</span>
+                      <span className={`font-black ${totalSisaArea >= 0 ? 'text-emerald-300' : 'text-rose-300'} ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {totalSisaArea.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Daftar Resto Per Gerai (Bisa Diklik Masuk ke Rincian) */}
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                        {isAM ? 'Rincian Per Outlet Kalsel 1' : 'Outlet Anda'}
+                      </span>
+                      <span className="text-[9px] font-bold text-indigo-600">
+                        Klik gerai untuk rincian ↗
+                      </span>
+                    </div>
+
+                    {storeRows.map((resto) => (
+                      <div 
+                        key={resto.code}
+                        onClick={() => setSelectedOpexRestoDetail(resto)}
+                        className="p-4 bg-white border border-slate-200 hover:border-indigo-400 rounded-3xl shadow-2xs space-y-3 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] group"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
+                                {resto.code}
                               </span>
+                              <span className={`text-[8px] font-black uppercase px-1.5 py-0.2 rounded-md ${
+                                resto.isItemOver ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {resto.isItemOver ? 'OVERBUDGET' : 'ON-BUDGET'}
+                              </span>
+                            </div>
+                            <h4 className="text-xs font-black text-slate-900 mt-1">{resto.name}</h4>
+                            <div className={`mt-0.5 text-[10px] font-mono text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                              Rp {resto.itemActual.toLocaleString('id-ID')} <span className="text-slate-400 font-sans">/</span> Rp {resto.itemBudget.toLocaleString('id-ID')}
                             </div>
                           </div>
 
-                          <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full rounded-full transition-all duration-500 ${
-                                isOverbudget ? 'bg-rose-500' : item.percent_used > 80 ? 'bg-amber-500' : 'bg-emerald-500'
-                              }`} 
-                              style={{ width: `${Math.min(100, item.percent_used)}%` }}
-                            />
-                          </div>
-
-                          {/* 3 BEBAN UTILITIES */}
-                          <div className="p-3 bg-slate-50/80 border border-slate-200/80 rounded-xl space-y-2.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-black uppercase text-indigo-900 flex items-center gap-1">
-                                <FiZap className="text-amber-500" /> Kontrol Utama 3 Beban Utilities
-                              </span>
-                              <span className="text-[9px] font-mono font-bold text-slate-500">
-                                Total: Rp {(util.actual_rp || 0).toLocaleString('id-ID')}
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-2 text-left font-mono">
-                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
-                                <span className="text-[8px] font-sans font-black text-slate-400 uppercase block">⚡ Listrik</span>
-                                <p className="text-xs font-black text-slate-800 mt-0.5">
-                                  Rp {(utilItems.listrik?.actual_rp || 0).toLocaleString('id-ID')}
-                                </p>
-                                <span className="text-[8px] text-emerald-600 block mt-0.5">
-                                  Sisa: Rp {(utilItems.listrik?.sisa_rp || 0).toLocaleString('id-ID')}
-                                </span>
-                              </div>
-
-                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
-                                <span className="text-[8px] font-sans font-black text-slate-400 uppercase block">🔥 Gas LPG</span>
-                                <p className="text-xs font-black text-slate-800 mt-0.5">
-                                  Rp {(utilItems.gas?.actual_rp || 0).toLocaleString('id-ID')}
-                                </p>
-                                <span className="text-[8px] text-emerald-600 block mt-0.5">
-                                  Sisa: Rp {(utilItems.gas?.sisa_rp || 0).toLocaleString('id-ID')}
-                                </span>
-                              </div>
-
-                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
-                                <span className="text-[8px] font-sans font-black text-slate-400 uppercase block">💧 Air PDAM</span>
-                                <p className="text-xs font-black text-slate-800 mt-0.5">
-                                  Rp {(utilItems.air?.actual_rp || 0).toLocaleString('id-ID')}
-                                </p>
-                                <span className="text-[8px] text-emerald-600 block mt-0.5">
-                                  Sisa: Rp {(utilItems.air?.sisa_rp || 0).toLocaleString('id-ID')}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* POS OPEX LAINNYA */}
-                          <div className="p-3 bg-slate-50/80 border border-slate-200/80 rounded-xl space-y-2.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-black uppercase text-emerald-900 flex items-center gap-1">
-                                <FiLayers className="text-emerald-600" /> Beban Operasional Lainnya
-                              </span>
-                              <span className="text-[9px] font-mono font-bold text-slate-500">
-                                Total: Rp {((ops.actual_rp || 0) + (off.actual_rp || 0) + (maint.actual_rp || 0)).toLocaleString('id-ID')}
-                              </span>
-                            </div>
-
-                            <div className="grid grid-cols-3 gap-2 text-left font-mono">
-                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[8px] font-sans font-black text-slate-400 uppercase">Ops Supply</span>
-                                  <span className={`text-[8px] font-black px-1 rounded ${Number(opsPct) > 100 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{opsPct}%</span>
-                                </div>
-                                <p className="text-xs font-black text-slate-800 mt-0.5">
-                                  Rp {(ops.actual_rp || 0).toLocaleString('id-ID')}
-                                </p>
-                                <span className="text-[8px] text-emerald-600 block mt-0.5">
-                                  Sisa: Rp {(ops.sisa_rp || 0).toLocaleString('id-ID')}
-                                </span>
-                              </div>
-
-                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[8px] font-sans font-black text-slate-400 uppercase">ATK & Kantor</span>
-                                  <span className={`text-[8px] font-black px-1 rounded ${Number(offPct) > 100 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{offPct}%</span>
-                                </div>
-                                <p className="text-xs font-black text-slate-800 mt-0.5">
-                                  Rp {(off.actual_rp || 0).toLocaleString('id-ID')}
-                                </p>
-                                <span className="text-[8px] text-emerald-600 block mt-0.5">
-                                  Sisa: Rp {(off.sisa_rp || 0).toLocaleString('id-ID')}
-                                </span>
-                              </div>
-
-                              <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-2xs">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[8px] font-sans font-black text-slate-400 uppercase">Inventaris</span>
-                                  <span className={`text-[8px] font-black px-1 rounded ${Number(maintPct) > 100 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>{maintPct}%</span>
-                                </div>
-                                <p className="text-xs font-black text-slate-800 mt-0.5">
-                                  Rp {(maint.actual_rp || 0).toLocaleString('id-ID')}
-                                </p>
-                                <span className="text-[8px] text-emerald-600 block mt-0.5">
-                                  Sisa: Rp {(maint.sisa_rp || 0).toLocaleString('id-ID')}
-                                </span>
-                              </div>
-                            </div>
+                          <div className="text-right">
+                            <span className={`text-base font-black font-mono ${resto.isItemOver ? 'text-rose-600' : 'text-slate-900'}`}>
+                              {resto.itemPct}%
+                            </span>
+                            <span className="text-[8px] text-slate-400 block font-sans">
+                              Maks: {catConfig.targetLabel}
+                            </span>
                           </div>
                         </div>
-                      );
-                    })}
+
+                        {/* Progress Bar Resto */}
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              resto.isItemOver ? 'bg-rose-500' : catConfig.barColor
+                            }`}
+                            style={{ width: `${Math.min(100, (resto.itemPct / (catConfig.targetPct || 1)) * 100)}%` }}
+                          />
+                        </div>
+
+                        {/* Detail Sisa Kuota Resto */}
+                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-100 text-[10px] font-mono bg-slate-50 -mx-4 -mb-4 p-3 rounded-b-3xl">
+                          <div>
+                            <span className="text-[8px] font-bold text-slate-400 uppercase font-sans block">Sisa Kuota</span>
+                            <span className={`font-black ${resto.itemSisa >= 0 ? 'text-emerald-700' : 'text-rose-600'} ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                              Rp {resto.itemSisa.toLocaleString('id-ID')}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[8px] font-bold text-slate-400 uppercase font-sans block">
+                              {activeOpexCategory === 'gas' && resto.itemTabung > 0 ? 'Pemakaian Tabung' : 'Penjualan Resto'}
+                            </span>
+                            <span className={`font-black text-slate-700 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                              {activeOpexCategory === 'gas' && resto.itemTabung > 0 ? `${resto.itemTabung} Tabung` : `Rp ${resto.sales.toLocaleString('id-ID')}`}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                </div>
+
+                {/* Footer Modal */}
+                <div className="p-3 border-t border-slate-200 bg-white">
+                  <button
+                    onClick={() => setActiveModal(null)}
+                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    Tutup Modul {catConfig.title}
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ========================================================================= */}
+        {/* ➕ MODAL DETAIL OPEX RESTO (OVERVIEW LENGKAP KETIKA RESTO DIKLIK)         */}
+        {/* ========================================================================= */}
+        {selectedOpexRestoDetail && (() => {
+          const r = selectedOpexRestoDetail;
+          const currentCat = r[activeOpexCategory] || {};
+          const isOver = currentCat.actualPct > currentCat.targetPct;
+
+          return (
+            <div className="fixed inset-0 z-[60] bg-slate-950/85 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in zoom-in-95 duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md max-h-[90vh] rounded-[2.5rem] flex flex-col shadow-2xl border border-slate-200/90 overflow-hidden">
+                
+                {/* Header Detail */}
+                <div className="px-6 py-4 border-b border-slate-200/70 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-10">
+                  <div className="min-w-0 pr-2">
+                    <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 block">
+                      Executive Store OPEX Overview
+                    </span>
+                    <h4 className="text-sm font-black text-slate-900 truncate mt-0.5 tracking-tight">
+                      {r.name}
+                    </h4>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setSelectedOpexRestoDetail(null)}
+                    className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-full transition-all cursor-pointer shadow-2xs hover:rotate-90 duration-200"
+                  >
+                    <FiX className="text-sm" />
+                  </button>
+                </div>
+
+                {/* Body Content */}
+                <div className="p-5 overflow-y-auto space-y-4 text-xs">
+                  
+                  {/* Hero Card Biaya */}
+                  <div className="p-5 bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 text-white rounded-3xl space-y-4 shadow-xl border border-emerald-500/30 relative overflow-hidden">
+                    <div className="flex justify-between items-start relative z-10">
+                      <div>
+                        <span className="text-[9px] text-slate-400 uppercase font-black tracking-widest block">
+                          Realisasi Belanja {activeOpexCategory.toUpperCase()}
+                        </span>
+                        <p className={`text-2xl font-black font-mono mt-1 tracking-tight text-white ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                          Rp {currentCat.actualRp?.toLocaleString('id-ID')}
+                        </p>
+                        <p className={`text-[11px] text-slate-400 font-mono mt-0.5 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                          Pagu Budget: Rp {currentCat.budgetRp?.toLocaleString('id-ID')}
+                        </p>
+                      </div>
+
+                      <div className="text-right">
+                        <span className={`text-3xl font-black font-mono tracking-tight block ${isOver ? 'text-rose-400' : 'text-emerald-400'}`}>
+                          {currentCat.actualPct}%
+                        </span>
+                        <span className={`text-[8.5px] font-black uppercase px-2 py-0.5 rounded-full inline-block mt-0.5 ${
+                          isOver ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        }`}>
+                          {isOver ? 'Overbudget' : 'On-Budget'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden relative z-10 shadow-inner">
+                      <div 
+                        className={`h-full rounded-full transition-all duration-700 ${isOver ? 'bg-rose-500' : 'bg-emerald-400'}`}
+                        style={{ width: `${Math.min(100, (currentCat.actualPct / (currentCat.targetPct || 1)) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Kartu Rincian Nominal */}
+                  <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-xs space-y-2.5 text-[11px] font-mono">
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                      <span className="text-slate-500 font-sans font-bold">Total Penjualan Gerai:</span>
+                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {r.sales?.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                      <span className="text-slate-500 font-sans font-bold">Target Pagu Standar:</span>
+                      <span className="font-black text-slate-700 font-sans">
+                        Maksimal {currentCat.targetPct}% dari Sales
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                      <span className="text-slate-500 font-sans font-bold">Sisa Budget Tersisa:</span>
+                      <span className={`font-black ${currentCat.sisaRp >= 0 ? 'text-emerald-700' : 'text-rose-600'} ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {currentCat.sisaRp?.toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                    {activeOpexCategory === 'gas' && currentCat.tabung > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500 font-sans font-bold">Total Pemakaian Fisik:</span>
+                        <span className="font-black text-amber-700">
+                          {currentCat.tabung} Tabung LPG
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Rincian Pos OPEX Lain di Gerai Ini */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                    <span className="text-[9.5px] font-black uppercase text-slate-500 tracking-wider block">
+                      Pembanding Pos OPEX Lainnya di {r.code}:
+                    </span>
+                    <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-mono">
+                      <div className="p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[8px] font-sans text-slate-400 uppercase block">🔥 Gas</span>
+                        <p className="font-black text-slate-800 mt-0.5">{r.gas?.actualPct}%</p>
+                        <span className="text-[8px] text-slate-400">Pagu {r.gas?.targetPct}%</span>
+                      </div>
+                      <div className="p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[8px] font-sans text-slate-400 uppercase block">📄 ATK</span>
+                        <p className="font-black text-slate-800 mt-0.5">{r.atk?.actualPct}%</p>
+                        <span className="text-[8px] text-slate-400">Pagu {r.atk?.targetPct}%</span>
+                      </div>
+                      <div className="p-2 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-[8px] font-sans text-slate-400 uppercase block">🛠️ Inv</span>
+                        <p className="font-black text-slate-800 mt-0.5">{r.inv?.actualPct}%</p>
+                        <span className="text-[8px] text-slate-400">Pagu {r.inv?.targetPct}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tombol Tutup */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOpexRestoDetail(null)}
+                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl text-xs font-black cursor-pointer shadow-md transition-colors"
+                  >
+                    Tutup Rincian Gerai
+                  </button>
+
                 </div>
               </div>
-
-              <div className="p-3 border-t border-slate-100 bg-slate-50">
-                <button
-                  onClick={() => setActiveModal(null)}
-                  className="w-full py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800 transition-colors"
-                >
-                  Tutup Modul OPEX
-                </button>
-              </div>
-
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* MODAL ATUR RUMUS GRAMASI */}
         {activeModal === 'recipe_settings' && (

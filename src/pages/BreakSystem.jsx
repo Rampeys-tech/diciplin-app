@@ -687,27 +687,30 @@ export default function BreakSystem() {
       // 1. Ambil seluruh log user dalam 24 jam terakhir
       const { data: userRecentLogs } = await supabase
         .from('attendance_logs')
-        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, created_at')
+        .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, status_out, created_at')
         .eq('user_id', user.id)
         .gte('actual_in', past24Hours)
         .order('actual_in', { ascending: false })
         .limit(10);
 
-      // 1. Cari apakah ada sesi yang BENAR-BENAR aktif (belum checkout ATAU checkout palsu di masa depan padahal belum lewat 12 jam)
+      // 1. Cari apakah ada sesi yang BENAR-BENAR aktif
       const activeRunningLog = userRecentLogs?.find(l => {
         if (!l.actual_in) return false;
         const inTimeMs = new Date(l.actual_in).getTime();
         const diffHoursSinceIn = (nowMs - inTimeMs) / (1000 * 60 * 60);
 
-        // Jika belum ada actual_out
+        // Jika belum ada actual_out sama sekali -> PASTI MASIH AKTIF
         if (!l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null') {
           return true;
         }
 
         const outTimeMs = new Date(l.actual_out).getTime();
+        const statusOutStr = String(l.status_out || '');
+
         // PERLINDUNGAN AUTOCLOSE PREMATUR:
-        // Jika actual_out diset di masa depan (outTimeMs > nowMs) ATAU kru belum 12 jam kerja tapi sudah tertutup autoclose:
-        if (diffHoursSinceIn < 12 && (outTimeMs > nowMs || String(l.status_out).includes('Lupa Absen Pulang'))) {
+        // Jika status_out bertuliskan 'Lupa Absen Pulang' padahal kru belum lewat 12 jam kerja sejak actual_in,
+        // pertahankan sesi tetap aktif agar kru tidak terlempar ke status 'Sudah Pulang'.
+        if (diffHoursSinceIn < 12 && (outTimeMs > nowMs || statusOutStr.includes('Lupa Absen Pulang'))) {
           return true;
         }
 
@@ -753,15 +756,20 @@ export default function BreakSystem() {
           setBreakStartTime(null);
         }
       } else {
-        // --- TIDAK ADA SESI AKTIF (Hanya jika benar-benar sudah checkout normal) ---
-        const recentCheckoutLog = userRecentLogs?.find(l => l.actual_out && String(l.actual_out).trim() !== '' && String(l.actual_out).toLowerCase() !== 'null');
+        // --- TIDAK ADA SESI AKTIF (Hanya jika benar-benar sudah checkout sah) ---
+        const recentCheckoutLog = userRecentLogs?.find(l => {
+          if (!l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null') return false;
+          const statusOutStr = String(l.status_out || '');
+          // Abaikan log penutupan otomatis 'Lupa Absen Pulang' yang terjadi sebelum 12 jam
+          return !statusOutStr.includes('Lupa Absen Pulang');
+        });
         
         if (recentCheckoutLog) {
           const outTimeMs = new Date(recentCheckoutLog.actual_out).getTime();
           const inTimeMs = new Date(recentCheckoutLog.actual_in).getTime();
           const diffHoursSinceIn = (nowMs - inTimeMs) / (1000 * 60 * 60);
 
-          // Tandai "Sudah Pulang" jika checkout normal dan sudah lewat jamnya
+          // Tandai "Sudah Pulang" jika memang sudah checkout sah dan berada dalam batas toleransi
           if (diffHoursSinceIn >= 12 || (nowMs - outTimeMs >= 0 && (nowMs - outTimeMs) / 3600000 < 3)) {
             setActiveLogId(recentCheckoutLog.id);
             setHasCheckedIn(true);
@@ -773,7 +781,7 @@ export default function BreakSystem() {
           }
         }
 
-        // Kembali ke tampilan awal: Siap Absen Masuk
+        // Sesi selesai / belum absen: Tombol siap Absen Masuk
         setActiveLogId(null);
         setHasCheckedIn(false);
         setHasCheckedOut(false);
