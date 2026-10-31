@@ -348,6 +348,11 @@ export default function AreaDashboard() {
   const [isSubmittingConfirm, setIsSubmittingConfirm] = useState(false);
   const [cacpLogs, setCacpLogs] = useState([]);
 
+  // State Pilihan Status CACP (IC / OFF / CUTI / SKD) & File Screenshot
+  const [cacpStatusChoice, setCacpStatusChoice] = useState('IC');
+  const [cacpScreenshotFile, setCacpScreenshotFile] = useState(null);
+  const [isSubmittingCacpModal, setIsSubmittingCacpModal] = useState(false);
+
   const audioContextRef = useRef(null);
   const alarmIntervalRef = useRef(null);
 
@@ -422,6 +427,7 @@ export default function AreaDashboard() {
   const [dailyFormMinPhotos, setDailyFormMinPhotos] = useState(10);
   const [dailyFormDeadline, setDailyFormDeadline] = useState('21:00');
   const [dailyFormRole, setDailyFormRole] = useState('ALL_MANAGERS');
+  const [dailyFormTargetOutlet, setDailyFormTargetOutlet] = useState('ALL'); // Target resto tertentu untuk tugas daily
 
   // Upload Closing & Adjustment Deviasi
   const [uploadOutletId, setUploadOutletId] = useState('');
@@ -746,28 +752,49 @@ export default function AreaDashboard() {
     return () => clearInterval(timer);
   }, [currentProfile, isManagerIC, hasConfirmedCacpToday, userVisibleTasks, startAudioAlarm]);
 
-  // KONFIRMASI CACP HARIAN (MURNI SIMPAN KE CACP RM & BUKA CLOCK-OUT, TIDAK MENGOTORI TIKET)
+  // KONFIRMASI CACP HARIAN (MENDUKUNG IC DENGAN SCREENSHOT, SERTA OFF / CUTI / SKD OTOMATIS SELESAI)
   const handleConfirmCacp = async () => {
+    if (cacpStatusChoice === 'IC' && !cacpScreenshotFile) {
+      return alert("⚠️ Mohon lampirkan screenshot bukti pengerjaan CACP!");
+    }
+
     setIsSubmittingConfirm(true);
     try {
       stopAudioAlarm();
       setHasConfirmedCacpToday(true);
       setAlarmTriggerType(null);
 
+      let uploadedScreenshotUrl = null;
+      if (cacpScreenshotFile) {
+        const fileExt = cacpScreenshotFile.name.split('.').pop();
+        const filePath = `cacp_proofs/${user.id}-${Date.now()}.${fileExt}`;
+        const { error: upErr } = await supabase.storage
+          .from('attendance-proofs')
+          .upload(filePath, cacpScreenshotFile, { upsert: true });
+
+        if (!upErr) {
+          const { data: pubData } = supabase.storage.from('attendance-proofs').getPublicUrl(filePath);
+          uploadedScreenshotUrl = pubData?.publicUrl;
+        }
+      }
+
       const todayDate = new Date().toISOString().split('T')[0];
       const payload = {
         user_id: user?.id,
         outlet_id: currentProfile?.outlet_id || null,
         log_date: todayDate,
-        shift_status: isManagerIC ? 'IC' : 'OFF',
+        shift_status: cacpStatusChoice, // 'IC' | 'OFF' | 'CUTI' | 'SKD'
+        proof_photo_url: uploadedScreenshotUrl,
         confirmed_at: new Date().toISOString()
       };
 
-      await supabase.from('cacp_daily_logs').upsert([payload], {
+      const { error: dbErr } = await supabase.from('cacp_daily_logs').upsert([payload], {
         onConflict: 'user_id,log_date'
       });
+      if (dbErr) throw dbErr;
 
-      alert("✓ Berhasil dikonfirmasi! Akses Clock-Out terbuka & alarm dimatikan.");
+      alert(`✓ Status CACP (${cacpStatusChoice}) berhasil dicatat & terrekap selesai!`);
+      setCacpScreenshotFile(null);
       loadMasterData();
     } catch (err) {
       alert(`Gagal konfirmasi: ${err.message}`);
@@ -991,7 +1018,7 @@ export default function AreaDashboard() {
     }
   };
     
-// SIMPAN TEMPLATE DAILY BARU (OLEH AREA MANAGER)
+// SIMPAN TEMPLATE DAILY BARU (MENDUKUNG TARGET RESTO TERTENTU)
   const handleCreateDailyTemplate = async (e) => {
     e.preventDefault();
     if (!dailyFormTitle.trim()) return alert("Judul tugas daily wajib diisi!");
@@ -1004,6 +1031,7 @@ export default function AreaDashboard() {
         deadline_time: dailyFormDeadline || '21:00:00',
         target_role: dailyFormRole,
         scope_type: dailyFormScopeType, // 'INDIVIDUAL' atau 'RESTO'
+        target_outlet_id: dailyFormTargetOutlet === 'ALL' ? null : dailyFormTargetOutlet, // Simpan ID resto spesifik
         is_active: true
       }]);
 
@@ -1011,6 +1039,7 @@ export default function AreaDashboard() {
       alert("✓ Template Jobdesk Daily berhasil disimpan!");
       setDailyFormTitle('');
       setDailyFormScopeType('INDIVIDUAL');
+      setDailyFormTargetOutlet('ALL');
       setIsCreatingDailyTemplate(false);
       loadMasterData();
     } catch (err) {
@@ -1538,7 +1567,7 @@ export default function AreaDashboard() {
     let sumTarget = 0;
 
     const stores = activeStores.map(row => {
-      const actual = Number(row.actual_gross_current || row.actual_nett_current || 0);
+      const actual = Number(row.actual_nett_current || row.actual_net_sales || row.actual_gross_current || 0);
       const target = Number(row.target_regional_mom || row.target_kpi_sssg || 0);
       const achievementPct = target > 0 ? Number(((actual / target) * 100).toFixed(2)) : (Number(row.ach_sss_mom_pct || 0) * 100);
 
@@ -1611,8 +1640,8 @@ export default function AreaDashboard() {
 
     // Angka untuk banner utama (Total Area / Toko Pilihan)
     const finalAreaActual = (selectedSalesOutlet === 'ALL' && totalAreaRow)
-      ? Number(totalAreaRow.actual_gross_current || totalAreaRow.actual_nett_current || sumActual)
-      : sumActual;
+  ? Number(totalAreaRow.actual_nett_current || totalAreaRow.actual_net_sales || totalAreaRow.actual_gross_current || sumActual)
+  : sumActual;
 
     const finalAreaTarget = (selectedSalesOutlet === 'ALL' && totalAreaRow)
       ? Number(totalAreaRow.target_regional_mom || totalAreaRow.target_kpi_sssg || sumTarget)
@@ -2345,16 +2374,55 @@ export default function AreaDashboard() {
                     <span>Buka Task Manager Sekarang</span>
                   </button>
                 ) : (
-                  <>
-                    <a
-                      href={CACP_GOOGLE_FORM_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 border border-slate-300"
-                    >
-                      <span>1. Buka Google Form RM</span>
-                      <FiExternalLink className="text-xs" />
-                    </a>
+                  <div className="space-y-2.5">
+                    {/* Pilihan Status Kehadiran CACP */}
+                    <div className="flex gap-1 p-1 bg-slate-100 rounded-xl">
+                      {['IC', 'OFF', 'CUTI', 'SKD'].map((st) => (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => setCacpStatusChoice(st)}
+                          className={`flex-1 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer ${
+                            cacpStatusChoice === st 
+                              ? 'bg-indigo-600 text-white shadow-2xs' 
+                              : 'text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {st}
+                        </button>
+                      ))}
+                    </div>
+
+                    {cacpStatusChoice === 'IC' ? (
+                      <>
+                        <a
+                          href={CACP_GOOGLE_FORM_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 border border-slate-300"
+                        >
+                          <span>1. Buka Google Form RM</span>
+                          <FiExternalLink className="text-xs" />
+                        </a>
+
+                        <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-left space-y-1">
+                          <label className="text-[9.5px] font-bold text-slate-600 block">
+                            2. Lampirkan Bukti Screenshot Form:
+                          </label>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => setCacpScreenshotFile(e.target.files[0])}
+                            className="text-[10px] text-slate-600 file:mr-2 file:py-1 file:px-2 file:rounded-lg file:border-0 file:text-[9px] file:font-bold file:bg-indigo-600 file:text-white cursor-pointer w-full"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-center">
+                        <p className="text-[11px] font-bold text-emerald-800">Status Terpilih: {cacpStatusChoice}</p>
+                        <p className="text-[9px] text-emerald-600">Cukup klik tombol submit di bawah, langsung otomatis terrekap.</p>
+                      </div>
+                    )}
 
                     <button
                       type="button"
@@ -2363,9 +2431,9 @@ export default function AreaDashboard() {
                       className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-2xl flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/30 cursor-pointer transition-all disabled:opacity-50"
                     >
                       <FiCheck />
-                      <span>{isSubmittingConfirm ? 'Menyimpan...' : '2. ✓ Saya Sudah Submit Form CACP Hari Ini'}</span>
+                      <span>{isSubmittingConfirm ? 'Menyimpan...' : `Submit CACP (${cacpStatusChoice})`}</span>
                     </button>
-                  </>
+                  </div>
                 )}
 
                 {currentProfile?.role === 'area_manager' && (
@@ -4704,15 +4772,15 @@ export default function AreaDashboard() {
               };
             })
             .sort((a, b) => {
-              // 1. Manajer yang sudah menyelesaikan tugas wajib naik ke atas
-              if (b.completedTasksCount !== a.completedTasksCount) {
-                return b.completedTasksCount - a.completedTasksCount;
-              }
-              // 2. Berdasarkan skor kepatuhan SLA tertinggi
+              // 1. Diurutkan murni berdasarkan tingkat keberhasilan skor SLA tertinggi (bukan kuantitas tugas)
               if (b.avgScore !== a.avgScore) {
                 return b.avgScore - a.avgScore;
               }
-              // 3. Berdasarkan kecepatan waktu pengerjaan (yang tercepat jadi #1)
+              // 2. Berdasarkan jumlah tugas tepat waktu
+              if (b.onTimeCount !== a.onTimeCount) {
+                return b.onTimeCount - a.onTimeCount;
+              }
+              // 3. Berdasarkan kecepatan waktu pengerjaan
               return b.speedBonus - a.speedBonus;
             });
 
@@ -5319,6 +5387,21 @@ export default function AreaDashboard() {
                                     >
                                       <option value="INDIVIDUAL">👤 Wajib Tiap Manajer (Setiap orang wajib submit)</option>
                                       <option value="RESTO">🏪 Cukup 1 Manajer per Resto (1 Orang submit, 1 resto selesai)</option>
+                                    </select>
+                                  </div>
+
+                                  {/* Pilihan Target Resto Tertentu */}
+                                  <div className="space-y-1">
+                                    <label className="text-[8.5px] font-bold text-slate-500 block">Tugaskan ke Cabang Resto:</label>
+                                    <select
+                                      value={dailyFormTargetOutlet}
+                                      onChange={(e) => setDailyFormTargetOutlet(e.target.value)}
+                                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                                    >
+                                      <option value="ALL">🌐 Semua Resto (Kalsel 1)</option>
+                                      {outlets.filter(o => isOutletInRegion(o, 'KALSEL_1')).map(o => (
+                                        <option key={o.id} value={o.id}>{o.name}</option>
+                                      ))}
                                     </select>
                                   </div>
 
@@ -6084,7 +6167,7 @@ export default function AreaDashboard() {
 
         {/* ================= MODAL AUDIT HISTORI TUGAS & BUKTI FOTO MANAJER ================= */}
         {selectedManagerForTaskHistory && (
-          <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
             <div className="bg-[#FAFBFD] w-full max-w-md max-h-[92vh] rounded-3xl flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
               
               <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 shadow-2xs">
@@ -6479,24 +6562,60 @@ export default function AreaDashboard() {
                     </span>
 
                     <div className="space-y-1.5">
-                      {restoManagers.map(mgr => (
-                        <div key={mgr.id} className="p-2 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-[10px]">
-                          <div className="min-w-0 flex-1 pr-2">
-                            <p className="font-black text-slate-900 truncate">{mgr.full_name}</p>
-                            <span className="text-[8.5px] text-indigo-600 font-bold uppercase">
-                              {mgr.role.replace(/_/g, ' ')} • {mgr.onTime} Selesai
+                      {restoManagers.map(mgr => {
+                        // Ambil seluruh tugas (Proyek Bulanan + Jobdesk Daily) khusus manajer ini
+                        const myItems = combinedHistory.filter(h => h.personName === mgr.full_name);
+                        const formattedTasks = myItems.map(item => ({
+                          id: item.id,
+                          title: item.title,
+                          department: item.type,
+                          deadline: item.isDone ? new Date().toISOString() : new Date().toISOString(),
+                          completed_at: item.isDone ? new Date().toISOString() : null,
+                          status: item.isDone ? 'completed' : 'pending',
+                          is_on_time: item.score >= 80,
+                          has_tolerance: false,
+                          proof_photo_url: item.photoUrl || null,
+                          completion_notes: item.deadlineText || ''
+                        }));
+
+                        const targetMgrObj = {
+                          id: mgr.id,
+                          name: mgr.full_name,
+                          avatar: mgr.avatar,
+                          role: mgr.role,
+                          outletName: selectedRestoForSlaDetail.name,
+                          tasks: formattedTasks,
+                          avgScore: mgr.avgSla,
+                          onTimeCount: mgr.onTime,
+                          sameDayOverdue: 0,
+                          multiDayOverdue: mgr.overdue,
+                          uncompletedCount: 0
+                        };
+
+                        return (
+                          <div 
+                            key={mgr.id} 
+                            onClick={() => setSelectedManagerForTaskHistory(targetMgrObj)}
+                            className="p-2 bg-slate-50 hover:bg-indigo-50/60 rounded-xl border border-slate-100 hover:border-indigo-200 flex items-center justify-between text-[10px] cursor-pointer transition-all"
+                            title="Klik untuk melihat rincian tugas yang sudah dikerjakan"
+                          >
+                            <div className="min-w-0 flex-1 pr-2">
+                              <p className="font-black text-slate-900 truncate">{mgr.full_name} ↗</p>
+                              <span className="text-[8.5px] text-indigo-600 font-bold uppercase">
+                                {mgr.role.replace(/_/g, ' ')} • {mgr.onTime} Selesai
+                              </span>
+                            </div>
+
+                            <span className={`text-[9px] font-mono font-black px-2 py-0.5 rounded-lg border ${
+                              mgr.avgSla >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                              mgr.avgSla >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                              'bg-rose-50 text-rose-700 border-rose-200'
+                            }`}>
+                              {mgr.avgSla}% SLA
                             </span>
                           </div>
-
-                          <span className={`text-[9px] font-mono font-black px-2 py-0.5 rounded-lg border ${
-                            mgr.avgSla >= 80 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                            mgr.avgSla >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                            'bg-rose-50 text-rose-700 border-rose-200'
-                          }`}>
-                            {mgr.avgSla}% SLA
-                          </span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -6637,27 +6756,43 @@ export default function AreaDashboard() {
             </div>
           </div>
         )}
-        {/* MODAL PREVIEW FOTO BUKTI DOKUMENTASI FULL SCREEN */}
+        {/* MODAL PREVIEW FOTO BUKTI DOKUMENTASI FULL SCREEN (LAYER TERTINGGI Z-999) */}
         {taskProofModalImage && (
           <div 
-            onClick={() => setTaskProofModalImage(null)}
-            className="fixed inset-0 bg-black/95 z-[60] flex flex-col items-center justify-center p-4 animate-in fade-in duration-200 cursor-pointer"
+            className="fixed inset-0 z-[999] bg-black/95 backdrop-blur-md flex flex-col justify-between p-3 select-none animate-in fade-in duration-200"
+            onClick={(e) => {
+              e.stopPropagation();
+              setTaskProofModalImage(null);
+            }}
           >
-            <div className="w-full max-w-md flex justify-between items-center text-white mb-2">
-              <span className="text-xs font-black uppercase tracking-wider">Validasi Foto Bukti Pekerjaan</span>
+            <div className="w-full max-w-md mx-auto flex items-center justify-between py-2 text-white">
+              <span className="text-[11px] font-black uppercase tracking-wider bg-white/10 px-3 py-1 rounded-full border border-white/15">
+                🔍 Validasi Foto Bukti Pekerjaan
+              </span>
               <button 
                 type="button" 
-                onClick={() => setTaskProofModalImage(null)}
-                className="p-1.5 bg-slate-800 text-white rounded-full hover:bg-slate-700"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTaskProofModalImage(null);
+                }}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center text-sm font-bold cursor-pointer"
               >
-                <FiX className="text-base" />
+                <FiX />
               </button>
             </div>
-            <img 
-              src={taskProofModalImage} 
-              alt="Foto Bukti Penuh" 
-              className="max-w-full max-h-[82vh] object-contain rounded-2xl border border-white/20 shadow-2xl" 
-            />
+
+            <div className="flex-1 w-full max-w-md mx-auto flex items-center justify-center overflow-auto p-1">
+              <img 
+                src={taskProofModalImage} 
+                alt="Foto Bukti Penuh" 
+                className="max-w-full max-h-[78vh] w-auto h-auto object-contain rounded-2xl border border-white/20 shadow-2xl" 
+                onClick={(e) => e.stopPropagation()} 
+              />
+            </div>
+
+            <div className="w-full max-w-md mx-auto py-2 text-center">
+              <p className="text-[10px] text-slate-400 font-medium">Ketuk area luar atau tombol silang untuk menutup foto</p>
+            </div>
           </div>
         )}
 
