@@ -704,13 +704,12 @@ export default function BreakSystem() {
           return true;
         }
 
-        const outTimeMs = new Date(l.actual_out).getTime();
         const statusOutStr = String(l.status_out || '');
 
         // PERLINDUNGAN AUTOCLOSE PREMATUR:
-        // Jika status_out bertuliskan 'Lupa Absen Pulang' padahal kru belum lewat 12 jam kerja sejak actual_in,
-        // pertahankan sesi tetap aktif agar kru tidak terlempar ke status 'Sudah Pulang'.
-        if (diffHoursSinceIn < 12 && (outTimeMs > nowMs || statusOutStr.includes('Lupa Absen Pulang'))) {
+        // Jika kru bekerja belum mencapai 12 jam, tetapi status_out terisi 'Lupa Absen Pulang',
+        // abaikan actual_out tersebut dan jaga agar sesi kru tetap aktif bekerja.
+        if (diffHoursSinceIn < 12 && statusOutStr.includes('Lupa Absen Pulang')) {
           return true;
         }
 
@@ -760,8 +759,15 @@ export default function BreakSystem() {
         const recentCheckoutLog = userRecentLogs?.find(l => {
           if (!l.actual_out || String(l.actual_out).trim() === '' || String(l.actual_out).toLowerCase() === 'null') return false;
           const statusOutStr = String(l.status_out || '');
-          // Abaikan log penutupan otomatis 'Lupa Absen Pulang' yang terjadi sebelum 12 jam
-          return !statusOutStr.includes('Lupa Absen Pulang');
+          const inTimeMs = new Date(l.actual_in).getTime();
+          const diffHoursSinceIn = (nowMs - inTimeMs) / (1000 * 60 * 60);
+
+          // Jika tertutup otomatis 'Lupa Absen Pulang' sebelum 12 jam kerja, jangan anggap sebagai checkout normal
+          if (diffHoursSinceIn < 12 && statusOutStr.includes('Lupa Absen Pulang')) {
+            return false;
+          }
+
+          return true;
         });
         
         if (recentCheckoutLog) {
@@ -769,8 +775,8 @@ export default function BreakSystem() {
           const inTimeMs = new Date(recentCheckoutLog.actual_in).getTime();
           const diffHoursSinceIn = (nowMs - inTimeMs) / (1000 * 60 * 60);
 
-          // Tandai "Sudah Pulang" jika memang sudah checkout sah dan berada dalam batas toleransi
-          if (diffHoursSinceIn >= 12 || (nowMs - outTimeMs >= 0 && (nowMs - outTimeMs) / 3600000 < 3)) {
+          // Tandai "Sudah Pulang" hanya jika checkout memang sah dan kru sudah menyelesaikan shift minimal 7 jam
+          if (diffHoursSinceIn >= 7 && (nowMs - outTimeMs >= 0 && (nowMs - outTimeMs) / 3600000 < 6)) {
             setActiveLogId(recentCheckoutLog.id);
             setHasCheckedIn(true);
             setHasCheckedOut(true);
@@ -2485,41 +2491,63 @@ export default function BreakSystem() {
         let allowedOutlets = [];
 
         try {
-          // Kumpulkan ID resto yang diizinkan untuk kru / teknisi ini
-          const outletIds = [profile?.outlet_id];
-          if (isTeknisi && profile?.secondary_outlet_id) {
-            outletIds.push(profile.secondary_outlet_id);
+          const userOutletId = profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id;
+          
+          let outletQuery = supabase
+            .from('outlets')
+            .select('id, latitude, longitude, radius_meter, name');
+
+          // Jika ada outlet_id terdaftar pada user, utamakan outlet tersebut
+          if (userOutletId && !isAreaManager) {
+            const validIds = [userOutletId];
+            if (isTeknisi && profile?.secondary_outlet_id) {
+              validIds.push(profile.secondary_outlet_id);
+            }
+            outletQuery = outletQuery.in('id', validIds);
           }
 
-          const validIds = outletIds.filter(Boolean);
+          const { data: outletsData, error: oErr } = await outletQuery;
 
-          if (validIds.length > 0) {
-            const { data: outletsData } = await supabase
-              .from('outlets')
-              .select('id, latitude, longitude, radius_meter, name')
-              .in('id', validIds);
-
-            if (outletsData && outletsData.length > 0) {
-              allowedOutlets = outletsData.map(o => ({
+          if (!oErr && outletsData && outletsData.length > 0) {
+            allowedOutlets = outletsData
+              .filter(o => o.latitude && o.longitude)
+              .map(o => ({
                 id: o.id,
                 name: o.name,
                 lat: parseFloat(o.latitude),
                 lng: parseFloat(o.longitude),
-                radius: parseFloat(o.radius_meter) || DEFAULT_MAX_RADIUS
+                // Toleransi radius dinaikkan menjadi minimal 100m untuk mitigasi drift GPS di dalam gedung
+                radius: Math.max(parseFloat(o.radius_meter) || DEFAULT_MAX_RADIUS, 100)
+              }));
+          }
+
+          // Fallback: Jika outlet user tidak ditemukan atau ID tidak sinkron, muat seluruh outlet cabang aktif
+          if (allowedOutlets.length === 0) {
+            const { data: fallbackData } = await supabase
+              .from('outlets')
+              .select('id, latitude, longitude, radius_meter, name')
+              .not('latitude', 'is', null);
+
+            if (fallbackData && fallbackData.length > 0) {
+              allowedOutlets = fallbackData.map(o => ({
+                id: o.id,
+                name: o.name,
+                lat: parseFloat(o.latitude),
+                lng: parseFloat(o.longitude),
+                radius: Math.max(parseFloat(o.radius_meter) || DEFAULT_MAX_RADIUS, 100)
               }));
             }
           }
         } catch (dbError) {
-          console.log("Fallback geofence dinamis:", dbError);
+          console.error("Gagal sinkronisasi data outlet geofence:", dbError);
         }
 
-        // Jika tidak ada data resto di database, gunakan fallback default
         if (allowedOutlets.length === 0) {
           allowedOutlets = [{
             name: 'Outlet',
             lat: DEFAULT_TARGET_LAT,
             lng: DEFAULT_TARGET_LNG,
-            radius: DEFAULT_MAX_RADIUS
+            radius: 100
           }];
         }
 
