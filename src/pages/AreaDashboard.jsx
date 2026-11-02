@@ -46,7 +46,8 @@ import {
   FiLayers,
   FiZap,
   FiDroplet,
-  FiEdit3
+  FiEdit3,
+  FiTrash2
 } from 'react-icons/fi';
 
 const CACP_GOOGLE_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeinsH4vwQ-1K5WMYsOv6dkbg6sOgW_2zMMFtEnutuyxXf2EQ/viewform";
@@ -409,6 +410,10 @@ export default function AreaDashboard() {
     }
   };
   const [isSubmittingTask, setIsSubmittingTask] = useState(false);
+  const [editingTask, setEditingTask] = useState(null); // Menyimpan tugas yang sedang diedit
+  const [editTaskTitle, setEditTaskTitle] = useState('');
+  const [editTaskDeadline, setEditTaskDeadline] = useState('');
+  const [isSavingEditTask, setIsSavingEditTask] = useState(false);
 
   // Konfirmasi Bukti Foto Tugas
   const [taskToConfirm, setTaskToConfirm] = useState(null);
@@ -553,24 +558,15 @@ export default function AreaDashboard() {
         supabase.from('daily_task_templates').select('*').eq('is_active', true),
         supabase.from('daily_task_submissions').select('*'),
         supabase.from('cacp_daily_logs').select('*'),
-        supabase.from('sales_monthly_summary').select('*'),
-        supabase.from('opex_kalsel_controlling').select('*')
+        supabase.from('sales_monthly_summary').select('*').like('periode', `${selectedMonth}%`),
+        supabase.from('opex_kalsel_controlling').select('*').like('period_month', `${selectedMonth}%`)
       ]);
 
-      if (opexKalselRes && opexKalselRes.length > 0) {
-        setOpexKalselDb(opexKalselRes);
-      } else {
-        setOpexKalselDb([]);
-      }
+      // Simpan data OPEX Kalsel sesuai periode yang dipilih
+      setOpexKalselDb(opexKalselRes || []);
 
-      if (salesDbData && salesDbData.length > 0) {
-        // Filter periode dengan trim agar kebal spasi
-        const targetPer = (selectedMonth || '').trim();
-        const matchedData = salesDbData.filter(d => (d.periode || '').trim().startsWith(targetPer));
-        setSalesMonthlyDb(matchedData.length > 0 ? matchedData : salesDbData);
-      } else {
-        setSalesMonthlyDb([]);
-      }
+      // Simpan data Sales sesuai periode yang dipilih
+      setSalesMonthlyDb(salesDbData || []);
 
       if (cacpLogsData) setCacpLogs(cacpLogsData);
 
@@ -1017,7 +1013,70 @@ export default function AreaDashboard() {
       alert(`Gagal memberi toleransi: ${err.message}`);
     }
   };
-    
+  // HAPUS JOBDESK TIKET PROYEK
+  const handleDeleteTask = async (taskItem) => {
+    const confirmDelete = confirm(`Apakah Anda yakin ingin menghapus jobdesk "${taskItem.title}"?`);
+    if (!confirmDelete) return;
+
+    try {
+      const { error } = await supabase
+        .from('department_tasks')
+        .delete()
+        .eq('id', taskItem.id);
+
+      if (error) throw error;
+      alert(`✓ Jobdesk "${taskItem.title}" berhasil dihapus!`);
+      loadMasterData();
+    } catch (err) {
+      alert(`Gagal menghapus jobdesk: ${err.message}`);
+    }
+  };
+
+  // BUKA MODAL / FORM EDIT JOBDESK
+  const handleOpenEditTask = (taskItem) => {
+    setEditingTask(taskItem);
+    setEditTaskTitle(taskItem.title || '');
+    // Konversi deadline ISO ke format yyyy-MM-ddThh:mm untuk datetime-local
+    if (taskItem.deadline) {
+      const d = new Date(taskItem.deadline);
+      const pad = (n) => String(n).padStart(2, '0');
+      const formatted = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      setEditTaskDeadline(formatted);
+    } else {
+      setEditTaskDeadline('');
+    }
+  };
+
+  // SIMPAN PERBAHARUAN JOBDESK
+  const handleSaveEditTask = async (e) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    if (!editTaskTitle.trim() || !editTaskDeadline) {
+      return alert("Judul dan batas waktu deadline tidak boleh kosong!");
+    }
+
+    setIsSavingEditTask(true);
+    try {
+      const { error } = await supabase
+        .from('department_tasks')
+        .update({
+          title: editTaskTitle.trim(),
+          deadline: new Date(editTaskDeadline).toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editingTask.id);
+
+      if (error) throw error;
+      alert("✓ Jobdesk berhasil diperbaharui!");
+      setEditingTask(null);
+      loadMasterData();
+    } catch (err) {
+      alert(`Gagal memperbaharui jobdesk: ${err.message}`);
+    } finally {
+      setIsSavingEditTask(false);
+    }
+  };  
+
 // SIMPAN TEMPLATE DAILY BARU (MENDUKUNG TARGET RESTO TERTENTU)
   const handleCreateDailyTemplate = async (e) => {
     e.preventDefault();
@@ -1813,24 +1872,24 @@ export default function AreaDashboard() {
     };
   }, [opexKalselDb, isAM, selectedOpexOutlet, currentProfile, outlets]);
   const outletScoreRankings = useMemo(() => {
-    // Normalisasi format filter periode (ambil YYYY-MM baik saat memilih bulan maupun tanggal harian)
+    // Normalisasi format filter periode (YYYY-MM)
     const targetMonth = selectedMonth ? selectedMonth.substring(0, 7) : new Date().toISOString().substring(0, 7);
     
-    // Ambil tanggal cutoff hari berjalan jika bulan yang dipilih adalah bulan ini
+    // Hitung hari berjalan aktif agar awal bulan penilaian tidak anjlok
     const today = new Date();
     const currentMonthStr = today.toISOString().substring(0, 7);
     const isCurrentMonth = targetMonth === currentMonthStr;
     const activeDaysCount = isCurrentMonth ? Math.max(1, today.getDate()) : (totalDaysInSelectedMonth || 30);
 
-    // Filter hanya resto resmi yang berada di area Kalsel 1
+    // Filter resto berdasarkan wilayah aktif
     const regionalOutlets = outlets.filter(o => isOutletInRegion(o, selectedRegionFilter));
 
     return regionalOutlets.map((outlet) => {
-      // 1. Kru yang terdaftar di resto ini
+      // Kru terdaftar di resto ini
       const restoCrew = profiles.filter(p => p.outlet_id === outlet.id || p.outlet_id === outlet.code);
       const crewIds = new Set(restoCrew.map(p => p.id));
       
-      // Ambil seluruh log absensi di cabang ini pada bulan berjalan
+      // Ambil log absensi cabang pada bulan terpilih
       const restoLogs = attendanceLogs.filter(l => {
         const matchOutlet = l.outlet_id === outlet.id || l.outlet_id === outlet.code || crewIds.has(l.user_id);
         const logDateStr = (l.created_at || l.actual_in || '').substring(0, 7);
@@ -1838,23 +1897,22 @@ export default function AreaDashboard() {
       });
 
       // -------------------------------------------------------------
-      // INDIKATOR 1: PERSENTASE ABSENSI KEHADIRAN SELURUH KARYAWAN
+      // INDIKATOR 1: KEDISIPLINAN KEHADIRAN KRU (0 - 100%)
       // -------------------------------------------------------------
       let lateCount = 0;
-      let totalLogs = restoLogs.length;
+      const totalLogs = restoLogs.length;
       restoLogs.forEach(log => {
         const statusIn = (log.status_in || '').toLowerCase();
-        if (statusIn.includes('terlambat') || (log.penalty_points && Number(log.penalty_points) > 0)) {
+        if (statusIn.includes('terlambat') || (Number(log.penalty_points) > 0)) {
           lateCount++;
         }
       });
-      // Jika resto tidak memiliki absensi sama sekali di database, skor kehadiran adalah 0%
       const attendanceScore = totalLogs > 0 
         ? Math.max(0, Math.round(((totalLogs - lateCount) / totalLogs) * 100)) 
-        : 0;
+        : 100;
 
       // -------------------------------------------------------------
-      // INDIKATOR 2: PERSENTASE KETEPATAN BREAK DAN AFTER BREAK
+      // INDIKATOR 2: DISIPLIN BREAK & AFTER BREAK (0 - 100%)
       // -------------------------------------------------------------
       let totalBreakSessions = 0;
       let overbreakCount = 0;
@@ -1869,14 +1927,13 @@ export default function AreaDashboard() {
           }
         }
       });
-      // Rasio sesi break yang on-time (tidak overbreak)
-      const onTimeBreakCount = Math.max(0, totalBreakSessions - overbreakCount);
+
       const breakDisciplineScore = totalBreakSessions > 0
-        ? Math.round((onTimeBreakCount / totalBreakSessions) * 100)
-        : (totalLogs > 0 ? (overbreakCount === 0 ? 100 : Math.max(0, 100 - (overbreakCount * 15))) : 0);
+        ? Math.max(0, Math.round(((totalBreakSessions - overbreakCount) / totalBreakSessions) * 100))
+        : (overbreakCount > 0 ? Math.max(0, 100 - (overbreakCount * 10)) : 100);
 
       // -------------------------------------------------------------
-      // INDIKATOR 3: PENGERJAAN TUGAS, KECEPATAN & KETEPATAN (SLA)
+      // INDIKATOR 3: PENGERJAAN SLA TUGAS (0 - 100%)
       // -------------------------------------------------------------
       const restoTasks = tasks.filter(t => {
         const isMatchOutlet = t.outlet_id === outlet.id || t.outlet_id === outlet.code;
@@ -1885,74 +1942,44 @@ export default function AreaDashboard() {
         return isMatchOutlet && taskMonth === targetMonth && isNotCacp;
       });
 
-      let taskComplianceRate = 0;
+      let taskComplianceRate = 100;
       let completedOnTimeCount = 0;
       let overdueTasksCount = 0;
 
       if (restoTasks.length > 0) {
         let totalScoreSum = 0;
-        let speedBonusSum = 0;
-
         restoTasks.forEach(t => {
-          const isDone = t.status === 'completed';
           const score = calculateTaskScore(t);
-
-          if (isDone) {
-            if (score !== null) totalScoreSum += score;
-            if (t.is_on_time !== false && score >= 80) completedOnTimeCount++;
-
-            // Kecepatan: bonus jika diselesaikan sebelum deadline
-            if (t.completed_at && t.deadline && t.created_at) {
-              const created = new Date(t.created_at).getTime();
-              const deadline = new Date(t.deadline).getTime();
-              const completed = new Date(t.completed_at).getTime();
-              if (completed <= deadline && deadline > created) {
-                const ratio = Math.max(0, (deadline - completed) / (deadline - created));
-                speedBonusSum += ratio * 100;
-              }
-            }
-          } else {
-            const isOverdue = new Date(t.deadline) < new Date();
-            if (isOverdue) overdueTasksCount++;
-            totalScoreSum += (isOverdue ? 0 : 50);
-          }
+          const finalScore = score !== null ? score : (t.status === 'completed' ? 100 : 0);
+          totalScoreSum += finalScore;
+          if (finalScore >= 80) completedOnTimeCount++;
+          else overdueTasksCount++;
         });
-
-        const avgScore = totalScoreSum / restoTasks.length;
-        const speedBonus = completedOnTimeCount > 0 ? (speedBonusSum / completedOnTimeCount) * 0.1 : 0;
-        taskComplianceRate = Math.min(100, Math.round(avgScore + speedBonus));
-      } else {
-        // Jika belum ada tiket tugas yang dibuat untuk resto ini, gunakan nilai kehadiran
-        taskComplianceRate = totalLogs > 0 ? attendanceScore : 0;
+        taskComplianceRate = Math.min(100, Math.round(totalScoreSum / restoTasks.length));
       }
 
       // -------------------------------------------------------------
-      // INDIKATOR 4: KERAJINAN MENGERJAKAN CACP (cacp_daily_logs NYATA)
+      // INDIKATOR 4: AUDIT CACP (0 - 100%)
       // -------------------------------------------------------------
       const managersInOutlet = restoCrew.filter(p => 
         ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role)
       );
-      const managerIds = managersInOutlet.map(p => p.id);
+      const managerIds = new Set(managersInOutlet.map(p => p.id));
 
       const restoCacpLogs = cacpLogs.filter(l => {
-        const matchOutlet = l.outlet_id === outlet.id || l.outlet_id === outlet.code || managerIds.includes(l.user_id);
+        const matchOutlet = l.outlet_id === outlet.id || l.outlet_id === outlet.code || managerIds.has(l.user_id);
         const logDateStr = (l.log_date || l.confirmed_at || '').substring(0, 7);
         return matchOutlet && logDateStr === targetMonth;
       });
 
-      // Target setoran: Jumlah manager di resto × Hari berjalan aktif
-      const totalRequiredSubmissions = Math.max(1, managersInOutlet.length * activeDaysCount);
-      const actualSubmissions = restoCacpLogs.length;
-
-      const cacpPercentage = managersInOutlet.length > 0 
-        ? Math.min(100, Math.round((actualSubmissions / totalRequiredSubmissions) * 100))
-        : (totalLogs > 0 ? attendanceScore : 0);
-
-      const isCritical = cacpPercentage < 80;
-      const isWarning = cacpPercentage >= 80 && cacpPercentage < 90;
+      // Target dihitung berdasarkan hari berjalan (activeDaysCount)
+      const totalExpectedCacp = Math.max(1, managersInOutlet.length * activeDaysCount);
+      const cacpPercentage = managersInOutlet.length > 0
+        ? Math.min(100, Math.round((restoCacpLogs.length / totalExpectedCacp) * 100))
+        : 100;
 
       // -------------------------------------------------------------
-      // TOTAL HEALTH SCORE: MURNI RATA-RATA 4 INDIKATOR RIIL (25% MASING-MASING)
+      // TOTAL HEALTH SCORE: RATA-RATA 4 PILAR (25% MASING-MASING)
       // -------------------------------------------------------------
       const overallScore = Math.round(
         (attendanceScore * 0.25) +
@@ -1963,35 +1990,10 @@ export default function AreaDashboard() {
 
       const storeManager = restoCrew.find(p => p.role === 'store_manager');
 
-      const managerEvaluations = managersInOutlet.map(m => {
-        const myLogs = restoCacpLogs.filter(l => l.user_id === m.id);
-        const myDays = new Set(myLogs.map(l => (l.log_date || l.confirmed_at || '').substring(0, 10))).size;
-        const myScore = activeDaysCount > 0 ? Math.min(100, Math.round((myDays / activeDaysCount) * 100)) : 0;
-        const isSM = m.role === 'store_manager';
-        const threshold = isSM ? 80 : 90;
-        const isPass = myScore >= threshold;
-
-        return {
-          id: m.id,
-          name: m.full_name,
-          role: m.role,
-          roleLabel: m.role === 'store_manager' ? 'Store Manager (SM)' :
-                     m.role === 'ast_store_manager' ? 'Asst. Manager (ASM)' :
-                     m.role === 'floor_leader' ? 'Floor Leader (FL)' : 'FL Orientation (FLO)',
-          scoreCurrentMonth: myScore,
-          submittedDays: myDays,
-          missedDays: Math.max(0, activeDaysCount - myDays),
-          totalDays: activeDaysCount,
-          threshold,
-          isPass,
-          statusText: isPass ? 'Lolos Standar RM' : (isSM ? '⚠️ Warning Demosi (< 80%)' : '⚠️ Gagal Promosi (< 90%)')
-        };
-      });
-
       return {
         ...outlet,
         crewCount: restoCrew.length,
-        storeManagerName: storeManager?.full_name || 'Belum Diisi',
+        storeManagerName: storeManager?.full_name || 'Store Manager',
         storeManagerAvatar: storeManager?.avatar,
         lateCount,
         overbreakCount,
@@ -1999,12 +2001,8 @@ export default function AreaDashboard() {
         healthScore: overallScore,
         cacpData: {
           overallPercentage: cacpPercentage,
-          submittedDays: actualSubmissions,
-          missedDays: Math.max(0, totalRequiredSubmissions - actualSubmissions),
-          totalDays: activeDaysCount,
-          isCritical,
-          isWarning,
-          managers: managerEvaluations
+          submittedDays: restoCacpLogs.length,
+          totalDays: totalExpectedCacp
         },
         taskStats: {
           total: restoTasks.length,
@@ -2019,13 +2017,7 @@ export default function AreaDashboard() {
           cacpAudit: cacpPercentage
         }
       };
-    }).sort((a, b) => {
-      // Resto terbaik adalah yang memperoleh total persentase tertinggi
-      if (b.healthScore !== a.healthScore) return b.healthScore - a.healthScore;
-      if (b.metrics.taskCompliance !== a.metrics.taskCompliance) return b.metrics.taskCompliance - a.metrics.taskCompliance;
-      if (b.metrics.attendance !== a.metrics.attendance) return b.metrics.attendance - a.metrics.attendance;
-      return b.metrics.breakDiscipline - a.metrics.breakDiscipline;
-    });
+    }).sort((a, b) => b.healthScore - a.healthScore);
   }, [outlets, profiles, attendanceLogs, tasks, cacpLogs, selectedMonth, totalDaysInSelectedMonth, selectedRegionFilter]);
 
   // =========================================================================
@@ -2038,22 +2030,19 @@ export default function AreaDashboard() {
     const isCurrentMonth = targetMonth === currentMonthStr;
     const activeDaysCount = isCurrentMonth ? Math.max(1, today.getDate()) : (totalDaysInSelectedMonth || 30);
 
-    // Ambil seluruh manajer dari seluruh resto di wilayah yang dipilih
+    // Ambil akun manajer di area terpilih (Kalsel 1)
     const leaderProfiles = profiles.filter(p => {
       const r = (p.role || '').toLowerCase();
       const isLeaderRole = ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(r);
-      const isNamed = p.full_name && !p.full_name.toLowerCase().includes('dummy') && !p.full_name.toLowerCase().includes('uji coba');
-      
+      const isNamed = p.full_name && !p.full_name.toLowerCase().includes('dummy');
       const personOutlet = outlets.find(o => o.id === p.outlet_id || o.code === p.outlet_id);
-      const matchRegion = isOutletInRegion(personOutlet, selectedRegionFilter);
-
-      return isLeaderRole && isNamed && matchRegion;
+      return isLeaderRole && isNamed && isOutletInRegion(personOutlet, selectedRegionFilter);
     });
 
     return leaderProfiles.map(person => {
       const personOutlet = outlets.find(o => o.id === person.outlet_id || o.code === person.outlet_id);
-      
-      // 1. Presensi Kehadiran Pribadi Manager
+
+      // 1. INDIKATOR KEHADIRAN PRIBADI MANAGER (0 - 100%)
       const personLogs = attendanceLogs.filter(l => {
         const isUser = l.user_id === person.id;
         const logDateStr = (l.created_at || l.actual_in || '').substring(0, 7);
@@ -2063,70 +2052,54 @@ export default function AreaDashboard() {
       let lateMinutes = 0;
       let overbreakCount = 0;
       let totalBreakSessions = 0;
-      let personalPoints = person.total_points !== null && person.total_points !== undefined ? Number(person.total_points) : 100;
 
       personLogs.forEach(l => {
         if (l.status_in && l.status_in.toLowerCase().includes('terlambat')) {
-          const match = l.status_in.match(/Terlambat (\d+)m/);
-          if (match && match[1]) lateMinutes += parseInt(match[1], 10);
-          else lateMinutes += 15;
+          const match = l.status_in.match(/(\d+)/);
+          lateMinutes += match ? parseInt(match[1], 10) : 15;
         }
         if (l.discipline_status === 'Overbreak') overbreakCount++;
         if (l.break_start_time || l.discipline_status) totalBreakSessions++;
       });
 
-      // Manager yang aktif bekerja dinilai dari keterlambatannya (jika 0 menit = 100%)
-      const mgrAttendanceScore = personLogs.length > 0 
-        ? Math.max(0, 100 - (lateMinutes * 2)) 
-        : 0;
+      // Kehadiran: dipotong per menit terlambat
+      const mgrAttendanceScore = personLogs.length > 0
+        ? Math.max(0, 100 - (lateMinutes * 2))
+        : 100;
 
-      // Disiplin break pribadi
-      const mgrBreakScore = totalBreakSessions > 0 
-        ? Math.round(((totalBreakSessions - overbreakCount) / totalBreakSessions) * 100) 
-        : (personLogs.length > 0 ? Math.max(0, 100 - (overbreakCount * 20)) : 0);
+      // 2. INDIKATOR BREAK & AFTER BREAK (0 - 100%)
+      const mgrBreakScore = totalBreakSessions > 0
+        ? Math.max(0, Math.round(((totalBreakSessions - overbreakCount) / totalBreakSessions) * 100))
+        : (overbreakCount > 0 ? Math.max(0, 100 - (overbreakCount * 20)) : 100);
 
-      // 2. Kinerja SLA Pengerjaan Tugas Manager
+      // 3. INDIKATOR PENGERJAAN JOBDESK SLA (0 - 100%)
       const personTasks = tasks.filter(t => {
-        const isMyTask = t.target_user_id === person.id || ((t.outlet_id === person.outlet_id || t.outlet_id === personOutlet?.id) && t.target_role === person.role);
+        const isMyTask = t.target_user_id === person.id || (t.outlet_id === person.outlet_id && t.target_role === person.role);
         const taskMonth = (t.created_at || t.deadline || '').substring(0, 7);
         const isNotCacp = (t.department !== 'cacp_audit') && !(t.title || '').toUpperCase().includes('CACP');
         return isMyTask && taskMonth === targetMonth && isNotCacp;
       });
 
-      let mgrTaskScore = 0;
-      let speedBonus = 0;
-      let completedTasksCount = 0;
-
+      let mgrTaskScore = 100;
       if (personTasks.length > 0) {
-        let sumScores = 0;
+        let sumTask = 0;
         personTasks.forEach(t => {
-          const s = calculateTaskScore(t);
-          if (s !== null) sumScores += s;
-          if (t.status === 'completed') {
-            completedTasksCount++;
-            if (t.completed_at && t.deadline && new Date(t.completed_at) <= new Date(t.deadline)) {
-              speedBonus += 10;
-            }
-          }
+          const sc = calculateTaskScore(t);
+          sumTask += (sc !== null ? sc : (t.status === 'completed' ? 100 : 0));
         });
-        mgrTaskScore = Math.min(100, Math.round((sumScores / personTasks.length) + (speedBonus / personTasks.length)));
-      } else {
-        mgrTaskScore = personLogs.length > 0 ? 100 : 0;
+        mgrTaskScore = Math.min(100, Math.round(sumTask / personTasks.length));
       }
 
-      // 3. Kerajinan Menjalankan CACP Pribadi
+      // 4. INDIKATOR KERAJINAN CACP (0 - 100%)
       const myCacpLogs = cacpLogs.filter(l => {
         const isUser = l.user_id === person.id;
         const logDateStr = (l.log_date || l.confirmed_at || '').substring(0, 7);
         return isUser && logDateStr === targetMonth;
       });
-      const submittedDays = new Set(myCacpLogs.map(l => (l.log_date || l.confirmed_at || '').substring(0, 10))).size;
-      
-      const mgrCacpScore = activeDaysCount > 0 
-        ? Math.min(100, Math.round((submittedDays / activeDaysCount) * 100)) 
-        : 0;
+      const uniqueDays = new Set(myCacpLogs.map(l => (l.log_date || l.confirmed_at || '').substring(0, 10))).size;
+      const mgrCacpScore = Math.min(100, Math.round((uniqueDays / activeDaysCount) * 100));
 
-      // 4. Skor Komposit Manager Teladan (Real 4 Indikator x 25%)
+      // SKOR KOMPOSIT 4 PILAR (SEIMBANG MASING-MASING 25%)
       const compositeScore = Math.round(
         (mgrAttendanceScore * 0.25) +
         (mgrBreakScore * 0.25) +
@@ -2144,10 +2117,6 @@ export default function AreaDashboard() {
         }
       };
 
-      const isSM = person.role === 'store_manager';
-      const cacpThreshold = isSM ? 80 : 90;
-      const isQualifiedForPromo = compositeScore >= cacpThreshold && lateMinutes === 0 && overbreakCount === 0 && personLogs.length > 0;
-
       return {
         id: person.id,
         name: person.full_name || 'Leader',
@@ -2155,31 +2124,20 @@ export default function AreaDashboard() {
         role: person.role,
         roleLabel: formatRole(person.role),
         outletName: personOutlet?.name || 'Cabang Area',
-        outletCode: personOutlet?.code || '-',
-        points: personalPoints,
-        compositeScore,
+        compositeScore, // Nilai 0 - 100 Pts
         lateMinutes,
         overbreakCount,
         taskRate: mgrTaskScore,
-        completedTasksCount,
-        speedBonus,
         cacpScore: mgrCacpScore,
         breakScore: mgrBreakScore,
-        attendanceScore: mgrAttendanceScore,
-        isQualifiedForPromo,
-        promoStatus: isQualifiedForPromo 
-          ? '★ Siap Promosi (Lolos RM)' 
-          : compositeScore < cacpThreshold 
-          ? (isSM ? '⚠️ Demosi (< 80%)' : '⚠️ Tertahan (< 90%)') 
-          : 'Memenuhi Syarat'
+        attendanceScore: mgrAttendanceScore
       };
     }).sort((a, b) => {
-      // Urutan pemeringkatan objektif dari seluruh manager di 5 resto
+      // URUTKAN SKOR TERTINGGI KE TERENDAH:
+      // Nilai komposit tertinggi menjadi Peringkat #1
       if (b.compositeScore !== a.compositeScore) return b.compositeScore - a.compositeScore;
       if (a.lateMinutes !== b.lateMinutes) return a.lateMinutes - b.lateMinutes;
-      if (a.overbreakCount !== b.overbreakCount) return a.overbreakCount - b.overbreakCount;
-      if (b.completedTasksCount !== a.completedTasksCount) return b.completedTasksCount - a.completedTasksCount;
-      return b.points - a.points;
+      return a.overbreakCount - b.overbreakCount;
     });
   }, [profiles, outlets, attendanceLogs, tasks, cacpLogs, selectedMonth, totalDaysInSelectedMonth, selectedRegionFilter]);
 
@@ -6092,6 +6050,28 @@ export default function AreaDashboard() {
                                         Toleransi AM
                                       </span>
                                     )}
+
+                                    {/* TOMBOL EDIT & HAPUS JOBDESK (KHUSUS AM / SUPERUSER) */}
+                                    {isSuperUser && (
+                                      <div className="flex items-center gap-1 ml-1 border-l border-slate-200 pl-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenEditTask(t)}
+                                          title="Perbaharui Jobdesk"
+                                          className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors cursor-pointer"
+                                        >
+                                          <FiEdit3 className="text-xs" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteTask(t)}
+                                          title="Hapus Jobdesk"
+                                          className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                        >
+                                          <FiTrash2 className="text-xs" />
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
 
@@ -6792,6 +6772,78 @@ export default function AreaDashboard() {
 
             <div className="w-full max-w-md mx-auto py-2 text-center">
               <p className="text-[10px] text-slate-400 font-medium">Ketuk area luar atau tombol silang untuk menutup foto</p>
+            </div>
+          </div>
+        )}
+
+        {/* ================= MODAL EDIT / PERBAHARUI JOBDESK ================= */}
+        {editingTask && (
+          <div className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-xs flex justify-center items-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border border-slate-200 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="p-2 bg-indigo-50 text-indigo-700 rounded-xl">
+                    <FiEdit3 className="text-sm" />
+                  </span>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900">Perbaharui Jobdesk</h3>
+                    <p className="text-[9.5px] text-slate-400">Edit judul atau perpanjang deadline</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingTask(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                >
+                  <FiX className="text-sm" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEditTask} className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-500 block">
+                    Judul / Instruksi Jobdesk:
+                  </label>
+                  <input
+                    type="text"
+                    value={editTaskTitle}
+                    onChange={(e) => setEditTaskTitle(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 outline-none focus:border-indigo-500"
+                    placeholder="Judul jobdesk..."
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase text-slate-500 block">
+                    Batas Waktu (Deadline Baru):
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={editTaskDeadline}
+                    onChange={(e) => setEditTaskDeadline(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-800 outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingTask(null)}
+                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingEditTask}
+                    className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition-colors cursor-pointer shadow-md disabled:opacity-50"
+                  >
+                    {isSavingEditTask ? 'Menyimpan...' : 'Simpan Perubahan'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
