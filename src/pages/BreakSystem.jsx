@@ -55,7 +55,7 @@ import {
 // ================= FALLBACK GEOFENCE =================
 const DEFAULT_TARGET_LAT = -1.260041; 
 const DEFAULT_TARGET_LNG = 116.863895; 
-const DEFAULT_MAX_RADIUS = 50; 
+const DEFAULT_MAX_RADIUS = 150; 
 
 function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000; 
