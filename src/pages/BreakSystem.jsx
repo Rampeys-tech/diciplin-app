@@ -2465,13 +2465,31 @@ export default function BreakSystem() {
         setUserLocation({ lat: userLat, lng: userLng });
 
         try {
-          // Ambil seluruh daftar resto resmi yang ada koordinatnya
-          const { data: outletsData, error: oErr } = await supabase
+          // 1. Prioritaskan ambil outlet_id akun yang sedang login (Hasan Basri)
+          const targetOutletId = profile?.outlet_id || user?.outlet_id || user?.user_metadata?.outlet_id;
+
+          let outletQuery = supabase
             .from('outlets')
             .select('id, latitude, longitude, radius_meter, name, code')
             .not('latitude', 'is', null);
 
+          // Jika akun punya outlet_id terdaftar, kunci HANYA ke outlet akun tersebut
+          if (targetOutletId && !isAreaManager) {
+            outletQuery = outletQuery.eq('id', targetOutletId);
+          }
+
+          let { data: outletsData, error: oErr } = await outletQuery;
+
+          // Fallback: Jika outlet user tidak ditemukan datanya, baru tarik semua outlet
           if (oErr || !outletsData || outletsData.length === 0) {
+            const { data: allOutlets } = await supabase
+              .from('outlets')
+              .select('id, latitude, longitude, radius_meter, name, code')
+              .not('latitude', 'is', null);
+            outletsData = allOutlets || [];
+          }
+
+          if (outletsData.length === 0) {
             throw new Error("Gagal mengambil data koordinat outlet dari database.");
           }
 
