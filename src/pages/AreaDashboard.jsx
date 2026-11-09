@@ -4992,26 +4992,22 @@ export default function AreaDashboard() {
                               const totalMangkir = displayedManagers.reduce((acc, m) => acc + (m.uncompletedCount || 0), 0);
 
                               return (
-                                <div className="grid grid-cols-3 gap-1 mt-2.5 max-w-full">
-                                  <div className="bg-emerald-500/20 border border-emerald-500/30 px-1.5 py-0.5 rounded-lg text-center truncate">
-                                    <span className="text-[8.5px] font-black text-emerald-300 font-mono">
-                                      {totalOnTime} Tepat
+                                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                                    {totalOnTime} Tepat Waktu
+                                  </span>
+                                  {totalOverdue > 0 && (
+                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
+                                      {totalOverdue} Overdue
                                     </span>
-                                  </div>
-                                  <div className="bg-amber-500/20 border border-amber-500/30 px-1.5 py-0.5 rounded-lg text-center truncate">
-                                    <span className="text-[8.5px] font-black text-amber-300 font-mono">
-                                      {totalOverdue} Over
-                                    </span>
-                                  </div>
-                                  <div className={`px-1.5 py-0.5 rounded-lg text-center truncate ${
+                                  )}
+                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-lg font-mono ${
                                     totalMangkir > 0 
-                                      ? 'bg-rose-500/30 border border-rose-500/40 text-rose-300 animate-pulse font-black' 
-                                      : 'bg-white/10 text-slate-400 border border-white/5'
+                                      ? 'bg-rose-500/30 text-rose-300 border border-rose-500/40 animate-pulse font-black' 
+                                      : 'bg-white/10 text-slate-400'
                                   }`}>
-                                    <span className="text-[8.5px] font-black font-mono">
-                                      {totalMangkir} Mangkir
-                                    </span>
-                                  </div>
+                                    {totalMangkir} Mangkir
+                                  </span>
                                 </div>
                               );
                             })()}
@@ -6952,13 +6948,13 @@ export default function AreaDashboard() {
                   </div>
                 </div>
 
-                {/* SAKLAR 2: STATUS (GRID 4 KOLOM PAS LAYAR HP) */}
-                <div className="px-3 py-2 bg-white border-b border-slate-100 shrink-0">
-                  <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 rounded-2xl">
+                {/* SAKLAR 2: STATUS (SEMUA / SELESAI / OVER / MANGKIR / BERJALAN) */}
+                <div className="p-3 bg-white border-b border-slate-100 shrink-0">
+                  <div className="flex gap-1 p-1 bg-slate-100 rounded-2xl overflow-x-auto no-scrollbar">
                     <button
                       type="button"
                       onClick={() => setSlaAuditFilter('ALL')}
-                      className={`py-1.5 rounded-xl text-[8.5px] font-black transition-all cursor-pointer text-center truncate ${
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
                         slaAuditFilter === 'ALL' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                       }`}
                     >
@@ -6967,7 +6963,7 @@ export default function AreaDashboard() {
                     <button
                       type="button"
                       onClick={() => setSlaAuditFilter('ON_TIME')}
-                      className={`py-1.5 rounded-xl text-[8.5px] font-black transition-all cursor-pointer text-center truncate ${
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
                         slaAuditFilter === 'ON_TIME' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-emerald-700 hover:bg-emerald-50'
                       }`}
                     >
@@ -6976,7 +6972,7 @@ export default function AreaDashboard() {
                     <button
                       type="button"
                       onClick={() => setSlaAuditFilter('OVERDUE')}
-                      className={`py-1.5 rounded-xl text-[8.5px] font-black transition-all cursor-pointer text-center truncate ${
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
                         slaAuditFilter === 'OVERDUE' ? 'bg-amber-500 text-white shadow-2xs' : 'text-amber-800 hover:bg-amber-50'
                       }`}
                     >
@@ -6985,11 +6981,20 @@ export default function AreaDashboard() {
                     <button
                       type="button"
                       onClick={() => setSlaAuditFilter('MANGKIR')}
-                      className={`py-1.5 rounded-xl text-[8.5px] font-black transition-all cursor-pointer text-center truncate ${
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
                         slaAuditFilter === 'MANGKIR' ? 'bg-rose-600 text-white shadow-2xs' : 'text-rose-700 hover:bg-rose-50'
                       }`}
                     >
                       🚨 Mangkir ({totalMangkir})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditFilter('ONGOING')}
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                        slaAuditFilter === 'ONGOING' ? 'bg-blue-600 text-white shadow-2xs' : 'text-blue-700 hover:bg-blue-50'
+                      }`}
+                    >
+                      ⏳ Berjalan ({totalOngoing})
                     </button>
                   </div>
                 </div>
