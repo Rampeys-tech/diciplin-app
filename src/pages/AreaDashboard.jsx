@@ -4980,38 +4980,70 @@ export default function AreaDashboard() {
                                 ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
                                 : selectedRestoPerf.overdue;
 
+                              // Hitung persentase riil rasio onTime vs total tugas
+                              const totalEval = activeOnTime + activeOverdue;
+                              const realRate = totalEval > 0 ? Math.round((activeOnTime / totalEval) * 100) : 100;
+
                               return (
-                                <div className="flex items-center gap-2 mt-2">
-                                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
-                                    {activeOnTime} Tepat Waktu
-                                  </span>
-                                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
-                                    {activeOverdue} Overdue
-                                  </span>
-                                </div>
+                                <>
+                                  <div className="flex items-center gap-2 mt-2">
+                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                                      {activeOnTime} Tepat Waktu
+                                    </span>
+                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
+                                      {activeOverdue} Overdue
+                                    </span>
+                                  </div>
+                                </>
                               );
                             })()}
                           </div>
 
-                          <div className="text-right shrink-0">
-                            <span className="text-[9px] text-slate-400 uppercase block">Rerata Disiplin</span>
-                            <span className="text-3xl font-black font-mono text-emerald-400">
-                              {slaFilterOutletId === 'ALL' ? totalRegionalAvg : selectedRestoPerf.avgSla}%
-                            </span>
-                          </div>
+                          {(() => {
+                            const activeOnTime = slaFilterOutletId === 'ALL'
+                              ? restoPerformanceList.reduce((acc, r) => acc + r.onTime, 0)
+                              : selectedRestoPerf.onTime;
+                            const activeOverdue = slaFilterOutletId === 'ALL'
+                              ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
+                              : selectedRestoPerf.overdue;
+                            const totalEval = activeOnTime + activeOverdue;
+                            const realRate = totalEval > 0 ? Math.round((activeOnTime / totalEval) * 100) : 100;
+
+                            return (
+                              <div className="text-right shrink-0">
+                                <span className="text-[9px] text-slate-400 uppercase block">Rerata Disiplin</span>
+                                <span className={`text-3xl font-black font-mono ${realRate < 100 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {realRate}%
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Bar Proporsi Ketepatan */}
-                        <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden flex mt-3.5 shadow-inner">
-                          <div 
-                            className="bg-emerald-400 h-full transition-all duration-500" 
-                            style={{ width: `${slaFilterOutletId === 'ALL' ? totalRegionalAvg : selectedRestoPerf.avgSla}%` }} 
-                          />
-                          <div 
-                            className="bg-rose-500 h-full transition-all duration-500" 
-                            style={{ width: `${Math.max(0, 100 - (slaFilterOutletId === 'ALL' ? totalRegionalAvg : selectedRestoPerf.avgSla))}%` }} 
-                          />
-                        </div>
+                        {(() => {
+                          const activeOnTime = slaFilterOutletId === 'ALL'
+                            ? restoPerformanceList.reduce((acc, r) => acc + r.onTime, 0)
+                            : selectedRestoPerf.onTime;
+                          const activeOverdue = slaFilterOutletId === 'ALL'
+                            ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
+                            : selectedRestoPerf.overdue;
+                          const totalEval = activeOnTime + activeOverdue;
+                          const realRate = totalEval > 0 ? Math.round((activeOnTime / totalEval) * 100) : 100;
+
+                          return (
+                            <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden flex mt-3.5 shadow-inner">
+                              <div 
+                                className="bg-emerald-400 h-full transition-all duration-500" 
+                                style={{ width: `${realRate}%` }} 
+                              />
+                              <div 
+                                className="bg-rose-500 h-full transition-all duration-500" 
+                                style={{ width: `${Math.max(0, 100 - realRate)}%` }} 
+                              />
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* DAFTAR MANAJER BERDASARKAN PERSENTASE KERAJINAN */}
@@ -5407,8 +5439,8 @@ export default function AreaDashboard() {
                             </div>
                           )}
 
-                          {/* 2. TAMPILAN KHUSUS AREA MANAGER: MONITORING & REKAP (HARIAN / MINGGUAN / BULANAN) */}
-                          {currentProfile?.role === 'area_manager' ? (
+                          {/* 2. TAMPILAN MONITORING & REKAP: AREA MANAGER & STORE MANAGER */}
+{['area_manager', 'store_manager', 'superadmin', 'owner'].includes((currentProfile?.role || '').toLowerCase()) ? (
                             <div className="space-y-3.5">
                               {/* BAR FILTER PERIODE REKAP DAILY */}
                               <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-2xs space-y-2.5">
