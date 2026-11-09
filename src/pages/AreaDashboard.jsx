@@ -555,7 +555,7 @@ export default function AreaDashboard() {
         supabase.from('store_daily_closings').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('opex_budgets').select('*').eq('period_month', selectedMonth),
         supabase.from('controlling_equipment').select('*').limit(5000),
-        supabase.from('daily_task_templates').select('*').eq('is_active', true),
+        supabase.from('daily_task_templates').select('*').eq('is_active', true).order('deadline_time', { ascending: true }),
         supabase.from('daily_task_submissions').select('*'),
         supabase.from('cacp_daily_logs').select('*'),
         supabase.from('sales_monthly_summary').select('*').like('periode', `${selectedMonth}%`),
@@ -570,7 +570,14 @@ export default function AreaDashboard() {
 
       if (cacpLogsData) setCacpLogs(cacpLogsData);
 
-      if (dailyTplData) setDailyTemplates(dailyTplData);
+      if (dailyTplData) {
+  const sortedTemplates = [...dailyTplData].sort((a, b) => {
+    const timeA = a.deadline_time || '23:59:59';
+    const timeB = b.deadline_time || '23:59:59';
+    return timeA.localeCompare(timeB);
+  });
+  setDailyTemplates(sortedTemplates);
+}
       if (dailySubData) setDailySubmissions(dailySubData);
 
       if (outData) {
