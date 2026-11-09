@@ -328,6 +328,9 @@ export default function AreaDashboard() {
   const [selectedManagerForTaskHistory, setSelectedManagerForTaskHistory] = useState(null);
   const [selectedRestoForSlaDetail, setSelectedRestoForSlaDetail] = useState(null);
   const [selectedManagerForCacpHistory, setSelectedManagerForCacpHistory] = useState(null);
+  const [slaAuditFilter, setSlaAuditFilter] = useState('ALL'); // 'ALL' | 'ON_TIME' | 'OVERDUE' | 'ONGOING'
+  const [isOpenSlaAuditModal, setIsOpenSlaAuditModal] = useState(false);
+  const [slaAuditScopeFilter, setSlaAuditScopeFilter] = useState('ALL'); // 'ALL' | 'RESTO' | 'INDIVIDUAL'
   const [taskProofModalImage, setTaskProofModalImage] = useState(null);
   const [multiPhotoGallery, setMultiPhotoGallery] = useState(null); // { title: '', photos: [] }
   const [dailyFormScopeType, setDailyFormScopeType] = useState('INDIVIDUAL'); // 'INDIVIDUAL' | 'RESTO'
@@ -4641,12 +4644,11 @@ export default function AreaDashboard() {
                 return t.outlet_id === manager.outlet_id && t.target_role === manager.role;
               });
 
-              // 2. Ambil Setoran Jobdesk Daily Rutin Khusus Individu (Hanya Tipe INDIVIDUAL)
+              // 2. Ambil Setoran Jobdesk Daily yang dikerjakan oleh manajer ini (Baik Individu maupun Resto)
               const userDailySubs = dailySubmissions.filter(s => {
                 if (s.user_id !== manager.id) return false;
                 const matchMonth = s.submission_date && s.submission_date.substring(0, 7) === selectedMonth;
-                const tpl = dailyTemplates.find(t => t.id === s.template_id);
-                return matchMonth && tpl?.scope_type !== 'RESTO';
+                return matchMonth;
               });
 
               let totalScoreSum = 0;
@@ -4951,16 +4953,28 @@ export default function AreaDashboard() {
                     <div className="space-y-3 animate-in fade-in duration-150">
                       
                       {/* CARD DATA RESTO / STORE AKTIF */}
-                      <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white rounded-3xl p-4 shadow-xl border border-indigo-500/25 relative overflow-hidden">
+                      <div 
+                        onClick={() => {
+                          setSlaAuditFilter('ALL');
+                          setIsOpenSlaAuditModal(true);
+                        }}
+                        className="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white rounded-3xl p-4 shadow-xl border border-indigo-500/25 relative overflow-hidden cursor-pointer hover:border-indigo-400/50 hover:scale-[1.01] active:scale-[0.99] transition-all group"
+                        title="Klik untuk membuka rincian semua jobdesk"
+                      >
                         <div className="absolute top-0 right-0 w-36 h-36 bg-indigo-500/15 rounded-full blur-2xl pointer-events-none"></div>
 
                         <div className="flex items-center justify-between border-b border-white/10 pb-2">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-indigo-300 flex items-center gap-1.5">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-indigo-300 flex items-center gap-1.5 group-hover:text-amber-300 transition-colors">
                             <FiLayers /> Data Store & Kepatuhan Cabang
                           </span>
-                          <span className="text-[8px] font-mono font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
-                            Periode: {selectedMonth}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[8px] font-bold text-amber-300 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
+                              Lihat Rincian ↗
+                            </span>
+                            <span className="text-[8px] font-mono font-bold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                              Periode: {selectedMonth}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="mt-3 flex items-start justify-between gap-3">
@@ -4972,47 +4986,51 @@ export default function AreaDashboard() {
                               Wilayah: {slaFilterRegion === 'KALSEL_1' ? 'Kalsel 1' : slaFilterRegion === 'KALTIM' ? 'Kaltim' : 'Kalsel & Kaltim'}
                             </p>
                             {(() => {
-                              // Hitung total onTime & overdue secara dinamis sesuai filter
-                              const activeOnTime = slaFilterOutletId === 'ALL'
-                                ? restoPerformanceList.reduce((acc, r) => acc + r.onTime, 0)
-                                : selectedRestoPerf.onTime;
-                              const activeOverdue = slaFilterOutletId === 'ALL'
-                                ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
-                                : selectedRestoPerf.overdue;
-
-                              // Hitung persentase riil rasio onTime vs total tugas
-                              const totalEval = activeOnTime + activeOverdue;
-                              const realRate = totalEval > 0 ? Math.round((activeOnTime / totalEval) * 100) : 100;
+                              // Agregasi dari seluruh manajer sesuai filter
+                              const totalOnTime = displayedManagers.reduce((acc, m) => acc + (m.onTimeCount || 0), 0);
+                              const totalOverdue = displayedManagers.reduce((acc, m) => acc + (m.sameDayOverdue || 0) + (m.multiDayOverdue || 0), 0);
+                              const totalMangkir = displayedManagers.reduce((acc, m) => acc + (m.uncompletedCount || 0), 0);
 
                               return (
-                                <>
-                                  <div className="flex items-center gap-2 mt-2">
-                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
-                                      {activeOnTime} Tepat Waktu
+                                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                  <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-mono">
+                                    {totalOnTime} Tepat Waktu
+                                  </span>
+                                  {totalOverdue > 0 && (
+                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30 font-mono">
+                                      {totalOverdue} Overdue
                                     </span>
-                                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 font-mono">
-                                      {activeOverdue} Overdue
-                                    </span>
-                                  </div>
-                                </>
+                                  )}
+                                  <span className={`text-[9px] font-bold px-2 py-0.5 rounded-lg font-mono ${
+                                    totalMangkir > 0 
+                                      ? 'bg-rose-500/30 text-rose-300 border border-rose-500/40 animate-pulse font-black' 
+                                      : 'bg-white/10 text-slate-400'
+                                  }`}>
+                                    {totalMangkir} Mangkir
+                                  </span>
+                                </div>
                               );
                             })()}
                           </div>
 
                           {(() => {
-                            const activeOnTime = slaFilterOutletId === 'ALL'
-                              ? restoPerformanceList.reduce((acc, r) => acc + r.onTime, 0)
-                              : selectedRestoPerf.onTime;
-                            const activeOverdue = slaFilterOutletId === 'ALL'
-                              ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
-                              : selectedRestoPerf.overdue;
-                            const totalEval = activeOnTime + activeOverdue;
-                            const realRate = totalEval > 0 ? Math.round((activeOnTime / totalEval) * 100) : 100;
+                            const totalOnTime = displayedManagers.reduce((acc, m) => acc + (m.onTimeCount || 0), 0);
+                            const totalOverdue = displayedManagers.reduce((acc, m) => acc + (m.sameDayOverdue || 0) + (m.multiDayOverdue || 0), 0);
+                            const totalMangkir = displayedManagers.reduce((acc, m) => acc + (m.uncompletedCount || 0), 0);
+                            
+                            const totalSemuaTugas = totalOnTime + totalOverdue + totalMangkir;
+                            const realRate = totalSemuaTugas > 0 
+                              ? Math.round(((totalOnTime * 1.0 + totalOverdue * 0.5 + totalMangkir * 0.0) / totalSemuaTugas) * 100)
+                              : 100;
 
                             return (
                               <div className="text-right shrink-0">
                                 <span className="text-[9px] text-slate-400 uppercase block">Rerata Disiplin</span>
-                                <span className={`text-3xl font-black font-mono ${realRate < 100 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                <span className={`text-3xl font-black font-mono ${
+                                  realRate >= 95 ? 'text-emerald-400' :
+                                  realRate >= 80 ? 'text-amber-400' :
+                                  'text-rose-400'
+                                }`}>
                                   {realRate}%
                                 </span>
                               </div>
@@ -5020,27 +5038,22 @@ export default function AreaDashboard() {
                           })()}
                         </div>
 
-                        {/* Bar Proporsi Ketepatan */}
+                        {/* Bar Proporsi Ketepatan (Hijau = Tepat, Kuning = Over, Merah = Mangkir) */}
                         {(() => {
-                          const activeOnTime = slaFilterOutletId === 'ALL'
-                            ? restoPerformanceList.reduce((acc, r) => acc + r.onTime, 0)
-                            : selectedRestoPerf.onTime;
-                          const activeOverdue = slaFilterOutletId === 'ALL'
-                            ? restoPerformanceList.reduce((acc, r) => acc + r.overdue, 0)
-                            : selectedRestoPerf.overdue;
-                          const totalEval = activeOnTime + activeOverdue;
-                          const realRate = totalEval > 0 ? Math.round((activeOnTime / totalEval) * 100) : 100;
+                          const totalOnTime = displayedManagers.reduce((acc, m) => acc + (m.onTimeCount || 0), 0);
+                          const totalOverdue = displayedManagers.reduce((acc, m) => acc + (m.sameDayOverdue || 0) + (m.multiDayOverdue || 0), 0);
+                          const totalMangkir = displayedManagers.reduce((acc, m) => acc + (m.uncompletedCount || 0), 0);
+                          const totalSemua = Math.max(1, totalOnTime + totalOverdue + totalMangkir);
+
+                          const pctOnTime = (totalOnTime / totalSemua) * 100;
+                          const pctOver = (totalOverdue / totalSemua) * 100;
+                          const pctMangkir = (totalMangkir / totalSemua) * 100;
 
                           return (
                             <div className="w-full bg-white/10 h-2.5 rounded-full overflow-hidden flex mt-3.5 shadow-inner">
-                              <div 
-                                className="bg-emerald-400 h-full transition-all duration-500" 
-                                style={{ width: `${realRate}%` }} 
-                              />
-                              <div 
-                                className="bg-rose-500 h-full transition-all duration-500" 
-                                style={{ width: `${Math.max(0, 100 - realRate)}%` }} 
-                              />
+                              <div className="bg-emerald-400 h-full transition-all duration-500" style={{ width: `${pctOnTime}%` }} title="Tepat Waktu" />
+                              <div className="bg-amber-400 h-full transition-all duration-500" style={{ width: `${pctOver}%` }} title="Overdue" />
+                              <div className="bg-rose-600 h-full transition-all duration-500" style={{ width: `${pctMangkir}%` }} title="Mangkir (0%)" />
                             </div>
                           );
                         })()}
@@ -6758,6 +6771,334 @@ export default function AreaDashboard() {
             </div>
           );
         })()}
+{/* ================= MODAL AUDIT RINCIAN STATUS TUGAS SLA (LENGKAP DENGAN MANGKIR) ================= */}
+        {isOpenSlaAuditModal && (() => {
+          const now = new Date();
+
+          // 1. Target resto sesuai filter
+          const targetOutlets = outlets.filter(o => {
+            const matchReg = isOutletInRegion(o, 'KALSEL_1');
+            const matchOut = slaFilterOutletId === 'ALL' || o.id === slaFilterOutletId;
+            return matchReg && matchOut;
+          });
+          const targetOutletIds = new Set(targetOutlets.map(o => o.id));
+
+          // 2. Tugas Adhoc Bulanan (Kecualikan CACP)
+          const monthlyTasks = tasks.filter(t => {
+            const taskDate = t.created_at || t.deadline;
+            const matchMonth = taskDate && taskDate.substring(0, 7) === selectedMonth;
+            const isCacp = (t.department === 'cacp_audit') || (t.title || '').toUpperCase().includes('CACP');
+            const matchOutlet = !t.outlet_id || targetOutletIds.has(t.outlet_id);
+            return matchMonth && !isCacp && matchOutlet;
+          });
+
+          // 3. Setoran Daily
+          const relevantDailySubs = dailySubmissions.filter(s => {
+            const matchMonth = s.submission_date && s.submission_date.substring(0, 7) === selectedMonth;
+            const matchOutlet = targetOutletIds.has(s.outlet_id);
+            return matchMonth && matchOutlet;
+          });
+
+          const allCompiledList = [];
+
+          // 4. Masukkan Tugas Adhoc Bulanan
+          monthlyTasks.forEach(t => {
+            const targetUser = profiles.find(p => p.id === (t.target_user_id || t.created_by));
+            const targetOutlet = outlets.find(o => o.id === t.outlet_id);
+            const isDone = t.status === 'completed';
+            const isPastDeadline = new Date(t.deadline) < now;
+            const score = calculateTaskScore(t);
+
+            let statusCategory = 'ONGOING';
+            if (isDone) {
+              statusCategory = (score !== null && score >= 80) || t.has_tolerance ? 'ON_TIME' : 'OVERDUE';
+            } else if (isPastDeadline) {
+              // Jika deadline lewat bulan/hari dan tidak pernah disubmit, ini adalah MANGKIR
+              statusCategory = 'MANGKIR';
+            }
+
+            allCompiledList.push({
+              id: `adhoc_${t.id}`,
+              title: t.title,
+              scopeType: 'INDIVIDUAL',
+              category: 'TUGAS PROYEK',
+              personName: targetUser?.full_name || t.department || 'Manajer Cabang',
+              roleLabel: targetUser?.role ? targetUser.role.replace(/_/g, ' ').toUpperCase() : 'MANAGER',
+              outletName: targetOutlet?.name || 'Semua Resto',
+              deadlineStr: new Date(t.deadline).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' WITA',
+              statusCategory, // 'ON_TIME' | 'OVERDUE' | 'MANGKIR' | 'ONGOING'
+              notes: t.completion_notes || (statusCategory === 'MANGKIR' ? '🚨 Tidak dikerjakan sama sekali (Mangkir 0 Pts)' : null),
+              photoUrl: t.proof_photo_url || null,
+              photos: t.proof_photo_url ? [t.proof_photo_url] : []
+            });
+          });
+
+          // 5. Masukkan Setoran Daily
+          relevantDailySubs.forEach(s => {
+            const tpl = dailyTemplates.find(t => t.id === s.template_id);
+            const targetUser = profiles.find(p => p.id === s.user_id);
+            const targetOutlet = outlets.find(o => o.id === s.outlet_id);
+            const isScopeResto = tpl?.scope_type === 'RESTO';
+
+            let isDailyOnTime = true;
+            if (s.status !== 'completed') {
+              isDailyOnTime = true; // Dispensasi izin/cuti
+            } else if (tpl?.deadline_time && s.submitted_at) {
+              const subTime = new Date(s.submitted_at);
+              const subHourMinute = `${String(subTime.getHours()).padStart(2, '0')}:${String(subTime.getMinutes()).padStart(2, '0')}:00`;
+              if (subHourMinute > tpl.deadline_time) {
+                isDailyOnTime = false;
+              }
+            }
+
+            const statusCategory = isDailyOnTime ? 'ON_TIME' : 'OVERDUE';
+
+            allCompiledList.push({
+              id: `daily_${s.id}`,
+              title: tpl?.title || 'Jobdesk Daily Rutin',
+              scopeType: isScopeResto ? 'RESTO' : 'INDIVIDUAL',
+              category: isScopeResto ? 'DAILY PER RESTO' : 'DAILY INDIVIDU',
+              personName: targetUser?.full_name || 'Manajer Cabang',
+              roleLabel: targetUser?.role ? targetUser.role.replace(/_/g, ' ').toUpperCase() : 'MANAGER',
+              outletName: targetOutlet?.name || 'Cabang Resto',
+              deadlineStr: `${s.submission_date} (${tpl?.deadline_time ? tpl.deadline_time.substring(0, 5) : '21:00'} WITA)`,
+              statusCategory,
+              notes: s.notes || (s.status !== 'completed' ? `Status: ${s.status}` : null),
+              photoUrl: s.photo_urls?.[0] || null,
+              photos: s.photo_urls || []
+            });
+          });
+
+          // 6. Filter Scope (Semua Tipe / Per Resto / Per Orang)
+          const scopeFilteredList = allCompiledList.filter(item => {
+            if (slaAuditScopeFilter === 'RESTO') return item.scopeType === 'RESTO';
+            if (slaAuditScopeFilter === 'INDIVIDUAL') return item.scopeType === 'INDIVIDUAL';
+            return true;
+          });
+
+          // 7. Hitung Jumlah Tab Status
+          const totalOnTime = scopeFilteredList.filter(i => i.statusCategory === 'ON_TIME').length;
+          const totalOverdue = scopeFilteredList.filter(i => i.statusCategory === 'OVERDUE').length;
+          const totalMangkir = scopeFilteredList.filter(i => i.statusCategory === 'MANGKIR').length;
+          const totalOngoing = scopeFilteredList.filter(i => i.statusCategory === 'ONGOING').length;
+
+          // 8. Filter berdasarkan Tab Status yang Dipilih
+          const finalDisplayList = scopeFilteredList.filter(i => {
+            if (slaAuditFilter === 'ON_TIME') return i.statusCategory === 'ON_TIME';
+            if (slaAuditFilter === 'OVERDUE') return i.statusCategory === 'OVERDUE';
+            if (slaAuditFilter === 'MANGKIR') return i.statusCategory === 'MANGKIR';
+            if (slaAuditFilter === 'ONGOING') return i.statusCategory === 'ONGOING';
+            return true;
+          });
+
+          return (
+            <div className="fixed inset-0 z-[70] bg-slate-950/85 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md max-h-[92vh] rounded-3xl flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+                
+                {/* Header Modal */}
+                <div className="px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 shadow-2xs">
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 tracking-tight flex items-center gap-1.5">
+                      <span>Rincian Status Jobdesk SLA</span>
+                      <span className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse"></span>
+                    </h3>
+                    <p className="text-[9px] text-indigo-600 font-bold uppercase truncate mt-0.5">
+                      {slaFilterOutletId === 'ALL' ? 'Semua Resto Kalsel 1' : targetOutlets[0]?.name} • Periode: {selectedMonth}
+                    </p>
+                  </div>
+                  <button 
+                    type="button" 
+                    onClick={() => setIsOpenSlaAuditModal(false)}
+                    className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-500 cursor-pointer"
+                  >
+                    <FiX className="text-base" />
+                  </button>
+                </div>
+
+                {/* SAKLAR 1: TIPE JOBDESK */}
+                <div className="px-3 pt-2.5 pb-1 bg-white border-b border-slate-100 shrink-0">
+                  <div className="flex gap-1 p-0.5 bg-slate-100 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditScopeFilter('ALL')}
+                      className={`flex-1 py-1 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                        slaAuditScopeFilter === 'ALL' ? 'bg-white text-indigo-700 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      🌐 Semua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditScopeFilter('RESTO')}
+                      className={`flex-1 py-1 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                        slaAuditScopeFilter === 'RESTO' ? 'bg-purple-600 text-white shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      🏪 Per Resto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditScopeFilter('INDIVIDUAL')}
+                      className={`flex-1 py-1 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer ${
+                        slaAuditScopeFilter === 'INDIVIDUAL' ? 'bg-indigo-600 text-white shadow-2xs' : 'text-slate-500 hover:text-slate-900'
+                      }`}
+                    >
+                      👤 Per Orang
+                    </button>
+                  </div>
+                </div>
+
+                {/* SAKLAR 2: STATUS (SEMUA / SELESAI / OVER / MANGKIR / BERJALAN) */}
+                <div className="p-3 bg-white border-b border-slate-100 shrink-0">
+                  <div className="flex gap-1 p-1 bg-slate-100 rounded-2xl overflow-x-auto no-scrollbar">
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditFilter('ALL')}
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                        slaAuditFilter === 'ALL' ? 'bg-slate-900 text-white shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      Semua ({scopeFilteredList.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditFilter('ON_TIME')}
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                        slaAuditFilter === 'ON_TIME' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-emerald-700 hover:bg-emerald-50'
+                      }`}
+                    >
+                      ✓ Tepat ({totalOnTime})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditFilter('OVERDUE')}
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                        slaAuditFilter === 'OVERDUE' ? 'bg-amber-500 text-white shadow-2xs' : 'text-amber-800 hover:bg-amber-50'
+                      }`}
+                    >
+                      ⚠️ Over ({totalOverdue})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditFilter('MANGKIR')}
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                        slaAuditFilter === 'MANGKIR' ? 'bg-rose-600 text-white shadow-2xs' : 'text-rose-700 hover:bg-rose-50'
+                      }`}
+                    >
+                      🚨 Mangkir ({totalMangkir})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSlaAuditFilter('ONGOING')}
+                      className={`px-2.5 py-1.5 rounded-xl text-[9px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                        slaAuditFilter === 'ONGOING' ? 'bg-blue-600 text-white shadow-2xs' : 'text-blue-700 hover:bg-blue-50'
+                      }`}
+                    >
+                      ⏳ Berjalan ({totalOngoing})
+                    </button>
+                  </div>
+                </div>
+
+                {/* DAFTAR KARTU JOBDESK TERFILTER */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+                  {finalDisplayList.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-slate-400 font-bold bg-white rounded-2xl border border-dashed border-slate-200">
+                      Tidak ada tugas pada kategori filter ini.
+                    </div>
+                  ) : (
+                    finalDisplayList.map(item => (
+                      <div 
+                        key={item.id} 
+                        className={`p-3.5 rounded-2xl border transition-all space-y-2 shadow-2xs ${
+                          item.statusCategory === 'MANGKIR' ? 'bg-rose-50/70 border-rose-400 ring-1 ring-rose-300' :
+                          item.statusCategory === 'OVERDUE' ? 'bg-amber-50/60 border-amber-300' :
+                          item.statusCategory === 'ONGOING' ? 'bg-slate-50 border-slate-200' :
+                          'bg-white border-slate-200/90'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-md ${
+                                item.scopeType === 'RESTO' ? 'bg-purple-100 text-purple-800' : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {item.category}
+                              </span>
+                              <span className="text-[9px] font-bold text-slate-500 truncate">
+                                🏪 {item.outletName}
+                              </span>
+                            </div>
+                            <h4 className="text-xs font-black text-slate-900 mt-1 leading-snug">{item.title}</h4>
+                            <p className="text-[9.5px] text-indigo-700 font-bold mt-0.5 truncate">
+                              👤 {item.personName} <span className="text-[8px] text-slate-400 font-normal">({item.roleLabel})</span>
+                            </p>
+                          </div>
+
+                          <span className={`text-[8.5px] font-black uppercase px-2 py-0.8 rounded-lg border shrink-0 ${
+                            item.statusCategory === 'ON_TIME' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                            item.statusCategory === 'OVERDUE' ? 'bg-amber-100 text-amber-900 border-amber-300' :
+                            item.statusCategory === 'MANGKIR' ? 'bg-rose-600 text-white border-rose-600 shadow-xs animate-pulse' :
+                            'bg-blue-100 text-blue-800 border-blue-200'
+                          }`}>
+                            {item.statusCategory === 'ON_TIME' ? '✓ Tepat Waktu' :
+                             item.statusCategory === 'OVERDUE' ? '⚠️ Over Deadline' :
+                             item.statusCategory === 'MANGKIR' ? '🚨 Mangkir (0 Pts)' :
+                             '⏳ Masih Berjalan'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[9px] font-mono pt-1 border-t border-slate-100 text-slate-500">
+                          <span>Batas: {item.deadlineStr}</span>
+                          {item.photos && item.photos.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (item.photos.length > 1) {
+                                  setMultiPhotoGallery({
+                                    title: `${item.title} — ${item.personName}`,
+                                    photos: item.photos
+                                  });
+                                } else {
+                                  setTaskProofModalImage(item.photos[0]);
+                                }
+                              }}
+                              className="text-indigo-600 font-bold underline cursor-pointer"
+                            >
+                              Lihat {item.photos.length > 1 ? `${item.photos.length} Foto ↗` : 'Bukti ↗'}
+                            </button>
+                          )}
+                        </div>
+
+                        {item.notes && (
+                          <p className={`text-[8.5px] p-1.5 rounded-lg border italic ${
+                            item.statusCategory === 'MANGKIR' 
+                              ? 'bg-rose-100/70 border-rose-200 text-rose-800 font-bold' 
+                              : 'bg-white/70 border-slate-100 text-slate-500'
+                          }`}>
+                            {item.notes}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Footer Modal */}
+                <div className="p-3 bg-white border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setIsOpenSlaAuditModal(false)}
+                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors"
+                  >
+                    Tutup Rincian Evaluasi
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          );
+        })()}
+
         {/* MODAL GALERI MULTI-FOTO DOKUMENTASI (LAYER TERTINGGI Z-100) */}
         {multiPhotoGallery && (
           <div className="fixed inset-0 bg-slate-950/90 z-[100] backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
