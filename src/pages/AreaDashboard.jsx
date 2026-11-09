@@ -5619,7 +5619,7 @@ export default function AreaDashboard() {
                                         <>
                                           {/* RESTO YANG BELUM MENGERJAKAN */}
                                           {missedOutlets.length > 0 && (
-                                            <div className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-1.5">
+                                            <div className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-2">
                                               <div className="flex items-center justify-between">
                                                 <span className="text-[9px] font-black uppercase text-rose-800 flex items-center gap-1">
                                                   <FiAlertTriangle className="text-rose-600" /> Belum Dikerjakan ({missedOutlets.length} Resto):
@@ -5637,6 +5637,24 @@ export default function AreaDashboard() {
                                                   </div>
                                                 ))}
                                               </div>
+
+                                              {/* TOMBOL UPLOAD LANGSUNG UNTUK STORE MANAGER / LEADER CABANG */}
+                                              {missedOutlets.some(out => out.id === currentProfile?.outlet_id) && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    const todayDate = new Date().toISOString().split('T')[0];
+                                                    setTaskToConfirm({
+                                                      ...tpl,
+                                                      deadline: `${todayDate}T${tpl.deadline_time || '21:00:00'}`
+                                                    });
+                                                    setActiveModal('confirm_task');
+                                                  }}
+                                                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                                                >
+                                                  <FiCamera /> Kerjakan Sekarang (Upload {tpl.min_photos} Foto)
+                                                </button>
+                                              )}
                                             </div>
                                           )}
 
@@ -5690,7 +5708,7 @@ export default function AreaDashboard() {
                                         <>
                                           {/* MANAJER YANG BELUM MENGERJAKAN */}
                                           {missedManagers.length > 0 && (
-                                            <div className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-1.5">
+                                            <div className="p-2.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-2">
                                               <div className="flex items-center justify-between">
                                                 <span className="text-[9px] font-black uppercase text-rose-800 flex items-center gap-1">
                                                   <FiAlertTriangle className="text-rose-600" /> Belum Mengerjakan ({missedManagers.length} Manajer):
@@ -5711,6 +5729,24 @@ export default function AreaDashboard() {
                                                   );
                                                 })}
                                               </div>
+
+                                              {/* TOMBOL UPLOAD JIKA MANAJER LOGIN BELUM SUBMIT */}
+                                              {missedManagers.some(m => m.id === currentProfile?.id) && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    const todayDate = new Date().toISOString().split('T')[0];
+                                                    setTaskToConfirm({
+                                                      ...tpl,
+                                                      deadline: `${todayDate}T${tpl.deadline_time || '21:00:00'}`
+                                                    });
+                                                    setActiveModal('confirm_task');
+                                                  }}
+                                                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                                                >
+                                                  <FiCamera /> Kerjakan Sekarang (Upload {tpl.min_photos} Foto)
+                                                </button>
+                                              )}
                                             </div>
                                           )}
 
