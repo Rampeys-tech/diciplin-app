@@ -313,6 +313,8 @@ export default function AreaDashboard() {
   const [salesPeriodFilter, setSalesPeriodFilter] = useState('monthly');
   // Data real-time dari tabel sales_monthly_summary Supabase
   const [salesMonthlyDb, setSalesMonthlyDb] = useState([]);
+  // State data real-time service time & complaint
+  const [serviceComplaintDb, setServiceComplaintDb] = useState([]);
   // Data real-time controlling opex kalsel
   const [opexKalselDb, setOpexKalselDb] = useState([]);
 
@@ -447,6 +449,28 @@ export default function AreaDashboard() {
   const [adjustReason, setAdjustReason] = useState('Penerimaan barang belum tercatat');
   const [isSubmittingAdjustment, setIsSubmittingAdjustment] = useState(false);
 
+  // KALKULASI DINAMIS SERVICE TIME & COMPLAINT DARI SUPABASE
+  const dynamicServiceMetrics = useMemo(() => {
+    if (!serviceComplaintDb || serviceComplaintDb.length === 0) {
+      return {
+        serviceTime: probationMetrics.serviceTimeOjol.actual,
+        complaintRatio: probationMetrics.csKomplainRatio.actual
+      };
+    }
+
+    const totalTime = serviceComplaintDb.reduce((acc, c) => acc + (Number(c.service_time_minutes) || 0), 0);
+    const avgTime = Number((totalTime / serviceComplaintDb.length).toFixed(1));
+
+    const totalComplaints = serviceComplaintDb.reduce((acc, c) => acc + (Number(c.complaint_count) || 0), 0);
+    const uniqueOutlets = new Set(serviceComplaintDb.map(c => c.outlet_code)).size || 1;
+    const complaintRatio = Number((totalComplaints / uniqueOutlets).toFixed(1));
+
+    return { 
+      serviceTime: isNaN(avgTime) ? probationMetrics.serviceTimeOjol.actual : avgTime, 
+      complaintRatio: isNaN(complaintRatio) ? probationMetrics.csKomplainRatio.actual : complaintRatio 
+    };
+  }, [serviceComplaintDb, probationMetrics]);
+
   const totalDaysInSelectedMonth = useMemo(() => {
     const [year, month] = selectedMonth.split('-').map(Number);
     return new Date(year, month, 0).getDate();
@@ -551,9 +575,15 @@ export default function AreaDashboard() {
         { data: opexKalselRes }
       ] = await Promise.all([
         supabase.from('outlets').select('*').order('code', { ascending: true }),
-        supabase.from('user_profiles').select('id, full_name, avatar, role, total_points, outlet_id, station_placement'),
-        supabase.from('attendance_logs').select('id, user_id, outlet_id, created_at, actual_in, actual_out, break_start_time, break_end_time, status_in, status_out, discipline_status, penalty_points, financial_loss_amount'),
-        supabase.from('operational_violations').select('*'),
+        supabase.from('user_profiles').select('id, full_name, avatar, role, total_points, outlet_id, station_placement').limit(5000),
+        supabase.from('attendance_logs')
+          .select('id, user_id, outlet_id, created_at, actual_in, actual_out, break_start_time, break_end_time, status_in, status_out, discipline_status, penalty_points, financial_loss_amount')
+          .order('created_at', { ascending: false })
+          .limit(50000),
+        supabase.from('operational_violations')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(20000),
         supabase.from('department_tasks').select('*').order('created_at', { ascending: false }),
         supabase.from('store_daily_closings').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('opex_budgets').select('*').eq('period_month', selectedMonth),
@@ -562,8 +592,16 @@ export default function AreaDashboard() {
         supabase.from('daily_task_submissions').select('*'),
         supabase.from('cacp_daily_logs').select('*'),
         supabase.from('sales_monthly_summary').select('*').like('periode', `${selectedMonth}%`),
-        supabase.from('opex_kalsel_controlling').select('*').like('period_month', `${selectedMonth}%`)
+        supabase.from('opex_kalsel_controlling').select('*').like('period_month', `${selectedMonth}%`),
+        supabase.from('service_and_complaints_daily').select('*').like('period_month', `${selectedMonth}%`)
       ]);
+
+      // Simpan data Service Time & Complaint jika tabel sudah ada (fallback aman jika tabel kosong)
+      if (arguments && arguments.length > 0) {} 
+      const svcRes = await supabase.from('service_and_complaints_daily').select('*').like('period_month', `${selectedMonth}%`);
+      if (svcRes && svcRes.data) {
+        setServiceComplaintDb(svcRes.data);
+      }
 
       // Simpan data OPEX Kalsel sesuai periode yang dipilih
       setOpexKalselDb(opexKalselRes || []);
@@ -1882,74 +1920,75 @@ export default function AreaDashboard() {
     };
   }, [opexKalselDb, isAM, selectedOpexOutlet, currentProfile, outlets]);
   const outletScoreRankings = useMemo(() => {
-    // Normalisasi format filter periode (YYYY-MM)
     const targetMonth = selectedMonth ? selectedMonth.substring(0, 7) : new Date().toISOString().substring(0, 7);
-    
-    // Hitung hari berjalan aktif agar awal bulan penilaian tidak anjlok
     const today = new Date();
     const currentMonthStr = today.toISOString().substring(0, 7);
     const isCurrentMonth = targetMonth === currentMonthStr;
     const activeDaysCount = isCurrentMonth ? Math.max(1, today.getDate()) : (totalDaysInSelectedMonth || 30);
 
-    // Filter resto berdasarkan wilayah aktif
     const regionalOutlets = outlets.filter(o => isOutletInRegion(o, selectedRegionFilter));
 
     return regionalOutlets.map((outlet) => {
-      // Kru terdaftar di resto ini
-      const restoCrew = profiles.filter(p => p.outlet_id === outlet.id || p.outlet_id === outlet.code);
+      const outCode = String(outlet.code || '').toUpperCase().trim();
+      const outId = String(outlet.id || '').trim();
+
+      // 1. Ambil seluruh kru yang bertugas di resto ini secara akurat
+      const restoCrew = profiles.filter(p => {
+        if (!p.outlet_id) return false;
+        const pOutlet = String(p.outlet_id).toUpperCase().trim();
+        return pOutlet === outId.toUpperCase() || pOutlet === outCode || pOutlet.includes(outCode);
+      });
       const crewIds = new Set(restoCrew.map(p => p.id));
-      
-      // Ambil log absensi cabang pada bulan terpilih
-      const restoLogs = attendanceLogs.filter(l => {
-        const matchOutlet = l.outlet_id === outlet.id || l.outlet_id === outlet.code || crewIds.has(l.user_id);
-        const logDateStr = (l.created_at || l.actual_in || '').substring(0, 7);
-        return matchOutlet && logDateStr === targetMonth;
+
+      // 2. Ambil log absensi dari kru atau resto ini pada bulan yang dipilih
+      const restoLogs = (attendanceLogs || []).filter(l => {
+        const isMyCrew = crewIds.has(l.user_id);
+        const lOut = String(l.outlet_id || '').toUpperCase().trim();
+        const isMyOutlet = lOut === outId.toUpperCase() || lOut === outCode;
+        if (!isMyCrew && !isMyOutlet) return false;
+
+        const dateRaw = String(l.created_at || l.actual_in || '');
+        return dateRaw.startsWith(targetMonth);
+      });
+
+      // 3. Ambil catatan pelanggaran riil dari operational_violations
+      const restoViolations = (violations || []).filter(v => {
+        const isMyCrew = crewIds.has(v.user_id);
+        const vOut = String(v.outlet_id || '').toUpperCase().trim();
+        const isMyOutlet = vOut === outId.toUpperCase() || vOut === outCode;
+        if (!isMyCrew && !isMyOutlet) return false;
+
+        const dateRaw = String(v.created_at || v.violation_date || '');
+        return dateRaw.startsWith(targetMonth);
       });
 
       // -------------------------------------------------------------
-      // INDIKATOR 1: KEDISIPLINAN KEHADIRAN KRU (0 - 100%)
+      // INDIKATOR 1: AUDIT CACP (0 - 100%)
       // -------------------------------------------------------------
-      let lateCount = 0;
-      const totalLogs = restoLogs.length;
-      restoLogs.forEach(log => {
-        const statusIn = (log.status_in || '').toLowerCase();
-        if (statusIn.includes('terlambat') || (Number(log.penalty_points) > 0)) {
-          lateCount++;
-        }
+      const managersInOutlet = restoCrew.filter(p => 
+        ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role)
+      );
+      const managerIds = new Set(managersInOutlet.map(p => p.id));
+
+      const restoCacpLogs = cacpLogs.filter(l => {
+        const isMatch = l.outlet_id === outlet.id || l.outlet_id === outlet.code || managerIds.has(l.user_id);
+        const logDateStr = String(l.log_date || l.confirmed_at || '');
+        return isMatch && logDateStr.startsWith(targetMonth);
       });
-      const attendanceScore = totalLogs > 0 
-        ? Math.max(0, Math.round(((totalLogs - lateCount) / totalLogs) * 100)) 
+
+      const totalExpectedCacp = Math.max(1, managersInOutlet.length * activeDaysCount);
+      const cacpPercentage = managersInOutlet.length > 0
+        ? Math.min(100, Math.round((restoCacpLogs.length / totalExpectedCacp) * 100))
         : 100;
 
       // -------------------------------------------------------------
-      // INDIKATOR 2: DISIPLIN BREAK & AFTER BREAK (0 - 100%)
-      // -------------------------------------------------------------
-      let totalBreakSessions = 0;
-      let overbreakCount = 0;
-      let lossRupiah = 0;
-
-      restoLogs.forEach(log => {
-        lossRupiah += Number(log.financial_loss_amount || 0);
-        if (log.break_start_time || log.discipline_status) {
-          totalBreakSessions++;
-          if (log.discipline_status === 'Overbreak') {
-            overbreakCount++;
-          }
-        }
-      });
-
-      const breakDisciplineScore = totalBreakSessions > 0
-        ? Math.max(0, Math.round(((totalBreakSessions - overbreakCount) / totalBreakSessions) * 100))
-        : (overbreakCount > 0 ? Math.max(0, 100 - (overbreakCount * 10)) : 100);
-
-      // -------------------------------------------------------------
-      // INDIKATOR 3: PENGERJAAN SLA TUGAS (0 - 100%)
+      // INDIKATOR 2: PENGERJAAN SLA TUGAS (0 - 100%)
       // -------------------------------------------------------------
       const restoTasks = tasks.filter(t => {
         const isMatchOutlet = t.outlet_id === outlet.id || t.outlet_id === outlet.code;
-        const taskMonth = (t.created_at || t.deadline || '').substring(0, 7);
+        const taskMonth = String(t.created_at || t.deadline || '');
         const isNotCacp = (t.department !== 'cacp_audit') && !(t.title || '').toUpperCase().includes('CACP');
-        return isMatchOutlet && taskMonth === targetMonth && isNotCacp;
+        return isMatchOutlet && taskMonth.startsWith(targetMonth) && isNotCacp;
       });
 
       let taskComplianceRate = 100;
@@ -1969,28 +2008,139 @@ export default function AreaDashboard() {
       }
 
       // -------------------------------------------------------------
-      // INDIKATOR 4: AUDIT CACP (0 - 100%)
+      // INDIKATOR 3 & 4: PRESENSI & DISIPLIN BREAK REAL TIME DARI DATA
       // -------------------------------------------------------------
-      const managersInOutlet = restoCrew.filter(p => 
-        ['store_manager', 'ast_store_manager', 'floor_leader', 'floor_leader_orientation'].includes(p.role)
-      );
-      const managerIds = new Set(managersInOutlet.map(p => p.id));
+      let lateCount = 0;
+      let overbreakCount = 0;
+      let lossRupiah = 0;
+      let totalBreakSessions = 0;
 
-      const restoCacpLogs = cacpLogs.filter(l => {
-        const matchOutlet = l.outlet_id === outlet.id || l.outlet_id === outlet.code || managerIds.has(l.user_id);
-        const logDateStr = (l.log_date || l.confirmed_at || '').substring(0, 7);
-        return matchOutlet && logDateStr === targetMonth;
+      // Siapkan peta profil karyawan resto
+      const employeeMap = {};
+      restoCrew.forEach(c => {
+        const currentPoints = c.total_points !== undefined ? Number(c.total_points) : 100;
+        employeeMap[c.id] = {
+          id: c.id,
+          name: c.full_name || 'Karyawan',
+          role: c.role ? c.role.replace(/_/g, ' ').toUpperCase() : (c.station_placement || 'KRU'),
+          avatar: c.avatar,
+          totalHadir: 0,
+          totalLate: 0,
+          totalOverbreak: 0,
+          totalViolations: 0,
+          totalLoss: 0,
+          score: currentPoints
+        };
       });
 
-      // Target dihitung berdasarkan hari berjalan (activeDaysCount)
-      const totalExpectedCacp = Math.max(1, managersInOutlet.length * activeDaysCount);
-      const cacpPercentage = managersInOutlet.length > 0
-        ? Math.min(100, Math.round((restoCacpLogs.length / totalExpectedCacp) * 100))
-        : 100;
+      // A. Hitung Pelanggaran dari attendance_logs
+      restoLogs.forEach(log => {
+        const lossVal = Number(log.financial_loss_amount || 0);
+        lossRupiah += lossVal;
+
+        const sIn = String(log.status_in || '').toLowerCase();
+        const dStat = String(log.discipline_status || '').toLowerCase();
+        const sOut = String(log.status_out || '').toLowerCase();
+
+        // 1. Deteksi Telat Datang
+        const isLate = sIn.includes('telat') || sIn.includes('terlambat') || Number(log.penalty_points) > 0;
+        if (isLate) lateCount++;
+
+        // 2. Deteksi Overbreak & Denda Break Nyata
+        const hasBreakTime = Boolean(log.break_start_time || log.break_end_time);
+        
+        // Terhitung Overbreak jika: status mengandung over/break ATAU ada nominal denda operasional (seperti Rp 212.000)
+        const isOver = dStat.includes('over') || 
+                       dStat.includes('break') || 
+                       sOut.includes('over') || 
+                       sIn.includes('over') || 
+                       dStat === 'overbreak' ||
+                       (lossVal > 0);
+
+        if (hasBreakTime || isOver) {
+          totalBreakSessions++;
+        }
+        if (isOver) {
+          overbreakCount++;
+        }
+
+        if (employeeMap[log.user_id]) {
+          employeeMap[log.user_id].totalShift += 1;
+          if (isLate) {
+            employeeMap[log.user_id].totalLate += 1;
+            employeeMap[log.user_id].totalViolations += 1;
+          }
+          if (isOver) {
+            employeeMap[log.user_id].totalOverbreak += 1;
+            employeeMap[log.user_id].totalViolations += 1;
+          }
+          employeeMap[log.user_id].totalLoss += lossVal;
+        }
+      });
+
+      // B. Hitung Pelanggaran dari operational_violations (Catatan Overbreak Menu Poin)
+      restoViolations.forEach(v => {
+        const vText = String(v.violation_type || v.title || v.category || v.description || '').toLowerCase();
+        const isLate = vText.includes('telat') || vText.includes('terlambat') || vText.includes('late');
+        const isOver = vText.includes('break') || vText.includes('overbreak') || vText.includes('over');
+
+        if (isLate) lateCount++;
+        if (isOver) {
+          totalBreakSessions++;
+          overbreakCount++;
+        }
+
+        if (employeeMap[v.user_id]) {
+          if (isLate) employeeMap[v.user_id].totalLate += 1;
+          if (isOver) employeeMap[v.user_id].totalOverbreak += 1;
+          employeeMap[v.user_id].totalViolations += 1;
+          employeeMap[v.user_id].totalLoss += Number(v.financial_loss_amount || v.penalty_points || 0);
+        }
+      });
+
+      // Kalkulasi Poin Murni Tiap Kru
+      const crewList = Object.values(employeeMap).map(emp => {
+        const calculatedScore = Math.max(0, 100 - (emp.totalLate * 10) - (emp.totalOverbreak * 15));
+        return { ...emp, score: calculatedScore };
+      });
+
+      const topDisciplinedEmployees = [...crewList]
+        .sort((a, b) => b.score - a.score || a.totalViolations - b.totalViolations)
+        .slice(0, 5);
+
+      const problematicEmployees = [...crewList]
+        .filter(e => e.totalViolations > 0)
+        .sort((a, b) => b.totalViolations - a.totalViolations || a.score - b.score);
 
       // -------------------------------------------------------------
-      // TOTAL HEALTH SCORE: RATA-RATA 4 PILAR (25% MASING-MASING)
+      // HITUNG AKUMULASI PERSENTASE MURNI DATA NYATA
       // -------------------------------------------------------------
+      const totalShiftTercatat = restoLogs.length;
+
+      // 1. Skor Presensi: Persentase shift tepat waktu dari total shift yang tercatat
+      let attendanceScore = 100;
+      if (totalShiftTercatat > 0) {
+        attendanceScore = Math.max(0, Math.round(((totalShiftTercatat - lateCount) / totalShiftTercatat) * 100));
+      } else if (lateCount > 0) {
+        attendanceScore = Math.max(0, 100 - (lateCount * 10));
+      } else {
+        attendanceScore = 100;
+      }
+
+      // 2. Skor Disiplin Break: Dihitung dari total shift aktif (karena tiap shift kru berhak 1 sesi break)
+      const effectiveBreakSessions = Math.max(totalBreakSessions, totalShiftTercatat, overbreakCount);
+
+      let breakDisciplineScore = 100;
+      if (effectiveBreakSessions > 0) {
+        // Rumus Murni Real: ((Total Sesi - Overbreak) / Total Sesi) * 100%
+        breakDisciplineScore = Math.max(0, Math.round(((effectiveBreakSessions - overbreakCount) / effectiveBreakSessions) * 100));
+      } else if (overbreakCount > 0) {
+        breakDisciplineScore = Math.max(0, 100 - (overbreakCount * 10));
+      } else {
+        breakDisciplineScore = 100;
+      }
+
+      // TOTAL HEALTH SCORE: RATA-RATA 4 PILAR (25% MASING-MASING)
       const overallScore = Math.round(
         (attendanceScore * 0.25) +
         (breakDisciplineScore * 0.25) +
@@ -2007,8 +2157,12 @@ export default function AreaDashboard() {
         storeManagerAvatar: storeManager?.avatar,
         lateCount,
         overbreakCount,
+        totalLogs: totalShiftTercatat,
+        totalBreakSessions,
         lossAmount: lossRupiah,
         healthScore: overallScore,
+        topDisciplinedEmployees,
+        problematicEmployees,
         cacpData: {
           overallPercentage: cacpPercentage,
           submittedDays: restoCacpLogs.length,
@@ -2028,7 +2182,7 @@ export default function AreaDashboard() {
         }
       };
     }).sort((a, b) => b.healthScore - a.healthScore);
-  }, [outlets, profiles, attendanceLogs, tasks, cacpLogs, selectedMonth, totalDaysInSelectedMonth, selectedRegionFilter]);
+  }, [outlets, profiles, attendanceLogs, violations, tasks, cacpLogs, selectedMonth, totalDaysInSelectedMonth, selectedRegionFilter]);
 
   // =========================================================================
   // 2. KALKULASI PENILAIAN MANAGER TELADAN (PERSAINGAN SELURUH MANAGER KALSEL 1)
@@ -2619,35 +2773,41 @@ export default function AreaDashboard() {
                     />
                   </div>
 
-                  {/* Nominal Sales (Diblus untuk user selain AM & SM) */}
-                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono">
-                    <div>
-                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Realisasi</span>
-                      <span className={`font-black text-slate-800 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
-                        Rp {salesMetricsCalculation.areaActual.toLocaleString('id-ID')}
+                  {/* Nominal Sales (Diformat rapi & responsif agar tidak menabrak samping) */}
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono gap-1">
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block truncate">Realisasi</span>
+                      <span className={`font-black text-slate-800 block truncate text-[9.5px] ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaActual >= 1000000000 
+                          ? `${(salesMetricsCalculation.areaActual / 1000000000).toFixed(2)} M` 
+                          : salesMetricsCalculation.areaActual.toLocaleString('id-ID')}
                       </span>
                     </div>
-                    <div className="text-right">
-                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Target</span>
-                      <span className={`font-black text-slate-500 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
-                        Rp {salesMetricsCalculation.areaTarget.toLocaleString('id-ID')}
+                    <div className="text-right min-w-0 flex-1">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block truncate">Target</span>
+                      <span className={`font-black text-slate-500 block truncate text-[9.5px] ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                        Rp {salesMetricsCalculation.areaTarget >= 1000000000 
+                          ? `${(salesMetricsCalculation.areaTarget / 1000000000).toFixed(2)} M` 
+                          : salesMetricsCalculation.areaTarget.toLocaleString('id-ID')}
                       </span>
                     </div>
                   </div>
                 </div>
 
                 {/* Sisa Hari & Target Daily Run-rate */}
-                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 p-2 rounded-b-2xl flex items-center justify-between text-[8.5px]">
-                  <div>
-                    <span className="text-slate-400 uppercase font-bold block text-[7.5px]">Sisa Hari</span>
-                    <span className="font-mono font-black text-amber-700">
+                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 px-2 py-1.5 rounded-b-2xl flex items-center justify-between text-[8px] gap-1">
+                  <div className="min-w-0 shrink-0">
+                    <span className="text-slate-400 uppercase font-bold block text-[7px]">Sisa Hari</span>
+                    <span className="font-mono font-black text-amber-700 whitespace-nowrap">
                       {salesMetricsCalculation.remainingDays} Hari Lagi
                     </span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-slate-400 uppercase font-bold block text-[7.5px]">Target Daily</span>
-                    <span className={`font-mono font-black text-indigo-700 ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
-                      Rp {salesMetricsCalculation.areaDailyTargetNeeded.toLocaleString('id-ID')}/hr
+                  <div className="text-right min-w-0 flex-1">
+                    <span className="text-slate-400 uppercase font-bold block text-[7px] truncate">Target Daily</span>
+                    <span className={`font-mono font-black text-indigo-700 whitespace-nowrap block truncate ${!canViewNominal ? 'filter blur-sm select-none' : ''}`}>
+                      Rp {salesMetricsCalculation.areaDailyTargetNeeded >= 1000000 
+                        ? `${(salesMetricsCalculation.areaDailyTargetNeeded / 1000000).toFixed(1)} Jt/hr` 
+                        : `${salesMetricsCalculation.areaDailyTargetNeeded.toLocaleString('id-ID')}/hr`}
                     </span>
                   </div>
                 </div>
@@ -2853,7 +3013,7 @@ export default function AreaDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between pt-1">
                     <span className="text-base font-black font-mono text-slate-900">
-                      {probationMetrics.serviceTimeOjol.actual} <span className="text-[10px] font-normal font-sans text-slate-500">Mnt</span>
+                      {dynamicServiceMetrics.serviceTime} <span className="text-[10px] font-normal font-sans text-slate-500">Mnt</span>
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
                       Maks: {probationMetrics.serviceTimeOjol.target} Mnt
@@ -2889,7 +3049,7 @@ export default function AreaDashboard() {
                   </div>
                   <div className="flex items-baseline justify-between pt-1">
                     <span className="text-base font-black font-mono text-emerald-700">
-                      {probationMetrics.csKomplainRatio.actual}
+                      {dynamicServiceMetrics.complaintRatio}
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
                       Rasio / Store
@@ -2905,6 +3065,80 @@ export default function AreaDashboard() {
                   <span className="text-[8px] font-black uppercase text-emerald-600 block">Jobdesk Project:</span>
                   <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
                     Audit presenter per 1 jam oleh Manager IC, triple check packaging.
+                  </p>
+                </div>
+              </div>
+
+              {/* 7. CONTROLLING AUDIT PRODUK */}
+              <div 
+                onClick={() => alert("Fitur Audit Produk: Pengujian kematangan mie, takaran bumbu resep, dan suhu deep fryer.")}
+                className="bg-white border border-slate-200/90 hover:border-emerald-400 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer transition-all hover:shadow-md group active:scale-[0.99]"
+              >
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-emerald-600 transition-colors">
+                      <FiCheckCircle className="text-emerald-600 text-xs" /> Audit Produk
+                    </span>
+                    <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      Standar Rasa
+                    </span>
+                  </div>
+
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-slate-900">
+                      94.2%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Target: ≥ 90%
+                    </span>
+                  </div>
+
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: '94.2%' }} />
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-emerald-600 block">Fokus Kontrol:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Suhu minyak boiler & fryer, uji organoleptik mie & pangsit, visual garnish.
+                  </p>
+                </div>
+              </div>
+
+              {/* 8. CONTROLLING AUDIT PROSES */}
+              <div 
+                onClick={() => alert("Fitur Audit Proses: Kepatuhan SOP stasiun kerja, FIFO bahan baku, dan kebersihan kitchen.")}
+                className="bg-white border border-slate-200/90 hover:border-indigo-400 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer transition-all hover:shadow-md group active:scale-[0.99]"
+              >
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-indigo-600 transition-colors">
+                      <FiActivity className="text-indigo-600 text-xs" /> Audit Proses
+                    </span>
+                    <span className="text-[8px] font-black px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      SOP Stasiun
+                    </span>
+                  </div>
+
+                  <div className="flex items-baseline justify-between pt-1">
+                    <span className="text-base font-black font-mono text-slate-900">
+                      89.5%
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Target: ≥ 85%
+                    </span>
+                  </div>
+
+                  <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
+                    <div className="h-full bg-indigo-600 rounded-full transition-all duration-500" style={{ width: '89.5%' }} />
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100">
+                  <span className="text-[8px] font-black uppercase text-indigo-600 block">Fokus Kontrol:</span>
+                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
+                    Disiplin FIFO chiller & freezer, alur antrean kasir POS, sanitasi dishwashing.
                   </p>
                 </div>
               </div>
@@ -7567,130 +7801,220 @@ export default function AreaDashboard() {
           </div>
         )}
 
-        {/* MODAL DETAIL RESTO (RINCIAN MATEMATIS 4 PILAR REAL) */}
-        {activeModal === 'detail_resto' && selectedOutletForDetail && (
-          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4">
-            <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100 animate-in fade-in duration-200">
-              
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                <div>
-                  <h3 className="text-sm font-black text-slate-900">{selectedOutletForDetail.name}</h3>
-                  <p className="text-[10px] text-slate-400 font-medium">Rincian Perhitungan 4 Indikator Real-Time</p>
-                </div>
-                <button 
-                  onClick={() => setActiveModal('peringkat_modern')}
-                  className="p-2 bg-white hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
-                  title="Kembali ke Peringkat"
-                >
-                  <FiX className="text-sm" />
-                </button>
-              </div>
+        {/* ================= MODAL DETAIL RESTO (SINKRON DENGAN LIST KARYAWAN) ================= */}
+        {activeModal === 'detail_resto' && selectedOutletForDetail && (() => {
+          const r = selectedOutletForDetail;
 
-              <div className="p-5 overflow-y-auto space-y-4">
-                {/* KARTU TOTAL HEALTH SCORE */}
-                <div className="bg-slate-900 text-white p-4 rounded-2xl flex items-center justify-between shadow-md">
+          return (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex justify-center items-center p-3 animate-in fade-in duration-200">
+              <div className="bg-[#FAFBFD] w-full max-w-md max-h-[92vh] rounded-3xl flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+                
+                {/* Header Modal */}
+                <div className="px-5 py-4 bg-white border-b border-slate-200 flex items-center justify-between shadow-2xs">
                   <div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Health Score</span>
-                    <h4 className="text-xs font-bold text-indigo-300 mt-0.5">SM: {selectedOutletForDetail.storeManagerName}</h4>
-                    <p className="text-[9px] text-slate-400 mt-1 font-mono">Formula: Rata-rata 4 Indikator (Masing-masing 25%)</p>
-                  </div>
-                  <span className="text-3xl font-black font-mono text-emerald-400">
-                    {selectedOutletForDetail.healthScore}%
-                  </span>
-                </div>
-
-                <div className="space-y-3.5 pt-1">
-                  {/* 1. PRESENSI KEHADIRAN KRU */}
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5">
-                    <div className="flex justify-between items-center text-xs font-bold">
-                      <span className="text-slate-800 flex items-center gap-1.5">
-                        <FiUsers className="text-indigo-600" /> 1. Presensi & On-Time Kru
-                      </span>
-                      <span className="font-mono text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
-                        {selectedOutletForDetail.metrics.attendance}% (Bobot 25%)
-                      </span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-indigo-600 rounded-full" style={{ width: `${selectedOutletForDetail.metrics.attendance}%` }} />
-                    </div>
-                    <p className="text-[9.5px] text-slate-500 font-mono">
-                      Data Nyata: Terlambat {selectedOutletForDetail.lateCount} kali dari seluruh shift kru ({selectedOutletForDetail.crewCount} orang terdaftar).
+                    <h3 className="text-sm font-black text-slate-900 tracking-tight leading-tight">
+                      {r.name}
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-medium">
+                      Rincian Perhitungan 4 Indikator Real-Time
                     </p>
                   </div>
-
-                  {/* 2. DISIPLIN BREAK */}
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5">
-                    <div className="flex justify-between items-center text-xs font-bold">
-                      <span className="text-slate-800 flex items-center gap-1.5">
-                        <FiClock className="text-emerald-600" /> 2. Disiplin Break & After Break
-                      </span>
-                      <span className="font-mono text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-lg">
-                        {selectedOutletForDetail.metrics.breakDiscipline}% (Bobot 25%)
-                      </span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-600 rounded-full" style={{ width: `${selectedOutletForDetail.metrics.breakDiscipline}%` }} />
-                    </div>
-                    <p className="text-[9.5px] text-slate-500 font-mono">
-                      Data Nyata: {selectedOutletForDetail.overbreakCount} kali overbreak. {selectedOutletForDetail.lossAmount > 0 ? `Total kerugian Rp ${Number(selectedOutletForDetail.lossAmount).toLocaleString('id-ID')}` : 'Tidak ada denda operasional'}.
-                    </p>
-                  </div>
-
-                  {/* 3. KEPATUHAN SLA TUGAS */}
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5">
-                    <div className="flex justify-between items-center text-xs font-bold">
-                      <span className="text-slate-800 flex items-center gap-1.5">
-                        <FiCheckSquare className="text-blue-600" /> 3. Pengerjaan SLA Tugas
-                      </span>
-                      <span className="font-mono text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-lg">
-                        {selectedOutletForDetail.metrics.taskCompliance}% (Bobot 25%)
-                      </span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-600 rounded-full" style={{ width: `${selectedOutletForDetail.metrics.taskCompliance}%` }} />
-                    </div>
-                    <p className="text-[9.5px] text-slate-500 font-mono">
-                      Data Nyata: {selectedOutletForDetail.taskStats.completed} tugas tepat waktu dari total {selectedOutletForDetail.taskStats.total} tugas ({selectedOutletForDetail.taskStats.overdue} overdue).
-                    </p>
-                  </div>
-
-                  {/* 4. KERAJINAN CACP */}
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/90 space-y-1.5">
-                    <div className="flex justify-between items-center text-xs font-bold">
-                      <span className="text-slate-800 flex items-center gap-1.5">
-                        <FiClipboard className="text-purple-600" /> 4. Kerajinan Audit CACP
-                      </span>
-                      <span className="font-mono text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-lg">
-                        {selectedOutletForDetail.metrics.cacpAudit}% (Bobot 25%)
-                      </span>
-                    </div>
-                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-purple-600 rounded-full" style={{ width: `${selectedOutletForDetail.metrics.cacpAudit}%` }} />
-                    </div>
-                    <p className="text-[9.5px] text-slate-500 font-mono">
-                      Data Nyata: {selectedOutletForDetail.cacpData.submittedDays} setoran CACP tercatat dari total target {selectedOutletForDetail.cacpData.totalDays} hari periode berjalan.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="pt-2 flex gap-2">
-                  <button
-                    onClick={() => setActiveModal('peringkat_modern')}
-                    className="flex-1 py-2.5 bg-slate-900 text-white rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-800 transition-colors"
-                  >
-                    ← Kembali ke Leaderboard
-                  </button>
-                  <button
+                  <button 
+                    type="button"
                     onClick={() => setActiveModal(null)}
-                    className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold cursor-pointer hover:bg-slate-200 transition-colors"
+                    className="p-1.5 hover:bg-slate-100 text-slate-500 rounded-xl cursor-pointer"
                   >
-                    Tutup
+                    <FiX className="text-base" />
                   </button>
                 </div>
+
+                {/* Body Content */}
+                <div className="p-4 overflow-y-auto space-y-3.5 flex-1">
+                  
+                  {/* Hero Card Total Health Score */}
+                  <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white p-5 rounded-3xl shadow-xl border border-indigo-500/25 flex items-center justify-between">
+                    <div>
+                      <span className="text-[9px] font-black uppercase tracking-widest text-indigo-300 block">
+                        TOTAL HEALTH SCORE
+                      </span>
+                      <h4 className="text-xs font-black text-white mt-0.5">
+                        SM: {r.storeManagerName}
+                      </h4>
+                      <p className="text-[9px] text-slate-400 mt-1">
+                        Formula: Rata-rata 4 Indikator (Masing-masing 25%)
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-4xl font-black font-mono text-emerald-400">
+                        {r.healthScore}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 1. PRESENSI & ON-TIME KRU */}
+                  <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                        <FiUsers className="text-indigo-600 text-xs" /> 1. Presensi & On-Time Kru
+                      </span>
+                      <span className="text-[10px] font-black font-mono px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">
+                        {r.metrics?.attendance}% (Bobot 25%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-indigo-600 rounded-full transition-all duration-500" style={{ width: `${r.metrics?.attendance}%` }} />
+                    </div>
+                    <p className="text-[9.5px] text-slate-500 font-mono">
+                      Data Nyata: {r.lateCount} kali terlambat dari {r.totalLogs > 0 ? `${r.totalLogs} total shift log` : 'data kehadiran terverifikasi'}. ({r.crewCount} kru terdaftar).
+                    </p>
+                  </div>
+
+                  {/* 2. DISIPLIN BREAK & AFTER BREAK */}
+                  <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                        <FiClock className="text-emerald-600 text-xs" /> 2. Disiplin Break & After Break
+                      </span>
+                      <span className="text-[10px] font-black font-mono px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg">
+                        {r.metrics?.breakDiscipline}% (Bobot 25%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${r.metrics?.breakDiscipline}%` }} />
+                    </div>
+                    <p className="text-[9.5px] text-slate-500 font-mono">
+                      Data Nyata: {r.overbreakCount} kali overbreak. {r.lossAmount > 0 ? `Denda operasional Rp ${r.lossAmount.toLocaleString('id-ID')}` : 'Tidak ada denda operasional'}.
+                    </p>
+                  </div>
+
+                  {/* 3. PENGERJAAN SLA TUGAS */}
+                  <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                        <FiCheckSquare className="text-blue-600 text-xs" /> 3. Pengerjaan SLA Tugas
+                      </span>
+                      <span className="text-[10px] font-black font-mono px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg">
+                        {r.metrics?.taskCompliance}% (Bobot 25%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${r.metrics?.taskCompliance}%` }} />
+                    </div>
+                    <p className="text-[9.5px] text-slate-500 font-mono">
+                      Data Nyata: {r.taskStats?.completed} tugas tepat waktu dari total {r.taskStats?.total} tugas ({r.taskStats?.overdue} overdue).
+                    </p>
+                  </div>
+
+                  {/* 4. KERAJINAN AUDIT CACP */}
+                  <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-2xs space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                        <FiShield className="text-purple-600 text-xs" /> 4. Kerajinan Audit CACP
+                      </span>
+                      <span className="text-[10px] font-black font-mono px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg">
+                        {r.cacpData?.overallPercentage}% (Bobot 25%)
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                      <div className="h-full bg-purple-600 rounded-full transition-all duration-500" style={{ width: `${r.cacpData?.overallPercentage}%` }} />
+                    </div>
+                    <p className="text-[9.5px] text-slate-500 font-mono">
+                      Data Nyata: {r.cacpData?.submittedDays} setoran CACP tercatat dari total target {r.cacpData?.totalDays} hari periode berjalan.
+                    </p>
+                  </div>
+
+                  {/* ================= ➕ DAFTAR KARYAWAN TERBAIK & BERMASALAH ================= */}
+                  <div className="pt-2 space-y-3">
+                    
+                    {/* LIST 1: KARYAWAN PALING DISIPLIN */}
+                    <div className="bg-emerald-50/70 border border-emerald-200 p-3.5 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase text-emerald-950 flex items-center gap-1.5">
+                          👑 Karyawan Paling Disiplin
+                        </span>
+                        <span className="text-[8.5px] font-bold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                          Top Performer
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        {(!r.topDisciplinedEmployees || r.topDisciplinedEmployees.length === 0) ? (
+                          <p className="text-[10px] text-slate-400 italic">Belum ada data kru yang tercatat.</p>
+                        ) : (
+                          r.topDisciplinedEmployees.map((emp, idx) => (
+                            <div key={emp.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-emerald-100 text-[10px]">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="w-5 h-5 rounded-md bg-emerald-100 text-emerald-800 text-[9px] font-black flex items-center justify-center shrink-0">
+                                  #{idx + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <p className="font-black text-slate-900 truncate">{emp.name}</p>
+                                  <p className="text-[8px] text-slate-400 uppercase">{emp.role}</p>
+                                </div>
+                              </div>
+                              <span className="font-mono font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                                {emp.disciplineScore} Pts
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* LIST 2: KARYAWAN SERING MELANGGAR (BERMASALAH) */}
+                    <div className="bg-rose-50/70 border border-rose-200 p-3.5 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase text-rose-950 flex items-center gap-1.5">
+                          ⚠️ Karyawan Sering Melanggar (Terlambat / Overbreak)
+                        </span>
+                        <span className="text-[8.5px] font-bold text-rose-700 bg-white px-2 py-0.5 rounded-md border border-rose-200">
+                          Perlu Pembinaan
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        {(!r.problematicEmployees || r.problematicEmployees.length === 0) ? (
+                          <div className="p-2.5 bg-white rounded-xl border border-emerald-200 text-center text-[10px] font-bold text-emerald-700">
+                            ✓ Seluruh kru disiplin, tidak ada pelanggaran terlambat atau overbreak bulan ini.
+                          </div>
+                        ) : (
+                          r.problematicEmployees.map((emp, idx) => (
+                            <div key={emp.id} className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-xl border border-rose-100 text-[10px]">
+                              <div className="min-w-0 flex-1 pr-2">
+                                <p className="font-black text-slate-900 truncate">{emp.name}</p>
+                                <p className="text-[8.5px] text-rose-600 font-medium">
+                                  {emp.totalLate}x Telat • {emp.totalOverbreak}x Overbreak
+                                </p>
+                              </div>
+                              <span className="font-mono font-black text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md text-[9px] shrink-0">
+                                {emp.totalViolations} Pelanggaran
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+
+                </div>
+
+                {/* Footer Modal */}
+                <div className="p-3 bg-white border-t border-slate-200 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveModal(null)}
+                    className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                  >
+                    Tutup Rincian
+                  </button>
+                </div>
+
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* MODAL DETAIL MANAGER (RINCIAN MATEMATIS NILAI MANAGER) */}
         {activeModal === 'detail_manager' && selectedManagerForDetail && (
