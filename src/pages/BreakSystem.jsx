@@ -651,7 +651,7 @@ export default function BreakSystem() {
     });
   };
 
-  // ================= FETCH STATUS ATTENDANCE PENGGUNA =================
+  // ================= FETCH STATUS ATTENDANCE PENGGUNA (TANPA AUTO-CLOCKOUT) =================
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -681,95 +681,101 @@ export default function BreakSystem() {
         }
       }
 
-      // Ambil riwayat presensi dalam rentang 20 jam terakhir
-      const past20Hours = new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString();
       const nowMs = Date.now();
 
-      const { data: userRecentLogs } = await supabase
+      // LANGKAH 1: Cari sesi aktif yang BELUM checkout (actual_out IS NULL)
+      // Selama ada log yang belum di-checkout, kru WAJIB TETAP AKTIF BEKERJA (IN CHARGE)
+      const { data: activeLog, error: activeErr } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, status_out, created_at')
         .eq('user_id', user.id)
-        .gte('actual_in', past20Hours)
-        .order('actual_in', { ascending: false })
-        .limit(5);
+        .is('actual_out', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      if (!userRecentLogs || userRecentLogs.length === 0) {
-        setActiveLogId(null);
-        setHasCheckedIn(false);
-        setHasCheckedOut(false);
-        setCheckInTime(null);
-        setIsOnBreak(false);
-        setBreakStartTime(null);
-        return;
-      }
-
-      const latestLog = userRecentLogs[0];
-      const inTime = new Date(latestLog.actual_in);
-      const inTimeMs = inTime.getTime();
-      const elapsedHours = (nowMs - inTimeMs) / (1000 * 60 * 60);
-
-      // KUNCI PERBAIKAN:
-      // Status dinyatakan selesai HANYA jika kru secara sadar melakukan absen pulang mandiri.
-      // Jika status_out mengandung 'Lupa Absen Pulang' atau 'Auto Close' sebelum 13 jam, ABAIKAN!
-      const statusOutStr = String(latestLog.status_out || '');
-      const isAutoClosed = statusOutStr.includes('Lupa Absen Pulang') || statusOutStr.includes('Auto Close');
-      const isManualCheckout = Boolean(latestLog.actual_out) && !isAutoClosed;
-
-      if (isManualCheckout) {
-        setActiveLogId(latestLog.id);
-        setHasCheckedIn(true);
-        setHasCheckedOut(true);
-        setCheckInTime(inTime);
-        setIsOnBreak(false);
-        setBreakStartTime(null);
-        return;
-      }
-
-      // Selama durasi kerja di bawah 13 jam, kru TETAP DIAKUI AKTIF BEKERJA
-      if (elapsedHours < 13) {
+      if (!activeErr && activeLog && activeLog.actual_in) {
+        const inTime = new Date(activeLog.actual_in);
         let checkInHour = inTime.getHours();
-        if (latestLog.status_in && latestLog.status_in.includes('Shift ')) {
+
+        if (activeLog.status_in && activeLog.status_in.includes('Shift ')) {
           try {
-            const parsedHour = parseInt(latestLog.status_in.split('Shift ')[1].split(':')[0]);
+            const parsedHour = parseInt(activeLog.status_in.split('Shift ')[1].split(':')[0]);
             if (!isNaN(parsedHour)) {
               setSelectedShiftHour(parsedHour);
               checkInHour = parsedHour;
             }
-          } catch(e) {}
+          } catch (e) {}
         }
 
         const isShift22 = (checkInHour === 22);
         const targetHours = isShift22 ? 8 : 9;
 
-        setActiveLogId(latestLog.id);
+        // KUNCI: Jangan pernah clock out sendiri. Status selalu AKTIF BEKERJA
+        setActiveLogId(activeLog.id);
         setHasCheckedIn(true);
         setHasCheckedOut(false);
-        setActiveShiftStatusIn(latestLog.status_in || '');
+        setActiveShiftStatusIn(activeLog.status_in || '');
         setCheckInTime(inTime);
         setRequiredWorkHours(targetHours);
 
         const allowedBreakSec = isShift22 ? 1800 : 3600;
-        const breaking = Boolean(latestLog.break_start_time) && !Boolean(latestLog.break_end_time);
+        const breaking = Boolean(activeLog.break_start_time) && !Boolean(activeLog.break_end_time);
 
         if (breaking) {
           setIsOnBreak(true);
-          setBreakStartTime(new Date(latestLog.break_start_time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Makassar' }) + ' WITA');
-          const elapsedSec = Math.floor((nowMs - new Date(latestLog.break_start_time).getTime()) / 1000);
+          setBreakStartTime(
+            new Date(activeLog.break_start_time).toLocaleTimeString('id-ID', {
+              hour: '2-digit',
+              minute: '2-digit',
+              timeZone: 'Asia/Makassar'
+            }) + ' WITA'
+          );
+          const elapsedSec = Math.floor((nowMs - new Date(activeLog.break_start_time).getTime()) / 1000);
           setTimeLeft(allowedBreakSec - elapsedSec);
           setMaxBreakDuration(allowedBreakSec);
         } else {
           setIsOnBreak(false);
           setBreakStartTime(null);
         }
-      } else {
-        // Shift kadaluwarsa (> 13 jam)
-        setActiveLogId(null);
-        setHasCheckedIn(false);
-        setHasCheckedOut(false);
-        setCheckInTime(null);
-        setIsOnBreak(false);
-        setBreakStartTime(null);
+        return;
       }
+
+      // LANGKAH 2: Jika TIDAK ADA sesi yang menggantung (actual_out is null),
+      // Cek apakah baru saja absen pulang hari ini (< 12 jam yang lalu)
+      const { data: latestFinishedLog } = await supabase
+        .from('attendance_logs')
+        .select('id, actual_in, actual_out, created_at')
+        .eq('user_id', user.id)
+        .not('actual_out', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestFinishedLog && latestFinishedLog.actual_out) {
+        const outTimeMs = new Date(latestFinishedLog.actual_out).getTime();
+        const diffHoursSinceOut = (nowMs - outTimeMs) / (1000 * 60 * 60);
+
+        // Jika kru baru checkout kurang dari 12 jam yang lalu, tampilkan status "Sudah Pulang"
+        if (diffHoursSinceOut < 12) {
+          setActiveLogId(latestFinishedLog.id);
+          setHasCheckedIn(true);
+          setHasCheckedOut(true);
+          setCheckInTime(new Date(latestFinishedLog.actual_in));
+          setIsOnBreak(false);
+          setBreakStartTime(null);
+          return;
+        }
+      }
+
+      // LANGKAH 3: Sesi baru bersih (Kru bebas melakukan absen masuk kapan saja)
+      setActiveLogId(null);
+      setHasCheckedIn(false);
+      setHasCheckedOut(false);
+      setCheckInTime(null);
+      setIsOnBreak(false);
+      setBreakStartTime(null);
+
     } catch (err) {
       console.error("Gagal memuat status kehadiran:", err);
     }
