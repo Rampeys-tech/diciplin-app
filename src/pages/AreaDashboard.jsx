@@ -315,6 +315,8 @@ export default function AreaDashboard() {
   const [salesMonthlyDb, setSalesMonthlyDb] = useState([]);
   // State data real-time service time & complaint
   const [serviceComplaintDb, setServiceComplaintDb] = useState([]);
+  // State data real-time service_time_summary dari Spreadsheet -> Supabase
+  const [serviceTimeSummaryDb, setServiceTimeSummaryDb] = useState([]);
   // Data real-time controlling opex kalsel
   const [opexKalselDb, setOpexKalselDb] = useState([]);
 
@@ -603,6 +605,14 @@ export default function AreaDashboard() {
         setServiceComplaintDb(svcRes.data);
       }
 
+      // Ambil data Service Time Summary dari Spreadsheet -> Supabase
+      const { data: stSummaryData } = await supabase
+        .from('service_time_summary')
+        .select('*');
+      if (stSummaryData) {
+        setServiceTimeSummaryDb(stSummaryData);
+      }
+
       // Simpan data OPEX Kalsel sesuai periode yang dipilih
       setOpexKalselDb(opexKalselRes || []);
 
@@ -691,6 +701,7 @@ export default function AreaDashboard() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_task_submissions' }, () => loadMasterData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_monthly_summary' }, () => loadMasterData())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'opex_kalsel_controlling' }, () => loadMasterData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'service_time_summary' }, () => loadMasterData())
       .subscribe();
 
     return () => {
@@ -1919,6 +1930,101 @@ export default function AreaDashboard() {
       stores
     };
   }, [opexKalselDb, isAM, selectedOpexOutlet, currentProfile, outlets]);
+
+  // =========================================================================
+  // ➕ KALKULASI SERVICE TIME SUMMARY (DARI SPREADSHEET -> SUPABASE)
+  // =========================================================================
+  const serviceTimeSummaryMetrics = useMemo(() => {
+    const TARGET_MAX_MINUTES = 20.0;
+    const MONTH_ORDER = {
+      JAN: 1, FEB: 2, MAR: 3, APR: 4, MEI: 5, MAY: 5,
+      JUN: 6, JUL: 7, AGU: 8, AUG: 8, SEP: 9, OKT: 10, OCT: 10, NOV: 11, DES: 12, DEC: 12
+    };
+
+    const parseMonthWeight = (blnStr) => {
+      if (!blnStr) return 0;
+      const clean = String(blnStr).toUpperCase().trim();
+      const prefix = clean.slice(0, 3);
+      const year = parseInt(clean.slice(3), 10) || 0;
+      return (year * 100) + (MONTH_ORDER[prefix] || 0);
+    };
+
+    if (!serviceTimeSummaryDb || serviceTimeSummaryDb.length === 0) {
+      return {
+        target: TARGET_MAX_MINUTES,
+        areaOverallAvg: 0,
+        areaLatestActual: 0,
+        latestMonthLabel: '-',
+        isAreaOver: false,
+        stores: []
+      };
+    }
+
+    // Urutkan semua bulan unik dari yang terlama hingga terbaru
+    const uniqueMonths = Array.from(new Set(serviceTimeSummaryDb.map(r => r.bulan)))
+      .filter(Boolean)
+      .sort((a, b) => parseMonthWeight(a) - parseMonthWeight(b));
+
+    const latestMonthLabel = uniqueMonths[uniqueMonths.length - 1] || '-';
+
+    // Ambil baris agregat AREA KALSEL 1
+    const areaRows = serviceTimeSummaryDb.filter(
+      r => (r.kode_resto || '').toUpperCase().trim() === 'AREA KALSEL 1'
+    );
+    const latestAreaRow = areaRows.find(r => r.bulan === latestMonthLabel) || areaRows[areaRows.length - 1];
+
+    const areaOverallAvg = latestAreaRow?.rata_rata_keseluruhan !== null && latestAreaRow?.rata_rata_keseluruhan !== undefined
+      ? Number(Number(latestAreaRow.rata_rata_keseluruhan).toFixed(1))
+      : 0;
+
+    const areaLatestActual = latestAreaRow?.service_time !== null && latestAreaRow?.service_time !== undefined
+      ? Number(Number(latestAreaRow.service_time).toFixed(1))
+      : 0;
+
+    // Susun rincian 5 resto
+    const MASTER_RESTO_LIST = [
+      { code: 'BJMHAS', name: 'Gacoan Banjarmasin Hasan Basri' },
+      { code: 'BLNBAT', name: 'Gacoan Tanahbumbu Raya Batu Licin' },
+      { code: 'BJMAHM', name: 'Gacoan Banjarmasin Ahmad Yani' },
+      { code: 'BLNPRO', name: 'Gacoan Tanah Bumbu Propinsi' },
+      { code: 'PLIBAL', name: 'Gacoan Tanah Laut Pelaihari' }
+    ];
+
+    const stores = MASTER_RESTO_LIST.map(master => {
+      const storeRows = serviceTimeSummaryDb
+        .filter(r => (r.kode_resto || '').toUpperCase().trim() === master.code)
+        .sort((a, b) => parseMonthWeight(a.bulan) - parseMonthWeight(b.bulan));
+
+      const latestRow = storeRows.find(r => r.bulan === latestMonthLabel) || storeRows[storeRows.length - 1];
+      const latestVal = latestRow ? Number(Number(latestRow.service_time).toFixed(1)) : 0;
+      const overallVal = latestRow?.rata_rata_keseluruhan !== null && latestRow?.rata_rata_keseluruhan !== undefined
+        ? Number(Number(latestRow.rata_rata_keseluruhan).toFixed(1))
+        : latestVal;
+
+      return {
+        code: master.code,
+        name: latestRow?.nama_resto || master.name,
+        latestMonth: latestRow?.bulan || latestMonthLabel,
+        latestActual: latestVal,
+        overallAvg: overallVal,
+        isOver: latestVal > TARGET_MAX_MINUTES,
+        history: storeRows.map(sr => ({
+          bulan: sr.bulan,
+          value: Number(Number(sr.service_time).toFixed(1))
+        }))
+      };
+    }).sort((a, b) => b.latestActual - a.latestActual);
+
+    return {
+      target: TARGET_MAX_MINUTES,
+      areaOverallAvg,
+      areaLatestActual,
+      latestMonthLabel,
+      isAreaOver: areaLatestActual > TARGET_MAX_MINUTES,
+      stores
+    };
+  }, [serviceTimeSummaryDb]);
+
   const outletScoreRankings = useMemo(() => {
     const targetMonth = selectedMonth ? selectedMonth.substring(0, 7) : new Date().toISOString().substring(0, 7);
     const today = new Date();
@@ -2996,43 +3102,70 @@ export default function AreaDashboard() {
                 </div>
               </div>
 
-              {/* 5. SERVICE TIME */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2">
+              {/* 5. SERVICE TIME (TERHUBUNG KE SUPABASE service_time_summary) */}
+              <div 
+                onClick={() => setActiveModal('service_time_detail')}
+                className="bg-white border border-slate-200/90 hover:border-rose-400 rounded-2xl p-3 shadow-2xs flex flex-col justify-between space-y-2 cursor-pointer transition-all hover:shadow-md group active:scale-[0.99]"
+              >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1 group-hover:text-rose-600 transition-colors">
                       <FiClock className="text-rose-500 text-xs" /> Service Time
                     </span>
-                    <span className={`text-[8px] font-black px-1.5 py-0.2 rounded-md ${
-                      probationMetrics.serviceTimeOjol.actual <= probationMetrics.serviceTimeOjol.target 
-                        ? 'bg-emerald-50 text-emerald-700' 
-                        : 'bg-rose-50 text-rose-700'
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-md ${
+                      !serviceTimeSummaryMetrics.isAreaOver
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                        : 'bg-rose-50 text-rose-700 border border-rose-200'
                     }`}>
-                      {probationMetrics.serviceTimeOjol.actual <= probationMetrics.serviceTimeOjol.target ? 'Cepat' : `+${(probationMetrics.serviceTimeOjol.actual - probationMetrics.serviceTimeOjol.target).toFixed(1)}m`}
+                      {!serviceTimeSummaryMetrics.isAreaOver 
+                        ? 'Aman ≤ 20m' 
+                        : `+${(serviceTimeSummaryMetrics.areaLatestActual - serviceTimeSummaryMetrics.target).toFixed(1)}m`}
                     </span>
                   </div>
+
+                  {/* Angka Utama: Rata-rata Keseluruhan Area */}
                   <div className="flex items-baseline justify-between pt-1">
                     <span className="text-base font-black font-mono text-slate-900">
-                      {dynamicServiceMetrics.serviceTime} <span className="text-[10px] font-normal font-sans text-slate-500">Mnt</span>
+                      {serviceTimeSummaryMetrics.areaOverallAvg} <span className="text-[10px] font-normal font-sans text-slate-500">Mnt</span>
                     </span>
                     <span className="text-[10px] font-bold text-slate-400">
-                      Maks: {probationMetrics.serviceTimeOjol.target} Mnt
+                      Maks: {serviceTimeSummaryMetrics.target} Mnt
                     </span>
                   </div>
+
+                  {/* Progress Bar */}
                   <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
                     <div 
-                      className={`h-full rounded-full ${probationMetrics.serviceTimeOjol.actual <= probationMetrics.serviceTimeOjol.target ? 'bg-emerald-500' : 'bg-rose-500'}`} 
-                      style={{ width: `${Math.min(100, (probationMetrics.serviceTimeOjol.target / probationMetrics.serviceTimeOjol.actual) * 100)}%` }} 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        !serviceTimeSummaryMetrics.isAreaOver ? 'bg-emerald-500' : 'bg-rose-500'
+                      }`} 
+                      style={{ width: `${Math.min(100, (serviceTimeSummaryMetrics.areaLatestActual / serviceTimeSummaryMetrics.target) * 100)}%` }} 
                     />
+                  </div>
+
+                  {/* Baris Perbandingan: Rata-rata Keseluruhan vs Actual Bulan Terakhir */}
+                  <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between text-[9px] font-mono">
+                    <div>
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">Rerata Total</span>
+                      <span className="font-black text-slate-800">
+                        {serviceTimeSummaryMetrics.areaOverallAvg} Mnt
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[7.5px] font-sans text-slate-400 uppercase block">
+                        Actual {serviceTimeSummaryMetrics.latestMonthLabel}
+                      </span>
+                      <span className={`font-black ${serviceTimeSummaryMetrics.isAreaOver ? 'text-rose-600' : 'text-emerald-700'}`}>
+                        {serviceTimeSummaryMetrics.areaLatestActual} Mnt
+                      </span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Jobdesk Project */}
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-[8px] font-black uppercase text-rose-600 block">Jobdesk Project:</span>
-                  <p className="text-[9px] text-slate-600 leading-snug mt-0.5 font-medium line-clamp-2">
-                    Compact kabel ties panci mie, 2 boiler rush hour, geser app presenter.
-                  </p>
+                {/* Footer Kartu: Klik untuk Rincian Tiap Resto */}
+                <div className="pt-1.5 border-t border-slate-100 bg-slate-50 -mx-3 -mb-3 p-2 rounded-b-2xl flex items-center justify-between text-[8.5px]">
+                  <span className="text-slate-500 font-bold truncate">Rincian 5 Resto Kalsel 1</span>
+                  <span className="font-black text-indigo-600 shrink-0">Detail ↗</span>
                 </div>
               </div>
 
@@ -3926,6 +4059,181 @@ export default function AreaDashboard() {
             </div>
           );
         })()}
+
+        {/* ========================================================================= */}
+        {/* ➕ MODAL DETAIL SERVICE TIME PER RESTO (DARI SUPABASE)                    */}
+        {/* ========================================================================= */}
+        {activeModal === 'service_time_detail' && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex justify-center items-end sm:items-center p-0 sm:p-4 animate-in fade-in duration-200">
+            <div className="bg-[#FAFBFD] w-full max-w-md rounded-t-3xl sm:rounded-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden border border-slate-100">
+              
+              {/* Header Modal */}
+              <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-white shadow-2xs">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-9 h-9 rounded-2xl bg-rose-600 text-white flex items-center justify-center text-sm font-black shadow-xs">
+                    <FiClock />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 tracking-tight">Controlling Service Time</h3>
+                    <p className="text-[10px] text-slate-400 font-medium">
+                      Area Kalsel 1 • Update Terakhir: {serviceTimeSummaryMetrics.latestMonthLabel}
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setActiveModal(null)}
+                  className="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-full border border-slate-200 cursor-pointer"
+                >
+                  <FiX className="text-sm" />
+                </button>
+              </div>
+
+              {/* Scrollable Body */}
+              <div className="p-4 overflow-y-auto space-y-4">
+                
+                {/* Banner Ringkasan Area */}
+                <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-rose-950 text-white p-5 rounded-3xl shadow-xl border border-rose-500/30 space-y-3">
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-rose-300">
+                      Performa Area Kalsel 1 (5 Resto)
+                    </span>
+                    <span className="text-[9px] font-mono font-bold bg-white/10 text-slate-300 px-2 py-0.5 rounded-full">
+                      Target Maks: {serviceTimeSummaryMetrics.target} Mnt
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <span className="text-[9px] text-slate-400 uppercase block">Rata-Rata Keseluruhan</span>
+                      <p className="text-2xl font-black font-mono text-white mt-0.5">
+                        {serviceTimeSummaryMetrics.areaOverallAvg} <span className="text-xs font-sans font-normal text-slate-300">Mnt</span>
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[9px] text-slate-400 uppercase block">
+                        Actual {serviceTimeSummaryMetrics.latestMonthLabel}
+                      </span>
+                      <p className={`text-2xl font-black font-mono mt-0.5 ${
+                        serviceTimeSummaryMetrics.isAreaOver ? 'text-rose-400' : 'text-emerald-400'
+                      }`}>
+                        {serviceTimeSummaryMetrics.areaLatestActual} <span className="text-xs font-sans font-normal text-slate-300">Mnt</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        serviceTimeSummaryMetrics.isAreaOver ? 'bg-rose-500' : 'bg-emerald-400'
+                      }`}
+                      style={{ width: `${Math.min(100, (serviceTimeSummaryMetrics.areaLatestActual / serviceTimeSummaryMetrics.target) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Daftar Rincian Tiap Resto */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                      Rincian Service Time Tiap Resto
+                    </span>
+                    <span className="text-[9px] font-bold text-rose-600">
+                      Merah = &gt; {serviceTimeSummaryMetrics.target} Mnt
+                    </span>
+                  </div>
+
+                  {serviceTimeSummaryMetrics.stores.map((resto) => (
+                    <div 
+                      key={resto.code}
+                      className={`p-4 rounded-3xl border shadow-2xs space-y-2.5 transition-all ${
+                        resto.isOver 
+                          ? 'bg-rose-50/60 border-rose-300' 
+                          : 'bg-white border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] font-black uppercase px-2 py-0.5 bg-slate-900 text-white rounded-md">
+                              {resto.code}
+                            </span>
+                            <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md ${
+                              resto.isOver 
+                                ? 'bg-rose-600 text-white' 
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}>
+                              {resto.isOver ? `OVER +${(resto.latestActual - serviceTimeSummaryMetrics.target).toFixed(1)} MNT` : 'ON-TARGET'}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-black text-slate-900 mt-1">{resto.name}</h4>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span className="text-[8px] font-bold text-slate-400 uppercase block">
+                            Actual {resto.latestMonth}
+                          </span>
+                          <span className={`text-lg font-black font-mono ${
+                            resto.isOver ? 'text-rose-600' : 'text-emerald-700'
+                          }`}>
+                            {resto.latestActual} <span className="text-[10px] font-sans font-normal">Mnt</span>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Progress Bar per Resto */}
+                      <div className="w-full bg-slate-200/70 h-1.5 rounded-full overflow-hidden">
+                        <div 
+                          className={`h-full rounded-full ${resto.isOver ? 'bg-rose-600' : 'bg-emerald-500'}`}
+                          style={{ width: `${Math.min(100, (resto.latestActual / serviceTimeSummaryMetrics.target) * 100)}%` }}
+                        />
+                      </div>
+
+                      {/* Footer Card Resto: Rata-Rata Keseluruhan & Riwayat Bulan */}
+                      <div className="pt-2 border-t border-slate-200/70 flex items-center justify-between text-[10px]">
+                        <div>
+                          <span className="text-[8px] text-slate-400 uppercase font-bold block">Rata-Rata Keseluruhan</span>
+                          <span className={`font-mono font-black ${
+                            resto.overallAvg > serviceTimeSummaryMetrics.target ? 'text-rose-600' : 'text-slate-800'
+                          }`}>
+                            {resto.overallAvg} Mnt
+                          </span>
+                        </div>
+
+                        {/* Pill Riwayat Bulan Sebelumnya */}
+                        <div className="flex items-center gap-1 flex-wrap justify-end">
+                          {resto.history.slice(-3).map((h) => (
+                            <span 
+                              key={h.bulan}
+                              className={`text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                                h.value > serviceTimeSummaryMetrics.target 
+                                  ? 'bg-rose-100 text-rose-800 border-rose-200' 
+                                  : 'bg-slate-100 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {h.bulan}: {h.value}m
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+              </div>
+
+              {/* Footer Modal */}
+              <div className="p-3 border-t border-slate-200 bg-white">
+                <button
+                  onClick={() => setActiveModal(null)}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Tutup Rincian Service Time
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
 
         {/* MODAL ATUR RUMUS GRAMASI */}
         {activeModal === 'recipe_settings' && (
