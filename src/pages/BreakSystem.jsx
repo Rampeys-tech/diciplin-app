@@ -651,7 +651,9 @@ export default function BreakSystem() {
     });
   };
 
-  // ================= FETCH STATUS ATTENDANCE PENGGUNA (TANPA AUTO-CLOCKOUT) =================
+  // ================= FETCH STATUS ATTENDANCE PENGGUNA (FIX TOTAL RESET & ANTI-LOCK) =================
+  const [lastFinishedShiftInfo, setLastFinishedShiftInfo] = useState(null);
+
   const fetchAttendanceStatus = useCallback(async () => {
     if (!user?.id) return;
     try {
@@ -682,99 +684,114 @@ export default function BreakSystem() {
       }
 
       const nowMs = Date.now();
+      const maxActiveWindowMs = 16 * 60 * 60 * 1000; // Maksimal 1 sesi kerja aktif = 16 jam
 
-      // LANGKAH 1: Cari sesi aktif yang BELUM checkout (actual_out IS NULL)
-      // Selama ada log yang belum di-checkout, kru WAJIB TETAP AKTIF BEKERJA (IN CHARGE)
+      // LANGKAH 1: Cari sesi aktif yang BELUM checkout (actual_out IS NULL) dalam 16 jam terakhir
       const { data: activeLog, error: activeErr } = await supabase
         .from('attendance_logs')
         .select('id, actual_in, actual_out, break_start_time, break_end_time, discipline_status, status_in, status_out, created_at')
         .eq('user_id', user.id)
         .is('actual_out', null)
-        .order('created_at', { ascending: false })
+        .order('actual_in', { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (!activeErr && activeLog && activeLog.actual_in) {
         const inTime = new Date(activeLog.actual_in);
-        let checkInHour = inTime.getHours();
+        const elapsedSinceInMs = nowMs - inTime.getTime();
 
-        if (activeLog.status_in && activeLog.status_in.includes('Shift ')) {
-          try {
-            const parsedHour = parseInt(activeLog.status_in.split('Shift ')[1].split(':')[0]);
-            if (!isNaN(parsedHour)) {
-              setSelectedShiftHour(parsedHour);
-              checkInHour = parsedHour;
-            }
-          } catch (e) {}
+        // Jika sesi menggantung lebih dari 16 jam (lupa absen pulang kemarin), JANGAN kunci hari ini!
+        // Otomatis bebaskan layar agar kru bisa Absen Masuk shift baru hari ini.
+        if (elapsedSinceInMs <= maxActiveWindowMs) {
+          let checkInHour = inTime.getHours();
+
+          if (activeLog.status_in && activeLog.status_in.includes('Shift ')) {
+            try {
+              const parsedHour = parseInt(activeLog.status_in.split('Shift ')[1].split(':')[0]);
+              if (!isNaN(parsedHour)) {
+                setSelectedShiftHour(parsedHour);
+                checkInHour = parsedHour;
+              }
+            } catch (e) {}
+          }
+
+          const isShift22 = (checkInHour === 22);
+          const targetHours = isShift22 ? 8 : 9;
+
+          setActiveLogId(activeLog.id);
+          setHasCheckedIn(true);
+          setHasCheckedOut(false);
+          setLastFinishedShiftInfo(null);
+          setActiveShiftStatusIn(activeLog.status_in || '');
+          setCheckInTime(inTime);
+          setRequiredWorkHours(targetHours);
+
+          const allowedBreakSec = isShift22 ? 1800 : 3600;
+          const breaking = Boolean(activeLog.break_start_time) && !Boolean(activeLog.break_end_time);
+
+          if (breaking) {
+            setIsOnBreak(true);
+            setBreakStartTime(
+              new Date(activeLog.break_start_time).toLocaleTimeString('id-ID', {
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'Asia/Makassar'
+              }) + ' WITA'
+            );
+            const elapsedSec = Math.floor((nowMs - new Date(activeLog.break_start_time).getTime()) / 1000);
+            setTimeLeft(allowedBreakSec - elapsedSec);
+            setMaxBreakDuration(allowedBreakSec);
+          } else {
+            setIsOnBreak(false);
+            setBreakStartTime(null);
+            localStorage.removeItem('resto_break_start_time');
+            localStorage.removeItem('resto_break_max_duration');
+          }
+          return;
         }
+      }
 
-        const isShift22 = (checkInHour === 22);
-        const targetHours = isShift22 ? 8 : 9;
+      // LANGKAH 2: Jika tidak ada sesi aktif (atau sesi sebelumnya sudah selesai / di-checkout),
+      // Cek log terakhir hanya untuk informasi riwayat, JANGAN PERNAH MENGUNCI TOMBOL ABSEN MASUK!
+      const { data: latestFinishedLog } = await supabase
+        .from('attendance_logs')
+        .select('id, actual_in, actual_out, status_out, created_at')
+        .eq('user_id', user.id)
+        .not('actual_out', 'is', null)
+        .order('actual_out', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-        // KUNCI: Jangan pernah clock out sendiri. Status selalu AKTIF BEKERJA
-        setActiveLogId(activeLog.id);
-        setHasCheckedIn(true);
-        setHasCheckedOut(false);
-        setActiveShiftStatusIn(activeLog.status_in || '');
-        setCheckInTime(inTime);
-        setRequiredWorkHours(targetHours);
+      if (latestFinishedLog && latestFinishedLog.actual_out) {
+        const outDate = new Date(latestFinishedLog.actual_out);
+        const diffHoursSinceOut = (nowMs - outDate.getTime()) / (1000 * 60 * 60);
+        const isSystemAutoClose = String(latestFinishedLog.status_out || '').toLowerCase().includes('lupa absen pulang');
 
-        const allowedBreakSec = isShift22 ? 1800 : 3600;
-        const breaking = Boolean(activeLog.break_start_time) && !Boolean(activeLog.break_end_time);
-
-        if (breaking) {
-          setIsOnBreak(true);
-          setBreakStartTime(
-            new Date(activeLog.break_start_time).toLocaleTimeString('id-ID', {
+        // Tampilkan info shift terakhir jika selesai < 10 jam lalu (sebagai info saja, tombol tetap terbuka!)
+        if (diffHoursSinceOut < 10 && !isSystemAutoClose) {
+          setLastFinishedShiftInfo(
+            outDate.toLocaleTimeString('id-ID', {
               hour: '2-digit',
               minute: '2-digit',
               timeZone: 'Asia/Makassar'
             }) + ' WITA'
           );
-          const elapsedSec = Math.floor((nowMs - new Date(activeLog.break_start_time).getTime()) / 1000);
-          setTimeLeft(allowedBreakSec - elapsedSec);
-          setMaxBreakDuration(allowedBreakSec);
         } else {
-          setIsOnBreak(false);
-          setBreakStartTime(null);
+          setLastFinishedShiftInfo(null);
         }
-        return;
+      } else {
+        setLastFinishedShiftInfo(null);
       }
 
-      // LANGKAH 2: Jika TIDAK ADA sesi yang menggantung (actual_out is null),
-      // Cek apakah baru saja absen pulang hari ini (< 12 jam yang lalu)
-      const { data: latestFinishedLog } = await supabase
-        .from('attendance_logs')
-        .select('id, actual_in, actual_out, created_at')
-        .eq('user_id', user.id)
-        .not('actual_out', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (latestFinishedLog && latestFinishedLog.actual_out) {
-        const outTimeMs = new Date(latestFinishedLog.actual_out).getTime();
-        const diffHoursSinceOut = (nowMs - outTimeMs) / (1000 * 60 * 60);
-
-        // Jika kru baru checkout kurang dari 12 jam yang lalu, tampilkan status "Sudah Pulang"
-        if (diffHoursSinceOut < 12) {
-          setActiveLogId(latestFinishedLog.id);
-          setHasCheckedIn(true);
-          setHasCheckedOut(true);
-          setCheckInTime(new Date(latestFinishedLog.actual_in));
-          setIsOnBreak(false);
-          setBreakStartTime(null);
-          return;
-        }
-      }
-
-      // LANGKAH 3: Sesi baru bersih (Kru bebas melakukan absen masuk kapan saja)
+      // LANGKAH 3: RESET BERSIH 100% — Kru bebas melakukan Absen Masuk kapan saja (termasuk setelah shift middle/closing!)
       setActiveLogId(null);
       setHasCheckedIn(false);
       setHasCheckedOut(false);
       setCheckInTime(null);
       setIsOnBreak(false);
       setBreakStartTime(null);
+      localStorage.removeItem('resto_break_start_time');
+      localStorage.removeItem('resto_break_max_duration');
 
     } catch (err) {
       console.error("Gagal memuat status kehadiran:", err);
@@ -2922,6 +2939,11 @@ export default function BreakSystem() {
         }
       }
 
+      if (cameraMode === 'OUT') {
+        localStorage.removeItem('resto_break_start_time');
+        localStorage.removeItem('resto_break_max_duration');
+      }
+
       isLogsFetchedRef.current = false;
       await fetchAttendanceStatus();
       if (activeTab === 'history') await fetchBreakLogs(); 
@@ -3554,12 +3576,36 @@ export default function BreakSystem() {
                 <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest flex items-center gap-1.5">
                   <FiShield className="text-indigo-600 text-sm" /> Presensi Shift Kerja
                 </p>
-                {checkInTime && hasCheckedIn && !hasCheckedOut && (
-                  <span className="text-[9px] text-emerald-700 font-black bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider">
-                    Masuk: {checkInTime.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} • {checkInTime.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit', timeZone: 'Asia/Makassar'})} WITA
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {checkInTime && hasCheckedIn && !hasCheckedOut && (
+                    <span className="text-[9px] text-emerald-700 font-black bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 uppercase tracking-wider">
+                      Masuk: {checkInTime.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} • {checkInTime.toLocaleTimeString('id-ID', {hour: '2-digit', minute:'2-digit', timeZone: 'Asia/Makassar'})} WITA
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchAttendanceStatus();
+                      fetchActiveShiftStats();
+                    }}
+                    title="Refresh Status Absen"
+                    className="p-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <FiRefreshCw className="text-xs" />
+                  </button>
+                </div>
               </div>
+
+              {!hasCheckedIn && lastFinishedShiftInfo && (
+                <div className="bg-emerald-50/80 border border-emerald-200/80 rounded-xl px-3 py-2 flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-emerald-800">
+                    ✓ Shift sebelumnya selesai pukul <strong className="font-black">{lastFinishedShiftInfo}</strong>
+                  </span>
+                  <span className="text-[9px] font-black text-emerald-700 uppercase bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                    Siap Shift Baru
+                  </span>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <button
