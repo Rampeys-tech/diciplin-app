@@ -2087,6 +2087,29 @@ export default function AreaDashboard() {
         ? Math.min(100, Math.round((restoCacpLogs.length / totalExpectedCacp) * 100))
         : 100;
 
+      const cacpManagersDetail = managersInOutlet.map(mgr => {
+        const threshold = mgr.role === 'store_manager' ? 80 : 90;
+        const mgrLogs = restoCacpLogs.filter(l => l.user_id === mgr.id);
+        const uniqueSubmittedDays = new Set(
+          mgrLogs.map(l => String(l.log_date || l.confirmed_at || '').substring(0, 10))
+        ).size;
+        const scoreCurrentMonth = Math.min(100, Math.round((uniqueSubmittedDays / activeDaysCount) * 100));
+        const roleLabel =
+          mgr.role === 'store_manager' ? 'Store Manager (SM)' :
+          mgr.role === 'ast_store_manager' ? 'Asst. Manager (ASM)' :
+          mgr.role === 'floor_leader' ? 'Floor Leader (FL)' : 'FL Orientation (FLO)';
+
+        return {
+          id: mgr.id,
+          name: mgr.full_name || 'Manajer',
+          role: mgr.role,
+          roleLabel,
+          threshold,
+          scoreCurrentMonth,
+          isPass: scoreCurrentMonth >= threshold
+        };
+      }).sort((a, b) => b.scoreCurrentMonth - a.scoreCurrentMonth);
+
       // -------------------------------------------------------------
       // INDIKATOR 2: PENGERJAAN SLA TUGAS (0 - 100%)
       // -------------------------------------------------------------
@@ -2272,7 +2295,10 @@ export default function AreaDashboard() {
         cacpData: {
           overallPercentage: cacpPercentage,
           submittedDays: restoCacpLogs.length,
-          totalDays: totalExpectedCacp
+          totalDays: totalExpectedCacp,
+          isCritical: cacpPercentage < 60,
+          isWarning: cacpPercentage >= 60 && cacpPercentage < 85,
+          managers: cacpManagersDetail
         },
         taskStats: {
           total: restoTasks.length,
@@ -2526,15 +2552,20 @@ export default function AreaDashboard() {
                 Ganti
               </button>
 
-              {isManagerIC && (
+              {!hasConfirmedCacpToday ? (
                 <button
                   type="button"
-                  onClick={handleAttemptClockOut}
-                  className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black rounded-lg cursor-pointer flex items-center gap-1"
+                  onClick={() => setAlarmTriggerType('REMINDER_CACP')}
+                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black rounded-lg cursor-pointer flex items-center gap-1 shadow-2xs"
                 >
-                  <FiLogOut />
-                  <span>Clock-Out</span>
+                  <FiClipboard />
+                  <span>Kerjakan CACP</span>
                 </button>
+              ) : (
+                <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black rounded-lg flex items-center gap-1">
+                  <FiCheckCircle />
+                  <span>CACP Selesai</span>
+                </span>
               )}
             </div>
           </div>
@@ -2664,18 +2695,16 @@ export default function AreaDashboard() {
                   </div>
                 )}
 
-                {currentProfile?.role === 'area_manager' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      stopAudioAlarm();
-                      setAlarmTriggerType(null);
-                    }}
-                    className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 py-1 cursor-pointer"
-                  >
-                    Tutup Uji Coba AM
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopAudioAlarm();
+                    setAlarmTriggerType(null);
+                  }}
+                  className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 py-1 cursor-pointer"
+                >
+                  Tutup Sementara
+                </button>
               </div>
             </div>
           </div>
@@ -4982,7 +5011,7 @@ export default function AreaDashboard() {
                         Daftar Manajer di Resto Ini (Klik untuk Riwayat Hari):
                       </span>
 
-                      {selectedOutletForCacp.cacpData.managers.map(mgr => {
+                      {(selectedOutletForCacp?.cacpData?.managers || []).map(mgr => {
                         const targetProfile = profiles.find(p => p.id === mgr.id);
 
                         return (
