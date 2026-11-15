@@ -586,13 +586,13 @@ export default function AreaDashboard() {
           .select('*')
           .order('created_at', { ascending: false })
           .limit(20000),
-        supabase.from('department_tasks').select('*').order('created_at', { ascending: false }).limit(50000),
+        supabase.from('department_tasks').select('*').order('created_at', { ascending: false }),
         supabase.from('store_daily_closings').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('opex_budgets').select('*').eq('period_month', selectedMonth),
         supabase.from('controlling_equipment').select('*').limit(5000),
         supabase.from('daily_task_templates').select('*').eq('is_active', true).order('deadline_time', { ascending: true }),
-        supabase.from('daily_task_submissions').select('*').like('submission_date', `${selectedMonth}%`).order('submitted_at', { ascending: false }).limit(50000),
-        supabase.from('cacp_daily_logs').select('*').like('log_date', `${selectedMonth}%`).limit(50000),
+        supabase.from('daily_task_submissions').select('*'),
+        supabase.from('cacp_daily_logs').select('*'),
         supabase.from('sales_monthly_summary').select('*').like('periode', `${selectedMonth}%`),
         supabase.from('opex_kalsel_controlling').select('*').like('period_month', `${selectedMonth}%`),
         supabase.from('service_and_complaints_daily').select('*').like('period_month', `${selectedMonth}%`)
@@ -2695,16 +2695,18 @@ export default function AreaDashboard() {
                   </div>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    stopAudioAlarm();
-                    setAlarmTriggerType(null);
-                  }}
-                  className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 py-1 cursor-pointer"
-                >
-                  Tutup Sementara
-                </button>
+                {currentProfile?.role === 'area_manager' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopAudioAlarm();
+                      setAlarmTriggerType(null);
+                    }}
+                    className="w-full text-center text-[10px] font-bold text-slate-400 hover:text-slate-600 py-1 cursor-pointer"
+                  >
+                    Tutup Uji Coba AM
+                  </button>
+                )}
               </div>
             </div>
           </div>
