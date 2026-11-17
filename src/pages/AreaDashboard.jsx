@@ -590,10 +590,10 @@ export default function AreaDashboard() {
         supabase.from('store_daily_closings').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('opex_budgets').select('*').eq('period_month', selectedMonth),
         supabase.from('controlling_equipment').select('*').limit(5000),
-        supabase.from('daily_task_templates').select('*').eq('is_active', true).order('deadline_time', { ascending: true }),
-        supabase.from('daily_task_submissions').select('*'),
-        supabase.from('cacp_daily_logs').select('*'),
-        supabase.from('sales_monthly_summary').select('*').like('periode', `${selectedMonth}%`),
+        supabase.from('daily_task_templates').select('*').eq('is_active', true).order('deadline_time', { ascending: true }).limit(1000),
+        supabase.from('daily_task_submissions').select('*').order('submitted_at', { ascending: false }).limit(50000),
+        supabase.from('cacp_daily_logs').select('*').order('confirmed_at', { ascending: false }).limit(50000),
+        supabase.from('sales_monthly_summary').select('*').like('periode', `${selectedMonth}%`).limit(5000),
         supabase.from('opex_kalsel_controlling').select('*').like('period_month', `${selectedMonth}%`),
         supabase.from('service_and_complaints_daily').select('*').like('period_month', `${selectedMonth}%`)
       ]);
